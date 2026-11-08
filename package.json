@@ -1,0 +1,27 @@
+{
+  "name": "gutad",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gutad — restaurant commerce platform (ordering, delivery, reservations, events, shared kitchens) for gutad.io",
+  "workspaces": [
+    "packages/shared",
+    "apps/api",
+    "apps/web",
+    "apps/mobile"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w packages/shared",
+    "build:api": "npm run build -w apps/api",
+    "build:web": "npm run build -w apps/web",
+    "dev:api": "npm run start:dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "dev:mobile": "npm run start -w apps/mobile",
+    "typecheck": "npm run build:shared && npm run typecheck -w apps/api && npm run typecheck -w apps/web && npm run typecheck -w apps/mobile",
+    "db:migrate": "npm run prisma:migrate -w apps/api",
+    "db:seed": "npm run prisma:seed -w apps/api",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

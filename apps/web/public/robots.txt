@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /merchant
+Disallow: /admin
+Disallow: /checkout
+Sitemap: https://gutad.io/sitemap.xml

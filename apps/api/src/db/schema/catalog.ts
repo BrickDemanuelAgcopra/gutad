@@ -1,0 +1,229 @@
+// 05 Menu & offer catalog, 06 Quotes, 10 Kitchen supply & costing
+import {
+  boolean,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import { createdAt, id, ts, updatedAt } from './_common';
+import { channelEnum, fulfillmentTypeEnum } from './enums';
+import { organizations } from './accounts';
+import { brands, kitchens, locations } from './merchants';
+
+// ───── 10 Supply & costing (defined first: menu items reference recipes) ─────
+
+export const ingredients = pgTable('ingredients', {
+  id: id(),
+  name: text('name').notNull().unique(),
+  unit: text('unit').notNull(), // g, ml, each
+  costCentsPerUnit: integer('cost_cents_per_unit').notNull().default(0),
+});
+
+export const ingredientStock = pgTable(
+  'ingredient_stock',
+  {
+    kitchenId: uuid('kitchen_id')
+      .notNull()
+      .references(() => kitchens.id, { onDelete: 'cascade' }),
+    ingredientId: uuid('ingredient_id')
+      .notNull()
+      .references(() => ingredients.id, { onDelete: 'cascade' }),
+    onHand: doublePrecision('on_hand').notNull().default(0),
+    parLevel: doublePrecision('par_level').notNull().default(0),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.kitchenId, t.ingredientId] })],
+);
+
+export const recipes = pgTable('recipes', {
+  id: id(),
+  name: text('name').notNull(),
+  version: integer('version').notNull().default(1),
+  yieldPortions: doublePrecision('yield_portions').notNull().default(1),
+  laborMinutes: doublePrecision('labor_minutes').notNull().default(0),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: createdAt(),
+});
+
+export const recipeLines = pgTable('recipe_lines', {
+  id: id(),
+  recipeId: uuid('recipe_id')
+    .notNull()
+    .references(() => recipes.id, { onDelete: 'cascade' }),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => ingredients.id),
+  quantity: doublePrecision('quantity').notNull(),
+});
+
+export const purchaseOrders = pgTable('purchase_orders', {
+  id: id(),
+  kitchenId: uuid('kitchen_id')
+    .notNull()
+    .references(() => kitchens.id, { onDelete: 'cascade' }),
+  supplier: text('supplier').notNull(),
+  status: text('status').notNull().default('DRAFT'), // DRAFT | ORDERED | RECEIVED | CANCELED
+  totalCents: integer('total_cents').notNull().default(0),
+  receivedAt: ts('received_at'),
+  createdAt: createdAt(),
+});
+
+export const purchaseOrderLines = pgTable('purchase_order_lines', {
+  id: id(),
+  purchaseOrderId: uuid('purchase_order_id')
+    .notNull()
+    .references(() => purchaseOrders.id, { onDelete: 'cascade' }),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => ingredients.id),
+  quantity: doublePrecision('quantity').notNull(),
+  unitCostCents: integer('unit_cost_cents').notNull(),
+  receivedQty: doublePrecision('received_qty'),
+});
+
+export const wasteEvents = pgTable('waste_events', {
+  id: id(),
+  kitchenId: uuid('kitchen_id')
+    .notNull()
+    .references(() => kitchens.id, { onDelete: 'cascade' }),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => ingredients.id),
+  quantity: doublePrecision('quantity').notNull(),
+  reason: text('reason'),
+  createdAt: createdAt(),
+});
+
+export const laborEntries = pgTable('labor_entries', {
+  id: id(),
+  kitchenId: uuid('kitchen_id')
+    .notNull()
+    .references(() => kitchens.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id'),
+  hours: doublePrecision('hours').notNull(),
+  rateCents: integer('rate_cents').notNull(),
+  date: ts('date').notNull(),
+});
+
+// ───── 05 Catalog ─────
+
+export const menus = pgTable('menus', {
+  id: id(),
+  organizationId: uuid('organization_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
+  locationId: uuid('location_id').references(() => locations.id, { onDelete: 'cascade' }),
+  brandId: uuid('brand_id').references(() => brands.id),
+  name: text('name').notNull(),
+  version: integer('version').notNull().default(1),
+  isActive: boolean('is_active').notNull().default(true),
+  availableFrom: text('available_from'),
+  availableUntil: text('available_until'),
+  daysOfWeek: integer('days_of_week').array().notNull().default([0, 1, 2, 3, 4, 5, 6]),
+  channels: channelEnum('channels').array().notNull().default(['MARKETPLACE', 'DIRECT', 'WIDGET', 'QR']),
+  posExternalId: text('pos_external_id'),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const menuCategories = pgTable('menu_categories', {
+  id: id(),
+  menuId: uuid('menu_id')
+    .notNull()
+    .references(() => menus.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  sortOrder: integer('sort_order').notNull().default(0),
+});
+
+export const menuItems = pgTable('menu_items', {
+  id: id(),
+  categoryId: uuid('category_id')
+    .notNull()
+    .references(() => menuCategories.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  priceCents: integer('price_cents').notNull(),
+  imageUrl: text('image_url'),
+  allergens: text('allergens').array().notNull().default([]),
+  dietaryTags: text('dietary_tags').array().notNull().default([]),
+  soldOut: boolean('sold_out').notNull().default(false),
+  soldOutUntil: ts('sold_out_until'),
+  isActive: boolean('is_active').notNull().default(true),
+  posExternalId: text('pos_external_id'),
+  /** per-channel price overrides, e.g. {"MARKETPLACE": 1299} */
+  channelPrices: jsonb('channel_prices').notNull().default({}),
+  stationCode: text('station_code'),
+  recipeId: uuid('recipe_id').references(() => recipes.id),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: createdAt(),
+});
+
+export const modifierGroups = pgTable('modifier_groups', {
+  id: id(),
+  name: text('name').notNull(),
+  minSelect: integer('min_select').notNull().default(0),
+  maxSelect: integer('max_select').notNull().default(1),
+  required: boolean('required').notNull().default(false),
+});
+
+export const modifierOptions = pgTable('modifier_options', {
+  id: id(),
+  groupId: uuid('group_id')
+    .notNull()
+    .references(() => modifierGroups.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  priceCents: integer('price_cents').notNull().default(0),
+  soldOut: boolean('sold_out').notNull().default(false),
+  ingredientId: uuid('ingredient_id'),
+});
+
+export const itemModifierGroups = pgTable(
+  'item_modifier_groups',
+  {
+    itemId: uuid('item_id')
+      .notNull()
+      .references(() => menuItems.id, { onDelete: 'cascade' }),
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => modifierGroups.id, { onDelete: 'cascade' }),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.itemId, t.groupId] })],
+);
+
+// ───── 06 Quotes ─────
+
+export const quotes = pgTable(
+  'quotes',
+  {
+    id: id(),
+    locationId: uuid('location_id').notNull(),
+    userId: uuid('user_id'),
+    channel: channelEnum('channel').notNull(),
+    fulfillmentType: fulfillmentTypeEnum('fulfillment_type').notNull(),
+    currency: text('currency').notNull(),
+    snapshot: jsonb('snapshot').notNull(),
+    subtotalCents: integer('subtotal_cents').notNull(),
+    discountCents: integer('discount_cents').notNull().default(0),
+    taxCents: integer('tax_cents').notNull(),
+    serviceFeeCents: integer('service_fee_cents').notNull().default(0),
+    deliveryFeeCents: integer('delivery_fee_cents').notNull().default(0),
+    tipCents: integer('tip_cents').notNull().default(0),
+    totalCents: integer('total_cents').notNull(),
+    promoCode: text('promo_code'),
+    promotionFunder: text('promotion_funder'),
+    deliveryQuoteId: text('delivery_quote_id'),
+    deliveryProviderCostCents: integer('delivery_provider_cost_cents').notNull().default(0),
+    scheduledFor: ts('scheduled_for'),
+    promiseAt: ts('promise_at'),
+    expiresAt: ts('expires_at').notNull(),
+    consumedByOrderId: uuid('consumed_by_order_id').unique(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('quotes_location_created_idx').on(t.locationId, t.createdAt)],
+);

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "224476333030",
+    "project_id": "gutad-a7ba8",
+    "storage_bucket": "gutad-a7ba8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:224476333030:android:edb4ee811c6be3e8cdcc27",
+        "android_client_info": {
+          "package_name": "io.gutad.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAvWlvNI3UY3w8SFRaix3MblvhUbDCLP0w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

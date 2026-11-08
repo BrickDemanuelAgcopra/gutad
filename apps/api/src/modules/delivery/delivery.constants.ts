@@ -1,0 +1,1 @@
+export const DELIVERY_PROVIDER = Symbol('DELIVERY_PROVIDER');

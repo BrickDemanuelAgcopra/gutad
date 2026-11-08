@@ -1,0 +1,62 @@
+import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { z } from 'zod';
+import { CurrentUser, JwtPayload, Public } from '../../common/auth';
+import { zod } from '../../common/zod.pipe';
+import { AuthService } from './auth.service';
+
+const RegisterDto = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  name: z.string().min(1).optional(),
+  phone: z.string().optional(),
+  marketingConsent: z.boolean().optional(),
+});
+const LoginDto = z.object({ email: z.string().email(), password: z.string() });
+const GuestDto = z.object({ email: z.string().email(), name: z.string().optional(), phone: z.string().optional() });
+const RefreshDto = z.object({ refreshToken: z.string() });
+const RecoverDto = z.object({ email: z.string().email() });
+const CompleteRecoverDto = z.object({ token: z.string(), password: z.string().min(8) });
+const ProfileDto = z.object({
+  name: z.string().optional(),
+  phone: z.string().optional(),
+  locale: z.string().optional(),
+  timezone: z.string().optional(),
+  dietaryNotes: z.string().optional(),
+  marketingConsent: z.boolean().optional(),
+  smsConsent: z.boolean().optional(),
+});
+const PushTokenDto = z.object({ token: z.string() });
+export const AddressDto = z.object({
+  label: z.string().optional(),
+  line1: z.string().min(1),
+  line2: z.string().optional(),
+  city: z.string().min(1),
+  region: z.string().min(1),
+  postalCode: z.string().min(1),
+  country: z.string().default('US'),
+  lat: z.number().optional(),
+  lng: z.number().optional(),
+  instructions: z.string().optional(),
+  isDefault: z.boolean().optional(),
+});
+
+@ApiTags('01 Accounts & access')
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly auth: AuthService) {}
+
+  @Public() @Post('register') register(@Body(zod(RegisterDto)) b: z.infer<typeof RegisterDto>) { return this.auth.register(b); }
+  @Public() @Post('login') login(@Body(zod(LoginDto)) b: z.infer<typeof LoginDto>) { return this.auth.login(b.email, b.password); }
+  @Public() @Post('guest') guest(@Body(zod(GuestDto)) b: z.infer<typeof GuestDto>) { return this.auth.guest(b); }
+  @Public() @Post('refresh') refresh(@Body(zod(RefreshDto)) b: z.infer<typeof RefreshDto>) { return this.auth.refresh(b.refreshToken); }
+  @Public() @Post('logout') async logout(@Body(zod(RefreshDto)) b: z.infer<typeof RefreshDto>) { await this.auth.logout(b.refreshToken); return { ok: true }; }
+  @Public() @Post('recover') async recover(@Body(zod(RecoverDto)) b: z.infer<typeof RecoverDto>) { await this.auth.requestRecovery(b.email); return { ok: true }; }
+  @Public() @Post('recover/complete') async complete(@Body(zod(CompleteRecoverDto)) b: z.infer<typeof CompleteRecoverDto>) { await this.auth.completeRecovery(b.token, b.password); return { ok: true }; }
+
+  @ApiBearerAuth() @Get('me') me(@CurrentUser() u: JwtPayload) { return this.auth.me(u.sub); }
+  @ApiBearerAuth() @Patch('me') update(@CurrentUser() u: JwtPayload, @Body(zod(ProfileDto)) b: z.infer<typeof ProfileDto>) { return this.auth.updateProfile(u.sub, b); }
+  @ApiBearerAuth() @Post('me/push-token') push(@CurrentUser() u: JwtPayload, @Body(zod(PushTokenDto)) b: z.infer<typeof PushTokenDto>) { return this.auth.registerPushToken(u.sub, b.token); }
+  @ApiBearerAuth() @Post('me/addresses') addAddress(@CurrentUser() u: JwtPayload, @Body(zod(AddressDto)) b: z.infer<typeof AddressDto>) { return this.auth.addAddress(u.sub, b); }
+  @ApiBearerAuth() @Delete('me/addresses/:id') delAddress(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.auth.deleteAddress(u.sub, id); }
+}
