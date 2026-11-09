@@ -18,7 +18,8 @@
       "package": "io.gutad.app",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/adaptive-icon-mono.png",
         "backgroundColor": "#f45d0a"
       },
       "permissions": [
@@ -31,7 +32,8 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single"
+      "output": "single",
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-router",
@@ -40,7 +42,7 @@
         {
           "image": "./assets/splash.png",
           "resizeMode": "contain",
-          "imageWidth": 200,
+          "imageWidth": 160,
           "backgroundColor": "#f45d0a"
         }
       ],
@@ -53,6 +55,7 @@
       [
         "expo-notifications",
         {
+          "icon": "./assets/notification-icon.png",
           "color": "#f45d0a"
         }
       ],

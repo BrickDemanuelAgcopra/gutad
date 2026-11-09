@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import type { AuthResponse } from '@gutad/shared';
 import { api, session } from '@/api';
 import { Button, Card, ErrorText, Input, Muted, s } from '@/ui';
+import { BrandLogo } from '@/brand';
 
 export default function Login() {
   const router = useRouter();
@@ -20,6 +21,7 @@ export default function Login() {
   };
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
+      <View style={{ alignItems: 'center', marginVertical: 24 }}><BrandLogo size={44} /></View>
       <Card title={mode === 'login' ? 'Sign in' : 'Create account'}>
         {mode === 'register' && <Input label="Name" value={f.name} onChangeText={(v) => setF({ ...f, name: v })} />}
         <Input label="Email" autoCapitalize="none" keyboardType="email-address" value={f.email} onChangeText={(v) => setF({ ...f, email: v })} />

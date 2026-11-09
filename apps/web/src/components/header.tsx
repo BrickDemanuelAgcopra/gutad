@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCart } from '@/lib/cart';
 import { useSession } from '@/lib/hooks';
+import { Logo } from '@/components/logo';
 
 export function Header() {
   const { user, ready, isMerchant, isAdmin, logout } = useSession();
@@ -12,9 +13,8 @@ export function Header() {
   return (
     <header className="sticky top-0 z-40 border-b border-ink-100 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3">
-        <Link href="/" className="flex items-center gap-2 text-lg font-bold tracking-tight text-ink-900">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-brand-500 text-white">G</span>
-          Gutad
+        <Link href="/" aria-label="Gutad home" className="shrink-0">
+          <Logo />
         </Link>
         <nav className="hidden items-center gap-1 text-sm md:flex">
           <Link href="/search" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">Restaurants</Link>
