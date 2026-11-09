@@ -10,3 +10,6 @@ apps/api/prisma/generated/
 deploy/backups/
 coverage/
 .DS_Store
+
+*.tsbuildinfo
+next-env.d.ts
