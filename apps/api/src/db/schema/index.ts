@@ -10,3 +10,4 @@ export * from './crm';
 export * from './finance';
 export * from './platform';
 export * from './onboarding';
+export * from './plans';

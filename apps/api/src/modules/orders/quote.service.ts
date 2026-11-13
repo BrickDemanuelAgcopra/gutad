@@ -140,7 +140,7 @@ export class QuoteService {
     }
 
     // fees, tax, tip
-    const terms = await this.contracts.termsFor(loc.id, input.channel, now, tx);
+    const terms = await this.contracts.termsFor(loc.id, input.channel, now, tx, input.fulfillmentType === 'DELIVERY' || input.fulfillmentType === 'PICKUP' || input.fulfillmentType === 'DINE_IN' ? input.fulfillmentType : undefined);
     // service fee applies to marketplace delivery orders only (pickup never carries it); members have it waived
     let serviceFeeCents = input.channel === 'MARKETPLACE' && input.fulfillmentType === 'DELIVERY' ? Math.min(bps(subtotalCents, SERVICE_FEE_BPS_MARKETPLACE), SERVICE_FEE_CAP_CENTS) : 0;
     if (membership?.benefits.serviceFeeWaived) serviceFeeCents = 0;

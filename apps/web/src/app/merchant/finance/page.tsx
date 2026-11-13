@@ -1,4 +1,6 @@
 'use client';
+import type { FeeRuleDto } from '@gutad/shared';
+import { FeeList } from '@/components/plan-ui';
 import { useState } from 'react';
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
@@ -10,7 +12,7 @@ export default function FinancePage() {
   const { data: bal } = useApi<{ payableCents: number; unreconciledCents: number; negativeBalance: boolean; pendingPayouts: { id: string; status: string; amountCents: number; periodEnd: string; failureReason: string | null }[] }>(org ? `/organizations/${org.id}/balance` : null, { deps: [org?.id] });
   const { data: stmts } = useApi<{ id: string; periodStart: string; periodEnd: string; grossSalesCents: number; commissionCents: number; refundsCents: number; coverFeesCents: number; netPayableCents: number; orderCount: number; coverCount: number; payoutId: string | null }[]>(org ? `/organizations/${org.id}/statements` : null, { deps: [org?.id] });
   const { data: invs, reload } = useApi<{ id: string; number: string; kind: string; status: string; totalCents: number; dueAt: string }[]>(org ? `/organizations/${org.id}/invoices` : null, { deps: [org?.id] });
-  const { data: contracts } = useApi<{ id: string; name: string; planCode: string; version: number; marketplaceCommissionBps: number; directCommissionBps: number; subscriptionCents: number; coverFeeNetworkCents: number; prepaidServiceFeeBps: number; effectiveFrom: string; signedAt: string | null }[]>(org ? `/organizations/${org.id}/contracts` : null, { deps: [org?.id] });
+  const { data: contracts } = useApi<{ id: string; name: string; planCode: string; version: number; marketplaceCommissionBps: number; directCommissionBps: number; subscriptionCents: number; coverFeeNetworkCents: number; prepaidServiceFeeBps: number; effectiveFrom: string; signedAt: string | null; fees: FeeRuleDto[] }[]>(org ? `/organizations/${org.id}/contracts` : null, { deps: [org?.id] });
   const { run, error } = useAction();
   const [detail, setDetail] = useState<{ entries: { createdAt: string; memo: string | null; debitCents: number; creditCents: number }[] } | null>(null);
   if (!org) return null;
@@ -31,7 +33,7 @@ export default function FinancePage() {
         {detail && <div className="mt-3 max-h-64 overflow-y-auto rounded-lg bg-ink-50 p-3 text-xs">{detail.entries.map((e, i) => <div key={i} className="flex justify-between"><span>{when(e.createdAt)} {e.memo}</span><span>{e.creditCents ? `+${money(e.creditCents)}` : `−${money(e.debitCents)}`}</span></div>)}</div>}
       </Card>
       <Card title="Invoices (subscriptions, covers, ads — independent of food payouts)"><Table rows={invs || []} empty="No invoices." cols={[{ key: 'n', label: 'Number', render: (r) => r.number }, { key: 'k', label: 'Kind', render: (r) => r.kind }, { key: 't', label: 'Total', render: (r) => money(r.totalCents) }, { key: 'd', label: 'Due', render: (r) => when(r.dueAt) }, { key: 's', label: 'Status', render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> }, { key: 'a', label: '', render: (r) => r.status !== 'PAID' ? <Button size="sm" variant="secondary" onClick={() => run(async () => { await api.post(`/invoices/${r.id}/pay`, { paymentMethodId: 'mock_pm_4242' }); reload(); })}>Pay</Button> : null }]} /></Card>
-      <Card title="Your agreement">{contracts?.length ? contracts.map((c) => <div key={c.id} className="text-sm">v{c.version} <b>{c.name}</b> ({c.planCode}) · marketplace {c.marketplaceCommissionBps / 100}% · direct {c.directCommissionBps / 100}% · {money(c.subscriptionCents)}/mo · {money(c.coverFeeNetworkCents)} per network cover · {c.prepaidServiceFeeBps / 100}% experience fee · effective {when(c.effectiveFrom)} {c.signedAt ? <Badge tone="good">signed</Badge> : <Badge tone="warn">unsigned</Badge>}</div>) : <p className="text-sm text-ink-500">No contract yet — platform default terms apply (15% marketplace, 0% direct, $1.50 network cover). Gutad commercial ops will set your plan.</p>}</Card>
+      <Card title="Your agreement">{contracts?.length ? contracts.map((c) => <div key={c.id} className="border-b border-ink-50 py-2 text-sm last:border-0"><div>v{c.version} <b>{c.name}</b> · {c.subscriptionCents ? `${money(c.subscriptionCents)}/mo` : 'no subscription'} · effective {when(c.effectiveFrom)} {c.signedAt ? <Badge tone="good">signed</Badge> : <Badge tone="warn">unsigned</Badge>}</div><FeeList fees={c.fees} className="mt-1 text-xs" /></div>) : <p className="text-sm text-ink-500">No contract yet — platform default terms apply (15% marketplace, 0% direct, $1.50 network cover). Gutad commercial ops will set your plan.</p>}</Card>
     </div>
   );
 }

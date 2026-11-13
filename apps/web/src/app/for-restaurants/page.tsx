@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { useState } from 'react';
-import type { AuthResponse } from '@gutad/shared';
+import { PRODUCT_LINES, type AuthResponse, type PublicPlanDto } from '@gutad/shared';
+import { FeeList, planPrice } from '@/components/plan-ui';
 import { api, money, session } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input } from '@/components/ui';
@@ -9,7 +10,7 @@ import { Alert, Button, Card, Input } from '@/components/ui';
 /** Self-service merchant onboarding: account → organization → first location (claim or create). */
 export default function ForRestaurants() {
   const { user } = useSession();
-  const { data: plans } = useApi<{ code: string; name: string; subscriptionCents: number; marketplaceCommissionBps: number; coverFeeNetworkCents: number }[]>('/public/plans');
+  const { data: plans } = useApi<PublicPlanDto[]>('/public/plans');
   const [f, setF] = useState({ email: '', password: '', name: '', business: '', location: '', addressLine1: '', city: '', region: '', postalCode: '' });
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +31,13 @@ export default function ForRestaurants() {
       <div>
         <h1 className="text-3xl font-bold">Sell on your terms, from one place.</h1>
         <p className="mt-3 text-ink-700">Direct ordering with no commission, marketplace reach when you want it, reservations with real inventory, ticketed experiences, delivery through partner fleets, and one statement for all of it.</p>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">{plans?.map((p) => <div key={p.code} className="rounded-xl border border-ink-100 bg-white p-4 text-sm"><div className="font-semibold">{p.name}</div><div className="text-ink-500">{p.subscriptionCents ? `${money(p.subscriptionCents)}/mo` : 'No subscription'} · {p.marketplaceCommissionBps / 100}% marketplace · {money(p.coverFeeNetworkCents)}/network cover</div></div>)}</div>
+        <div className="mt-6 space-y-4">{PRODUCT_LINES.filter((l) => plans?.some((p) => p.productLine === l.key)).map((l) => (
+          <div key={l.key}>
+            <div className="text-xs font-semibold uppercase tracking-wide text-ink-500">{l.label}</div>
+            <div className="mt-1 grid gap-3 sm:grid-cols-2">{plans!.filter((p) => p.productLine === l.key).map((p) => <div key={p.code} className="rounded-xl border border-ink-100 bg-white p-4 text-sm"><div className="flex justify-between gap-2 font-semibold"><span>{p.name}</span><span className="text-ink-700">{planPrice(p)}</span></div><FeeList fees={p.fees} className="mt-1 text-xs" /></div>)}</div>
+          </div>
+        ))}</div>
+        <Link className="mt-3 inline-block text-sm font-medium text-brand-600 underline" href="/pricing">Compare plans and features</Link>
         <p className="mt-3 text-xs text-ink-300">Published benchmarks for pilots; commercial terms are set per contract by Gutad.</p>
       </div>
       <Card title="Claim or create your listing">

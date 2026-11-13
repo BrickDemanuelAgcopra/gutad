@@ -11,6 +11,7 @@ import {
 import { createdAt, id, ts, updatedAt } from './_common';
 import { ledgerAccountEnum, paymentStatusEnum, payoutStatusEnum } from './enums';
 import { organizations } from './accounts';
+import { planVersions, type FeeRule } from './plans';
 import { locations } from './merchants';
 import { orders } from './orders';
 import { reservations } from './reservations';
@@ -106,6 +107,10 @@ export const merchantContracts = pgTable('merchant_contracts', {
   effectiveFrom: ts('effective_from').defaultNow().notNull(),
   effectiveTo: ts('effective_to'),
   signedAt: ts('signed_at'),
+  /** Plan version this contract was created from (null for contracts that predate the plan catalog). */
+  planVersionId: uuid('plan_version_id').references(() => planVersions.id),
+  /** Fee rules copied from the plan version (plus overrides). Empty = use the legacy flat columns above. */
+  fees: jsonb('fees').$type<FeeRule[]>().notNull().default([]),
   createdAt: createdAt(),
 });
 

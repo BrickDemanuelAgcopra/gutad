@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { api, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Stat, statusTone, Table } from '@/components/ui';
+import { PRODUCT_LINES, type PublicPlanDto } from '@gutad/shared';
+import { FeeList, planPrice } from '@/components/plan-ui';
 
 export default function AdminHome() {
   const { data: p } = useApi<{ orders: { n: number; gmv: number }; revenueCents: number; expenseCents: number; contributionCents: number; merchants: { live: number; paused: number; churned: number; onboarding: number }; payouts: { paid: number; pending: number; failed: number }; incidents: { open: number; avgHrs: number }; delivery: { jobs: number; failed: number; late: number } }>('/admin/reports/platform');
@@ -10,7 +12,8 @@ export default function AdminHome() {
   const { run, error } = useAction();
   const [t, setT] = useState({ name: '', ownerEmail: '', kind: 'MERCHANT' });
   const [contract, setContract] = useState({ orgId: '', planCode: 'DIRECT_FREE' });
-  const { data: plans } = useApi<{ code: string; name: string }[]>('/public/plans');
+  const { data: plans } = useApi<PublicPlanDto[]>('/public/plans');
+  const chosen = plans?.find((p) => p.code === contract.planCode);
   const [sel, setSel] = useState<{ id: string; name: string; locations: { id: string; name: string; status: string; verifiedAt: string | null; city: string; platformOperated: boolean; deliveryFleet: string }[] } | null>(null);
   const [selOb, setSelOb] = useState<{ blockers: string[]; agreement: { signatureName: string; acceptedAt: string } | null; orderForm: { name: string; signedAt: string | null } | null } | null>(null);
   const { data: fleetReqs, reload: reloadFleet } = useApi<{ id: string; name: string; city: string; organizationName: string; deliveryFleet: string; requested: string; requestedAt: string; note: string | null }[]>('/admin/delivery-fleet-requests');
@@ -42,7 +45,7 @@ export default function AdminHome() {
           ]} />
         </Card>
         <Card title="Provision tenant"><div className="space-y-2"><Input label="Name" value={t.name} onChange={(e) => setT({ ...t, name: e.target.value })} /><Input label="Owner email" value={t.ownerEmail} onChange={(e) => setT({ ...t, ownerEmail: e.target.value })} /><Select label="Kind" value={t.kind} onChange={(e) => setT({ ...t, kind: e.target.value })}>{['MERCHANT', 'CORPORATE', 'CAMPUS', 'PARTNER', 'CREATOR'].map((k) => <option key={k}>{k}</option>)}</Select><Button onClick={() => run(async () => { await api.post('/admin/tenants', t); setT({ name: '', ownerEmail: '', kind: 'MERCHANT' }); reload(); })}>Provision</Button></div></Card>
-        <Card title="Commercial: assign contract"><div className="space-y-2"><Select label="Organization" value={contract.orgId} onChange={(e) => setContract({ ...contract, orgId: e.target.value })}><option value="">Choose…</option>{tenants?.map((r) => <option key={r.org.id} value={r.org.id}>{r.org.name}</option>)}</Select><Select label="Plan" value={contract.planCode} onChange={(e) => setContract({ ...contract, planCode: e.target.value })}>{plans?.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}</Select><Button disabled={!contract.orgId} onClick={() => run(async () => { await api.post(`/organizations/${contract.orgId}/contracts`, { planCode: contract.planCode, locationIds: [], sign: false }); alert('Order Form sent. The merchant signs it from Onboarding in their portal.'); })}>Create versioned agreement</Button><p className="text-xs text-ink-500">Creates a new Order Form version bound to all locations (the previous version ends at the effective date). The merchant signs it in their portal; verification waits for that signature.</p></div></Card>
+        <Card title="Commercial: assign contract"><div className="space-y-2"><Select label="Organization" value={contract.orgId} onChange={(e) => setContract({ ...contract, orgId: e.target.value })}><option value="">Choose…</option>{tenants?.map((r) => <option key={r.org.id} value={r.org.id}>{r.org.name}</option>)}</Select><Select label="Plan" value={contract.planCode} onChange={(e) => setContract({ ...contract, planCode: e.target.value })}>{PRODUCT_LINES.map((l) => <optgroup key={l.key} label={l.label}>{plans?.filter((p) => p.productLine === l.key).map((p) => <option key={p.code} value={p.code}>{p.name} · {planPrice(p)}</option>)}</optgroup>)}</Select>{chosen && <div className="rounded-lg bg-ink-50 p-2"><div className="text-xs font-semibold">{chosen.name} v{chosen.version} · {planPrice(chosen)}</div><FeeList fees={chosen.fees} className="text-xs" /></div>}<Button disabled={!contract.orgId} onClick={() => run(async () => { await api.post(`/organizations/${contract.orgId}/contracts`, { planCode: contract.planCode, locationIds: [], sign: false }); alert('Order Form sent. The merchant signs it from Onboarding in their portal.'); })}>Create versioned agreement</Button><p className="text-xs text-ink-500">Creates a new Order Form version bound to all locations (the previous version ends at the effective date). The merchant signs it in their portal; verification waits for that signature.</p></div></Card>
       </div>
     </div>
   );

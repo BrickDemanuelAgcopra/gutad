@@ -368,7 +368,7 @@ export class ReservationsService {
    */
   private async closeVisit(r: typeof reservations.$inferSelect, loc: typeof locations.$inferSelect, data: { posCheckId?: string; checkTotalCents?: number; actualPartySize?: number }, tx: DbOrTx) {
     const covers = data.actualPartySize ?? r.actualPartySize ?? r.partySize;
-    const terms = await this.contracts.termsFor(r.locationId, r.channel as never, r.startAt, tx);
+    const terms = await this.contracts.termsFor(r.locationId, r.channel as never, r.startAt, tx, 'DINE_IN');
     const coverFee = terms.coverFeeCents * covers;
     const [policy] = await tx.select().from(reservationPolicies).where(eq(reservationPolicies.locationId, r.locationId)).limit(1);
     let depositApplied = 0;

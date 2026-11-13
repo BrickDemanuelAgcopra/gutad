@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { createDb, createPool } from './db.module';
 import * as s from './schema';
 import { loadConfig } from '../config/config';
+import { seedPlanCatalog } from '../modules/contracts/plans.service';
 
 async function main() {
   const cfg = loadConfig();
@@ -39,6 +40,8 @@ async function main() {
     { key: 'fees.free_delivery', value: true },
     { key: 'support.auto_reject_minutes', value: 20 },
   ]).onConflictDoNothing();
+
+  if (await seedPlanCatalog(db)) log('created plan catalog');
 
   if (process.env.SEED_DEMO === 'false') {
     await pool.end();

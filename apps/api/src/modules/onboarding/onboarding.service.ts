@@ -4,6 +4,7 @@ import { DB, Db } from '../../db/db.module';
 import { locations, merchantAgreementAcceptances, merchantContracts, merchantDocuments, organizations } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
+import { contractFeeRules } from '../contracts/contracts.service';
 
 /** Bump when the Merchant Agreement text changes; merchants re-accept the new version. */
 export const MERCHANT_AGREEMENT_VERSION = '2026-11-13.3';
@@ -98,7 +99,7 @@ export class OnboardingService {
       agreementVersion: MERCHANT_AGREEMENT_VERSION,
       agreement: acceptance ? { acceptedAt: acceptance.acceptedAt, signatureName: acceptance.signatureName, signatureTitle: acceptance.signatureTitle } : null,
       orderForm: contract
-        ? { id: contract.id, name: contract.name, planCode: contract.planCode, version: contract.version, marketplaceCommissionBps: contract.marketplaceCommissionBps, directCommissionBps: contract.directCommissionBps, subscriptionCents: contract.subscriptionCents, subscriptionInterval: contract.subscriptionInterval, processingBps: contract.processingBps, processingFixedCents: contract.processingFixedCents, effectiveFrom: contract.effectiveFrom, signedAt: contract.signedAt }
+        ? { id: contract.id, name: contract.name, planCode: contract.planCode, version: contract.version, marketplaceCommissionBps: contract.marketplaceCommissionBps, directCommissionBps: contract.directCommissionBps, subscriptionCents: contract.subscriptionCents, subscriptionInterval: contract.subscriptionInterval, processingBps: contract.processingBps, processingFixedCents: contract.processingFixedCents, effectiveFrom: contract.effectiveFrom, signedAt: contract.signedAt, fees: contractFeeRules(contract) }
         : null,
       documentTypes: this.requiredStatus(docs),
       documents: docs,

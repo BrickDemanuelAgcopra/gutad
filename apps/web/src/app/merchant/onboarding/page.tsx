@@ -1,4 +1,6 @@
 'use client';
+import type { FeeRuleDto } from '@gutad/shared';
+import { FeeList } from '@/components/plan-ui';
 import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { api, downloadFile, money, uploadFile, when } from '@/lib/api';
@@ -10,14 +12,13 @@ import { useMerchant } from '../context';
 export interface Onboarding {
   agreementVersion: string;
   agreement: { acceptedAt: string; signatureName: string; signatureTitle: string | null } | null;
-  orderForm: { id: string; name: string; planCode: string; version: number; marketplaceCommissionBps: number; directCommissionBps: number; subscriptionCents: number; subscriptionInterval: string; processingBps: number; processingFixedCents: number; effectiveFrom: string; signedAt: string | null } | null;
+  orderForm: { id: string; name: string; planCode: string; version: number; marketplaceCommissionBps: number; directCommissionBps: number; subscriptionCents: number; subscriptionInterval: string; processingBps: number; processingFixedCents: number; effectiveFrom: string; signedAt: string | null; fees: FeeRuleDto[] } | null;
   documentTypes: { type: string; label: string; required: boolean; status: string; reviewNote: string | null }[];
   documents: { id: string; docType: string; fileName: string; sizeBytes: number; status: string; reviewNote: string | null; createdAt: string; locationId: string | null }[];
   locations: { id: string; name: string; status: string; verifiedAt: string | null }[];
   blockers: string[];
 }
 
-const pct = (bps: number) => `${(bps / 100).toFixed(bps % 100 ? 2 : 0)}%`;
 
 /** Merchant onboarding: accept the Merchant Agreement + Order Form, upload documents, then Gutad verifies. */
 export default function OnboardingPage() {
@@ -69,14 +70,8 @@ export default function OnboardingPage() {
         {ob.orderForm ? (
           <div className="mb-4 rounded-xl bg-ink-50 p-3 text-sm">
             <div className="font-semibold">Order Form: {ob.orderForm.name} (v{ob.orderForm.version})</div>
-            <div className="mt-1 grid gap-x-4 gap-y-0.5 text-ink-700 sm:grid-cols-2">
-              <span>Marketplace commission: {pct(ob.orderForm.marketplaceCommissionBps)}</span>
-              <span>Direct-order commission: {pct(ob.orderForm.directCommissionBps)}</span>
-              <span>Subscription: {ob.orderForm.subscriptionCents ? `${money(ob.orderForm.subscriptionCents)}/${ob.orderForm.subscriptionInterval.toLowerCase()}` : 'none'}</span>
-              <span>Card processing: {pct(ob.orderForm.processingBps)} + {money(ob.orderForm.processingFixedCents)}</span>
-              <span>Effective: {when(ob.orderForm.effectiveFrom)}</span>
-              <span>{ob.orderForm.signedAt ? `Signed ${when(ob.orderForm.signedAt)}` : 'Not signed yet'}</span>
-            </div>
+            <div className="mt-1 text-ink-700">Subscription: {ob.orderForm.subscriptionCents ? `${money(ob.orderForm.subscriptionCents)}/${ob.orderForm.subscriptionInterval.toLowerCase()}` : 'none'} · effective {when(ob.orderForm.effectiveFrom)} · {ob.orderForm.signedAt ? `signed ${when(ob.orderForm.signedAt)}` : 'not signed yet'}</div>
+            <FeeList fees={ob.orderForm.fees} className="mt-1" />
           </div>
         ) : (
           <p className="mb-4 text-sm text-ink-500">Gutad will send your Order Form (your commission and fees). It appears here for you to sign. You can accept the Merchant Agreement now.</p>

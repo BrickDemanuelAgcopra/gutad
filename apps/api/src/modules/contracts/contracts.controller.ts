@@ -5,6 +5,16 @@ import { CurrentUser, JwtPayload, Public } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { ContractsService } from './contracts.service';
 
+export const FeeRuleSchema = z.object({
+  type: z.enum(['COMMISSION', 'COVER_FEE', 'PREPAID_SERVICE_FEE', 'PROCESSING', 'DELIVERY_SUBSIDY', 'LOGISTICS_FEE']),
+  channel: z.enum(['ANY', 'NETWORK', 'MARKETPLACE', 'PARTNER', 'DIRECT', 'WIDGET', 'QR']),
+  fulfillment: z.enum(['ANY', 'DELIVERY', 'PICKUP', 'DINE_IN']),
+  bps: z.number().int().min(0).max(10_000).default(0),
+  cents: z.number().int().min(0).max(1_000_000).default(0),
+  capCents: z.number().int().min(0).nullable().optional(),
+  label: z.string().max(120).nullable().optional(),
+});
+
 const CreateDto = z.object({
   planCode: z.string(),
   locationIds: z.array(z.string().uuid()).default([]),
@@ -23,6 +33,7 @@ const CreateDto = z.object({
       cancellationRules: z.record(z.unknown()).optional(),
       features: z.record(z.unknown()).optional(),
       regionRules: z.record(z.unknown()).optional(),
+      fees: z.array(FeeRuleSchema).optional(),
     })
     .optional(),
   effectiveFrom: z.coerce.date().optional(),

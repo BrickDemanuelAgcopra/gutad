@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import { useSession } from '@/lib/hooks';
 import { Alert, Spinner } from '@/components/ui';
 
-const NAV = [['/admin', 'Tenants & verification'], ['/admin/finance', 'Finance'], ['/admin/support', 'Support'], ['/admin/integrations', 'Integrations & health'], ['/admin/settings', 'Settings & audit']];
+const NAV = [['/admin', 'Tenants & verification'], ['/admin/plans', 'Plans & pricing'], ['/admin/finance', 'Finance'], ['/admin/support', 'Support'], ['/admin/integrations', 'Integrations & health'], ['/admin/settings', 'Settings & audit']];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, ready, isAdmin } = useSession();

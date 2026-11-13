@@ -308,6 +308,46 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   const verified = (await call('POST', `/locations/${nLoc.id}/verify`, { verified: true }, A)).json;
   check('admin verifies once onboarding is complete', verified.status === 'VERIFIED', verified);
 
+  // ── plan catalog (Phase 1): configurable plans, fee rules by channel + fulfillment, versioning
+  const shared = await import('../packages/shared/dist/index.js');
+  const pub = (await call('GET', '/public/plans')).json;
+  check('public plans come from the catalog, grouped by product line', Array.isArray(pub) && pub.length === 6 && ['ORDERING', 'RESERVATIONS', 'SUITE'].every((l) => pub.some((x) => x.productLine === l)), pub.map?.((x) => x.code));
+  const resCore = pub.find((x) => x.code === 'RESERVATIONS_CORE');
+  check('reservations plans carry no commission (no more NaN%)', resCore && !resCore.fees.some((f) => f.type === 'COMMISSION') && shared.resolveFee(resCore.fees, 'COVER_FEE', 'MARKETPLACE', 'DINE_IN')?.cents === 150, resCore?.fees);
+  const free = pub.find((x) => x.code === 'DIRECT_FREE');
+  check('ordering plan: 15% marketplace delivery, 6% pickup, 0% direct', shared.resolveFee(free.fees, 'COMMISSION', 'MARKETPLACE', 'DELIVERY').bps === 1500 && shared.resolveFee(free.fees, 'COMMISSION', 'MARKETPLACE', 'PICKUP').bps === 600 && shared.resolveFee(free.fees, 'COMMISSION', 'DIRECT', 'PICKUP').bps === 0, free.fees);
+  check('plans list features with names', free.features.some((f) => f.key === 'ordering' && f.enabled) && free.features.some((f) => f.key === 'floor_plan' && !f.enabled));
+  const legacyTerms = (await call('GET', `/locations/${locId}/terms`, undefined, O)).json;
+  check('legacy contract terms unchanged (15% marketplace)', legacyTerms.commissionBps === 1500 && legacyTerms.planCode === 'FULL_SUITE', legacyTerms);
+  const nContracts = (await call('GET', `/organizations/${nOrg.id}/contracts`, undefined, N)).json;
+  check('new Order Form copies the published plan version fee rules', nContracts[0]?.planVersionId && shared.resolveFee(nContracts[0].fees, 'COMMISSION', 'MARKETPLACE', 'PICKUP')?.bps === 600, nContracts[0]);
+  const custAdmin = await call('GET', '/admin/plans', undefined, C);
+  check('customers cannot open the plan admin', custAdmin.status === 403, custAdmin.status);
+  const cat = (await call('GET', '/admin/plans', undefined, A)).json;
+  const freePlan = cat.plans.find((x) => x.code === 'DIRECT_FREE');
+  const draftV = (await call('POST', `/admin/plans/${freePlan.id}/versions`, {}, A)).json;
+  check('admin drafts a new version copied from the live one', draftV.version === 2 && draftV.status === 'DRAFT', draftV);
+  const draftAgain = await call('POST', `/admin/plans/${freePlan.id}/versions`, {}, A);
+  check('only one draft per plan', draftAgain.status === 400, draftAgain.json);
+  const live = freePlan.versions.find((v) => v.status === 'PUBLISHED');
+  const newFees = live.fees.map(({ id, ...f }) => (f.type === 'COMMISSION' && f.fulfillment === 'PICKUP' ? { ...f, bps: 500 } : f));
+  const upd = (await call('PATCH', `/admin/plan-versions/${draftV.id}`, { subscriptionCents: 0, trialDays: 14, fees: newFees, features: live.features }, A)).json;
+  check('admin edits draft price, trial and fees', upd.trialDays === 14, upd);
+  const editLive = await call('PATCH', `/admin/plan-versions/${live.id}`, { trialDays: 1 }, A);
+  check('published versions are read-only', editLive.status === 400, editLive.json);
+  const published = (await call('POST', `/admin/plan-versions/${draftV.id}/publish`, {}, A)).json;
+  check('admin publishes the draft', published.status === 'PUBLISHED', published);
+  const pub2 = (await call('GET', '/public/plans')).json.find((x) => x.code === 'DIRECT_FREE');
+  check('public pricing shows the new version', pub2.version === 2 && pub2.trialDays === 14 && shared.resolveFee(pub2.fees, 'COMMISSION', 'MARKETPLACE', 'PICKUP').bps === 500, pub2);
+  const nContracts2 = (await call('GET', `/organizations/${nOrg.id}/contracts`, undefined, N)).json;
+  check('signed merchants keep their version after a publish', shared.resolveFee(nContracts2[0].fees, 'COMMISSION', 'MARKETPLACE', 'PICKUP')?.bps === 600, nContracts2[0].fees);
+  const cat2 = (await call('GET', '/admin/plans', undefined, A)).json;
+  check('previous version retired', cat2.plans.find((x) => x.code === 'DIRECT_FREE').versions.find((v) => v.version === 1).status === 'RETIRED');
+  const feat = (await call('POST', '/admin/features', { key: 'smoke_loyalty', name: 'Loyalty program', kind: 'BOOLEAN', productLine: 'ALL' }, A)).json;
+  check('admin adds a feature to the catalog', feat.key === 'smoke_loyalty', feat);
+  const newPlan = (await call('POST', '/admin/plans', { code: `SMOKE_${Date.now()}`, name: 'Smoke Enterprise', productLine: 'ORDERING', isPublic: false }, A)).json;
+  check('admin creates a plan (hidden draft)', newPlan.id && newPlan.isPublic === false, newPlan);
+
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -24,7 +24,7 @@ export class EventsService {
 
   async createExperience(user: JwtPayload, locationId: string, input: { name: string; description?: string; imageUrl?: string; pricingMode: 'FREE' | 'PREPAID_PER_PERSON' | 'PREPAID_PER_PARTY' | 'PAY_AT_VENUE'; priceCents?: number; serviceFeePayer?: 'DINER' | 'MERCHANT'; refundPolicy?: string; refundCutoffHours?: number; sessions: { startAt: string; capacity: number }[]; addOns?: { name: string; priceCents: number }[] }) {
     const loc = await this.requireLoc(user, locationId);
-    const terms = await this.contracts.termsFor(locationId, 'MARKETPLACE');
+    const terms = await this.contracts.termsFor(locationId, 'MARKETPLACE', new Date(), undefined, 'DINE_IN');
     return this.db.transaction(async (tx) => {
       const [e] = await tx.insert(experiences).values({ locationId, name: input.name, description: input.description ?? null, imageUrl: input.imageUrl ?? null, pricingMode: input.pricingMode, priceCents: input.priceCents ?? 0, serviceFeeBps: terms.prepaidServiceFeeBps, serviceFeePayer: input.serviceFeePayer || 'DINER', refundPolicy: input.refundPolicy || `Refundable up to ${input.refundCutoffHours ?? 48} hours before the session.`, refundCutoffHours: input.refundCutoffHours ?? 48 }).returning();
       await tx.insert(experienceSessions).values(input.sessions.map((s) => ({ experienceId: e.id, startAt: new Date(s.startAt), capacity: s.capacity })));
