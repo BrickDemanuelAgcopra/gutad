@@ -6,7 +6,7 @@ import { AuditService } from '../../core/audit.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
 
 /** Bump when the Merchant Agreement text changes; merchants re-accept the new version. */
-export const MERCHANT_AGREEMENT_VERSION = '2026-11-13.2';
+export const MERCHANT_AGREEMENT_VERSION = '2026-11-13.3';
 
 export const DOCUMENT_TYPES = [
   { type: 'BUSINESS_LICENSE', label: 'Business license or registration', required: true },
