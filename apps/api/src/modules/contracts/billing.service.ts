@@ -204,7 +204,7 @@ export class BillingService {
       if (open.length) throw new BadRequestException('You already have a subscription discount running');
     }
     const endsAt = p.kind === 'COMMISSION_HOLIDAY' ? new Date(now.getTime() + p.days * 86_400_000) : null;
-    const [r] = await this.db.insert(promotionRedemptions).values({ promotionId: p.id, organizationId: orgId, redeemedById: user.sub, endsAt }).returning();
+    const [r] = await this.db.insert(promotionRedemptions).values({ promotionId: p.id, organizationId: orgId, redeemedById: user.sub, endsAt, redeemedAt: now }).returning();
     await this.audit.log({ organizationId: orgId, actorId: user.sub, action: 'promotion.redeem', entityType: 'promotion', entityId: p.id, after: { code: p.code, kind: p.kind, endsAt } });
     return { id: r.id, code: p.code, name: p.name, kind: p.kind, endsAt };
   }
@@ -222,6 +222,7 @@ export class BillingService {
     if (input.kind === 'COMMISSION_HOLIDAY' && !(input.days && input.days > 0)) throw new BadRequestException('Set how many days the commission holiday lasts');
     const { id, ...rest } = input;
     const values = { ...rest, code: input.code.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, ''), planCodes: input.planCodes || [] };
+    if (!id && (await this.db.select({ id: promotions.id }).from(promotions).where(eq(promotions.code, values.code)).limit(1)).length) throw new BadRequestException(`A promotion with code ${values.code} already exists`);
     const [row] = id ? await this.db.update(promotions).set(values).where(eq(promotions.id, id)).returning() : await this.db.insert(promotions).values(values).returning();
     await this.audit.log({ actorId: user.sub, action: id ? 'promotion.update' : 'promotion.create', entityType: 'promotion', entityId: row.id, after: row });
     return row;
@@ -334,6 +335,7 @@ export class BillingService {
     }
     const { id, ...rest } = input;
     const values = { ...rest, code };
+    if (!id && (await this.db.select({ id: addOns.id }).from(addOns).where(eq(addOns.code, code)).limit(1)).length) throw new BadRequestException(`An add-on with code ${code} already exists`);
     const [row] = id ? await this.db.update(addOns).set(values).where(eq(addOns.id, id)).returning() : await this.db.insert(addOns).values(values).returning();
     await this.audit.log({ actorId: user.sub, action: id ? 'addon.update' : 'addon.create', entityType: 'add_on', entityId: row.id, after: row });
     return row;

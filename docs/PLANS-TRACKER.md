@@ -58,7 +58,9 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 
 ## Known issues found along the way
 
-- [ ] Smoke check "waitlist → walk-in seated" fails between the demo shifts (15:00–17:00 and after 22:30 New York time) because it seats a walk-in "now". Make the test pick a time inside a shift. Not caused by plan work.
+- [x] Smoke check "waitlist → walk-in seated" failed between the demo shifts because it seats a walk-in "now". Fixed: the test opens a temporary all-day shift, seats the walk-in, then closes the shift.
+- [x] Commission-holiday check could fail when the database clock ran ahead of the API clock; the API now stamps the redemption time itself.
+- [x] Duplicate add-on or promotion codes returned a 500; they now return a 400 with a clear message.
 
 ## Phase 4: mobile, promotions, reporting
 
@@ -77,3 +79,4 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 - 2026-11-13: Phase 2 shipped (commit d416398). 122 smoke checks; 121 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-221940.dump. Next: Phase 3 (merchant self-serve).
 - 2026-11-13: Phase 3 shipped (commit 8e5ea13). 141 smoke checks; 140 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-223636.dump. Next: Phase 4 (mobile, promotions, reporting).
 - 2026-11-13: Phase 4 shipped (commit c05fe2c). 152 smoke checks; 151 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-225703.dump. All four phases complete; open items: the waitlist test fix and an EAS build for mobile.
+- 2026-11-13: waitlist test fixed, plus two small fixes found while verifying. 152/152 smoke checks pass on a fresh database. Remaining outside this tracker: an EAS build to ship the mobile screens.

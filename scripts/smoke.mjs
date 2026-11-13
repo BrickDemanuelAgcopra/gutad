@@ -171,9 +171,13 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   check('visit closed: billable covers & cover fee', completed.status === 'COMPLETED' && completed.billableCovers === 2 && completed.coverFeeCents === 200, completed);
   const noShow = (await call('POST', `/reservations/${confirmed.id}/host`, { action: 'NO_SHOW' }, O)).json;
   check('no-show charged via guarantee', noShow.status === 'NO_SHOW' && noShow.noShowChargedCents === 7 * 2500, noShow);
+  // Seating a walk-in books "now", which must fall inside a dining shift. The demo shifts leave gaps
+  // (15:00–17:00, after 22:30, before 11:30), so open a temporary all-day shift for this check and close it after.
+  const walkInShift = (await call('POST', `/locations/${locId}/shifts`, { name: 'Smoke walk-ins', startTime: '00:00', endTime: '23:59', maxPartySize: 8 }, O)).json;
   const wl = (await call('POST', `/public/locations/${locId}/waitlist`, { guestName: 'Walk In', partySize: 2 }, C)).json;
   const wlSeat = (await call('POST', `/waitlist/${wl.id}/seat`, {}, O)).json;
-  check('waitlist → walk-in seated', wlSeat.status === 'SEATED' && wlSeat.channel === 'WALK_IN', wlSeat);
+  await call('POST', `/locations/${locId}/shifts`, { id: walkInShift.id, name: 'Smoke walk-ins', startTime: '00:00', endTime: '23:59', isActive: false }, O);
+  check('waitlist → walk-in seated', walkInShift.id && wlSeat.status === 'SEATED' && wlSeat.channel === 'WALK_IN', wlSeat);
 
   // ── experiences & private events
   const exps = (await call('GET', `/public/locations/${locId}/experiences`)).json;
