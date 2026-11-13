@@ -68,7 +68,7 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 - [x] Admin revenue view (Plans & pricing → Revenue): MRR by plan and add-ons, subscription statuses, trial conversion, plan changes in 90 days, revenue by month from the ledger
 - [x] Update `docs/CAPABILITY-MAP.md`
 - [x] Smoke tests for promotions and the revenue report (11 new checks)
-- [~] Deploy Phase 4 to gutad.io and verify (mobile needs a new EAS build to reach phones)
+- [x] Deploy Phase 4 to gutad.io and verify (API + web live; mobile code ready, needs a new EAS build to reach phones)
 
 ## Log
 
@@ -76,3 +76,4 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 - 2026-11-13: Phase 1 shipped (commits 9ded42c, 81d4e75). 111 smoke checks; 110 pass, the 1 failure is the time-of-day waitlist issue listed above. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-214147.dump. Next: Phase 2 (enforcement).
 - 2026-11-13: Phase 2 shipped (commit d416398). 122 smoke checks; 121 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-221940.dump. Next: Phase 3 (merchant self-serve).
 - 2026-11-13: Phase 3 shipped (commit 8e5ea13). 141 smoke checks; 140 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-223636.dump. Next: Phase 4 (mobile, promotions, reporting).
+- 2026-11-13: Phase 4 shipped (commit c05fe2c). 152 smoke checks; 151 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-225703.dump. All four phases complete; open items: the waitlist test fix and an EAS build for mobile.
