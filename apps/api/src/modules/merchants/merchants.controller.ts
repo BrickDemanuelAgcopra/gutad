@@ -57,6 +57,8 @@ const HoursDto = z.object({ hours: z.array(z.object({ dayOfWeek: z.number().int(
 const StatusDto = z.object({ status: z.enum(['LIVE', 'PAUSED', 'SUSPENDED', 'OFFBOARDED']), reason: z.string().optional() });
 const PauseDto = z.object({ minutes: z.number().int().positive().nullable().optional(), reason: z.string().optional() });
 const PubDto = z.object({ kind: z.enum(['LISTING', 'BRANDED_SITE', 'ORDER_LINK', 'QR', 'BOOKING_WIDGET', 'PARTNER_LINK']), channel: z.enum(['MARKETPLACE', 'DIRECT', 'WIDGET', 'QR', 'PARTNER']), config: z.record(z.unknown()).optional(), partnerName: z.string().optional(), partnerUrl: z.string().url().optional() });
+const FleetRequestDto = z.object({ fleet: z.enum(['MERCHANT', 'PARTNER', 'PLATFORM']), note: z.string().max(1000).optional() });
+const FleetReviewDto = z.object({ approve: z.boolean(), note: z.string().max(1000).optional() });
 const ConversionDto = z.object({ referralCode: z.string(), partnerOrderId: z.string(), payableCents: z.number().int().min(0), agreementRef: z.string().optional() });
 
 @ApiTags('02 Merchants, locations & publishing')
@@ -80,6 +82,11 @@ export class MerchantsController {
   @Post('locations/:id/status') status(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(StatusDto)) b: z.infer<typeof StatusDto>) { return this.svc.setStatus(u, id, b.status, b.reason); }
   @Post('locations/:id/pause') pause(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(PauseDto)) b: z.infer<typeof PauseDto>) { return this.svc.pause(u, id, b.minutes ?? null, b.reason); }
   @Post('locations/:id/resume') resume(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.resume(u, id); }
+  @Post('locations/:id/delivery-fleet-request') fleetRequest(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(FleetRequestDto)) b: z.infer<typeof FleetRequestDto>) { return this.svc.requestDeliveryFleet(u, id, b.fleet, b.note); }
+  @Delete('locations/:id/delivery-fleet-request') fleetRequestCancel(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.cancelDeliveryFleetRequest(u, id); }
+  @Get('admin/delivery-fleet-requests') fleetRequests(@CurrentUser() u: JwtPayload) { return this.svc.listDeliveryFleetRequests(u); }
+  @Post('locations/:id/delivery-fleet-request/review') fleetReview(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(FleetReviewDto)) b: z.infer<typeof FleetReviewDto>) { return this.svc.reviewDeliveryFleet(u, id, b.approve, b.note); }
+  @Post('locations/:id/platform-operated') platformOperated(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ value: z.boolean() }))) b: { value: boolean }) { return this.svc.setPlatformOperated(u, id, b.value); }
   @Patch('locations/:id/hours') hours(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(HoursDto)) b: z.infer<typeof HoursDto>) { return this.svc.setHours(u, id, b.hours); }
 
   @Get('locations/:id/publications') pubs(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.listPublications(u, id); }

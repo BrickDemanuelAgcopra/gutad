@@ -9,7 +9,7 @@ import { Alert, Spinner } from '@/components/ui';
 
 
 const NAV = [
-  ['/merchant', 'Dashboard'], ['/merchant/orders', 'Orders'], ['/merchant/menu', 'Menu'], ['/merchant/host', 'Host stand'], ['/merchant/dispatch', 'Delivery'], ['/merchant/kitchen', 'Kitchen'], ['/merchant/events', 'Events'], ['/merchant/guests', 'Guests'], ['/merchant/growth', 'Growth'], ['/merchant/finance', 'Finance'], ['/merchant/shift', 'Shift'], ['/merchant/settings', 'Settings'],
+  ['/merchant', 'Dashboard'], ['/merchant/onboarding', 'Onboarding'], ['/merchant/orders', 'Orders'], ['/merchant/menu', 'Menu'], ['/merchant/host', 'Host stand'], ['/merchant/dispatch', 'Delivery'], ['/merchant/kitchen', 'Kitchen'], ['/merchant/events', 'Events'], ['/merchant/guests', 'Guests'], ['/merchant/growth', 'Growth'], ['/merchant/finance', 'Finance'], ['/merchant/shift', 'Shift'], ['/merchant/settings', 'Settings'],
 ];
 
 export default function MerchantLayout({ children }: { children: React.ReactNode }) {

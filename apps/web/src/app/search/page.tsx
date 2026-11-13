@@ -1,7 +1,7 @@
 'use client';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { RestaurantCard } from '@/components/restaurant-card';
+import { cardKey, RestaurantCard } from '@/components/restaurant-card';
 import { Button, Input, Select, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { LocationSummary, Paginated } from '@gutad/shared';
@@ -53,7 +53,7 @@ function SearchInner() {
         <Button variant="secondary" onClick={locate}>{near ? 'Near me ✓' : 'Near me'}</Button>
       </div>
       <div className="mt-6">
-        {loading ? <Spinner /> : data?.items.length ? <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{data.items.map((l) => <RestaurantCard key={l.id} l={l} />)}</div> : <p className="text-ink-500">No matches. Try another city or clear filters.</p>}
+        {loading ? <Spinner /> : data?.items.length ? <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{data.items.map((l) => <RestaurantCard key={cardKey(l)} l={l} />)}</div> : <p className="text-ink-500">No matches. Try another city or clear filters.</p>}
       </div>
     </div>
   );

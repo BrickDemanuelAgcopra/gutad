@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
-import { deliveryZones, experiences, locations, openingHours, publications, shifts, sponsoredPlacements } from '../../db/schema';
+import { brands, deliveryZones, experiences, locations, menus, openingHours, publications, shifts, sponsoredPlacements } from '../../db/schema';
 import { RedisService } from '../../core/redis.service';
 import { haversineKm, isWithin, localParts, pointInPolygon } from '../../common/utils';
 
@@ -28,7 +28,12 @@ export class DiscoveryService {
     const conds = [inArray(locations.status, ['LIVE', 'VERIFIED'])];
     if (p.city) conds.push(sql`lower(${locations.city}) = ${p.city.toLowerCase()}`);
     if (p.cuisine) conds.push(sql`${p.cuisine.toLowerCase()} = any(${locations.cuisine})`);
-    if (p.q) conds.push(or(sql`${locations.name} ilike ${'%' + p.q + '%'}`, sql`array_to_string(${locations.cuisine}, ' ') ilike ${'%' + p.q + '%'}`)!);
+    if (p.q) {
+      const like = '%' + p.q + '%';
+      // a Made at Gutad food hall also matches on the names/descriptions of the brands it prepares
+      const brandMatch = sql`exists (select 1 from ${menus} m join ${brands} b on b.id = m.brand_id where m.location_id = ${locations.id} and m.is_active and (b.name ilike ${like} or coalesce(b.description, '') ilike ${like}))`;
+      conds.push(or(sql`${locations.name} ilike ${like}`, sql`array_to_string(${locations.cuisine}, ' ') ilike ${like}`, sql`(${locations.platformOperated} and ${brandMatch})`)!);
+    }
     if (p.service === 'pickup') conds.push(eq(locations.acceptsPickup, true));
     if (p.service === 'delivery') conds.push(eq(locations.acceptsDelivery, true));
     if (p.service === 'reservations') conds.push(eq(locations.acceptsReservations, true));
@@ -56,6 +61,7 @@ export class DiscoveryService {
     });
     if (p.radiusKm && p.lat !== undefined) items = items.filter((i) => i.distanceKm === null || i.distanceKm <= p.radiusKm!);
     if (p.openNow) items = items.filter((i) => i.isOpenNow);
+    items = await this.expandFoodHalls(items, p.q);
     // ranking: sponsored first (by bid), then open, then rating, then distance
     items.sort((a, b) => b._bid - a._bid || Number(b.isOpenNow) - Number(a.isOpenNow) || (b.rating || 0) - (a.rating || 0) || (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
     const total = items.length;
@@ -64,6 +70,36 @@ export class DiscoveryService {
     const shownSp = pageItems.filter((i) => i._spId).map((i) => i._spId!);
     if (shownSp.length) void this.db.update(sponsoredPlacements).set({ impressions: sql`${sponsoredPlacements.impressions} + 1` }).where(inArray(sponsoredPlacements.id, shownSp));
     return { items: pageItems.map(({ _bid, _spId, ...rest }) => rest), total, page, pageSize };
+  }
+
+  /**
+   * Made at Gutad food halls are listed as one result per brand they prepare (each links to the food hall page,
+   * where dishes from all of its brands go into one order). Independent restaurants stay one result each.
+   */
+  private async expandFoodHalls<T extends { id: string; name: string; cuisine: string[]; platformOperated: boolean }>(items: T[], q?: string) {
+    const hallIds = items.filter((i) => i.platformOperated).map((i) => i.id);
+    if (!hallIds.length) return items.map((i) => ({ ...i, brand: null, foodHallName: null }));
+    const rows = await this.db
+      .selectDistinct({ locationId: menus.locationId, id: brands.id, slug: brands.slug, name: brands.name, description: brands.description, logoUrl: brands.logoUrl })
+      .from(menus)
+      .innerJoin(brands, eq(brands.id, menus.brandId))
+      .where(and(inArray(menus.locationId, hallIds), eq(menus.isActive, true)));
+    const needle = q?.toLowerCase();
+    const out: (T & { brand: { id: string; slug: string; name: string; description: string | null; logoUrl: string | null } | null; foodHallName: string | null })[] = [];
+    for (const i of items) {
+      const hallBrands = rows.filter((r) => r.locationId === i.id).sort((a, b) => a.name.localeCompare(b.name));
+      if (!i.platformOperated || !hallBrands.length) {
+        out.push({ ...i, brand: null, foodHallName: null });
+        continue;
+      }
+      // a query that names specific brands shows only those; otherwise (no query, or the hall's own
+      // name/cuisine matched) every brand in the hall is listed
+      const matching = needle ? hallBrands.filter((b) => b.name.toLowerCase().includes(needle) || (b.description || '').toLowerCase().includes(needle)) : [];
+      for (const b of matching.length ? matching : hallBrands) {
+        out.push({ ...i, name: b.name, description: b.description, brand: { id: b.id, slug: b.slug, name: b.name, description: b.description, logoUrl: b.logoUrl }, foodHallName: i.name });
+      }
+    }
+    return out;
   }
 
   private async activeSponsored(city?: string, q?: string) {
@@ -106,6 +142,7 @@ export class DiscoveryService {
       acceptsReservations: loc.acceptsReservations,
       acceptsEvents: loc.acceptsEvents,
       acceptsCatering: loc.acceptsCatering,
+      platformOperated: loc.platformOperated,
       isPaused: loc.isPaused,
       pausedReason: loc.pausedReason,
       minOrderCents: loc.minOrderCents,

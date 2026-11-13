@@ -109,6 +109,12 @@ export const locations = pgTable(
     taxRateBps: integer('tax_rate_bps').notNull().default(800),
     minOrderCents: integer('min_order_cents').notNull().default(0),
     deliveryFleet: deliveryFleetEnum('delivery_fleet').notNull().default('PARTNER'),
+    /** Pending merchant request to change who delivers; platform staff approve or decline it. */
+    deliveryFleetRequested: deliveryFleetEnum('delivery_fleet_requested'),
+    deliveryFleetRequestedAt: ts('delivery_fleet_requested_at'),
+    deliveryFleetRequestNote: text('delivery_fleet_request_note'),
+    /** Gutad's own culinary team prepares this location's menus ("Made at Gutad"); set by platform staff only. */
+    platformOperated: boolean('platform_operated').notNull().default(false),
     deliveryRadiusKm: doublePrecision('delivery_radius_km').notNull().default(5),
     deliveryBaseFeeCents: integer('delivery_base_fee_cents').notNull().default(399),
     deliveryPerKmCents: integer('delivery_per_km_cents').notNull().default(50),

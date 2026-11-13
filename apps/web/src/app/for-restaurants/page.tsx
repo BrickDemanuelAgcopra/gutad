@@ -24,7 +24,7 @@ export default function ForRestaurants() {
       setDone(org.id);
     } catch (e) { setError((e as Error).message); }
   };
-  if (done) return <Alert tone="good">Your listing is created. Platform staff verify operators before going live. Continue in the <Link className="underline" href="/merchant">merchant portal</Link> to import your menu, set hours, floor plan and payouts.</Alert>;
+  if (done) return <Alert tone="good">Your listing is created. Next, <Link className="font-semibold underline" href="/merchant/onboarding">finish onboarding</Link>: accept the Merchant Agreement and upload your business documents so Gutad can verify you. Then add your menu, hours and payout details in the merchant portal.</Alert>;
   return (
     <div className="grid gap-8 lg:grid-cols-2">
       <div>
@@ -42,6 +42,7 @@ export default function ForRestaurants() {
           <div className="grid grid-cols-3 gap-2"><Input label="City" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} /><Input label="State" value={f.region} onChange={(e) => setF({ ...f, region: e.target.value })} /><Input label="ZIP" value={f.postalCode} onChange={(e) => setF({ ...f, postalCode: e.target.value })} /></div>
           {error && <Alert>{error}</Alert>}
           <Button className="w-full" onClick={submit} disabled={!f.business || !f.addressLine1 || !f.city}>Get started</Button>
+          <p className="text-xs text-ink-500">Next you&apos;ll review and sign the <Link className="underline" href="/merchant-agreement" target="_blank">Merchant Agreement</Link> and upload a business license, food service permit, W-9 and owner ID. Gutad reviews them before your restaurant goes live.</p>
         </div>
       </Card>
     </div>

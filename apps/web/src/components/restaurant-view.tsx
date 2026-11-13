@@ -6,6 +6,9 @@ import { api, money, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { useCart } from '@/lib/cart';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Tabs, Textarea, Spinner, Empty } from './ui';
+import { GBadge, MadeAtGutad } from './made-at-gutad';
+
+type PublicMenu = MenuDto & { brand?: { id: string; slug: string; name: string; description: string | null } | null };
 
 export interface LocationPage extends LocationSummary {
   hours: { dayOfWeek: number; opens: string; closes: string }[];
@@ -25,7 +28,7 @@ export interface LocationPage extends LocationSummary {
 type Channel = 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR';
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export function RestaurantView({ loc, channel, src, branded, initialTab }: { loc: LocationPage; channel: Channel; src: string | null; branded?: boolean; initialTab?: string }) {
+export function RestaurantView({ loc, channel, src, branded, initialTab, initialBrand }: { loc: LocationPage; channel: Channel; src: string | null; branded?: boolean; initialTab?: string; initialBrand?: string }) {
   const tabs = [
     ...(loc.acceptsPickup || loc.acceptsDelivery ? [{ id: 'order', label: 'Order' }] : []),
     ...(loc.acceptsReservations ? [{ id: 'reserve', label: 'Reserve' }] : []),
@@ -44,7 +47,8 @@ export function RestaurantView({ loc, channel, src, branded, initialTab }: { loc
           {branded && <div className="mb-1 text-xs uppercase tracking-wide text-white/70">Ordering direct</div>}
           <h1 className="text-3xl font-bold">{loc.name}</h1>
           <p className="mt-1 text-sm text-white/80">{loc.cuisine.join(' · ')} · {loc.addressLine1}, {loc.city} {loc.rating ? `· ★ ${loc.rating.toFixed(1)} (${loc.ratingCount})` : ''}</p>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {loc.platformOperated && <MadeAtGutad tone="dark" />}
             <Badge tone={loc.isOpenNow ? 'good' : 'bad'}>{loc.isOpenNow ? 'Open now' : 'Closed'}</Badge>
             {loc.isPaused && <Badge tone="warn">{loc.pausedReason || 'Paused'}</Badge>}
           </div>
@@ -53,7 +57,7 @@ export function RestaurantView({ loc, channel, src, branded, initialTab }: { loc
       {loc.description && <p className="mt-4 text-ink-700">{loc.description}</p>}
       <div className="mt-5"><Tabs tabs={tabs} active={tab} onChange={setTab} /></div>
       <div className="mt-6">
-        {tab === 'order' && <OrderTab loc={loc} channel={channel} src={src} />}
+        {tab === 'order' && <OrderTab loc={loc} channel={channel} src={src} initialBrand={initialBrand} />}
         {tab === 'reserve' && <ReserveTab loc={loc} channel={channel === 'MARKETPLACE' ? 'MARKETPLACE' : 'WIDGET'} />}
         {tab === 'experiences' && <ExperiencesTab loc={loc} />}
         {tab === 'events' && <EventsTab loc={loc} />}
@@ -66,18 +70,49 @@ export function RestaurantView({ loc, channel, src, branded, initialTab }: { loc
 
 // ───────────── Order ─────────────
 
-function OrderTab({ loc, channel, src }: { loc: LocationPage; channel: Channel; src: string | null }) {
-  const { data: menus, loading } = useApi<(MenuDto & { brand?: { name: string } | null })[]>(`/public/locations/${loc.id}/menus?channel=${channel}`);
+type NewLine = Parameters<ReturnType<typeof useCart>['add']>[1];
+
+function OrderTab({ loc, channel, src, initialBrand }: { loc: LocationPage; channel: Channel; src: string | null; initialBrand?: string }) {
+  const { data: menus, loading } = useApi<PublicMenu[]>(`/public/locations/${loc.id}/menus?channel=${channel}`);
   const { cart, add, count, subtotal } = useCart();
   const [picked, setPicked] = useState<{ item: MenuItemDto; brand?: string | null } | null>(null);
+  const [pending, setPending] = useState<NewLine | null>(null);
+  const hall = !!loc.platformOperated && (menus?.length || 0) > 1;
+  useEffect(() => {
+    if (!initialBrand || !menus?.length) return;
+    document.getElementById(`brand-${initialBrand}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [initialBrand, menus]);
+  const doAdd = (line: NewLine) => add({ id: loc.id, slug: loc.slug, name: loc.name }, line, channel, src);
+  const tryAdd = (line: NewLine) => {
+    setPicked(null);
+    if (cart.locationId && cart.locationId !== loc.id && cart.lines.length) setPending(line);
+    else doAdd(line);
+  };
+  const groups = useMemo(() => {
+    const by = new Map<string, typeof cart.lines>();
+    for (const l of cart.lines) by.set(l.brandName || '', [...(by.get(l.brandName || '') || []), l]);
+    return [...by.entries()];
+  }, [cart.lines]);
   if (loading) return <Spinner />;
   if (!menus?.length) return <Empty>No menu published for this channel right now.</Empty>;
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
       <div className="space-y-8">
+        {hall && (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="flex items-center gap-2 font-semibold text-emerald-900"><GBadge className="h-6 w-6" /> Mix menus in one order</div>
+            <p className="mt-1 text-sm text-emerald-900/80">Every menu here is cooked by Gutad&apos;s culinary team in this food hall. Add dishes from any of them: they&apos;re prepared together and arrive in one delivery.</p>
+            <div className="mt-3 flex flex-wrap gap-2">{menus.filter((m) => m.brand).map((m) => <a key={m.id} href={`#brand-${m.brand!.slug}`} className="rounded-full bg-white px-3 py-1 text-sm font-medium text-emerald-800 shadow-sm hover:bg-emerald-100">{m.brand!.name}</a>)}</div>
+          </div>
+        )}
         {menus.map((m) => (
-          <div key={m.id}>
-            {menus.length > 1 && <h2 className="mb-3 text-xl font-bold">{m.brand?.name || m.name}</h2>}
+          <div key={m.id} id={m.brand ? `brand-${m.brand.slug}` : undefined} className={`scroll-mt-24 ${initialBrand && m.brand?.slug === initialBrand ? 'rounded-2xl ring-2 ring-emerald-300 ring-offset-4' : ''}`}>
+            {menus.length > 1 && (
+              <div className="mb-3">
+                <h2 className="flex items-center gap-2 text-xl font-bold">{loc.platformOperated && m.brand && <GBadge className="h-6 w-6" />}{m.brand?.name || m.name}</h2>
+                {m.brand?.description && <p className="text-sm text-ink-500">{m.brand.description}</p>}
+              </div>
+            )}
             {m.categories.map((c) => (
               <div key={c.id} className="mb-6">
                 <h3 className="mb-2 text-lg font-semibold">{c.name}</h3>
@@ -103,12 +138,20 @@ function OrderTab({ loc, channel, src }: { loc: LocationPage; channel: Channel; 
         <Card title="Your order">
           {cart.locationId === loc.id && count > 0 ? (
             <>
-              <ul className="space-y-1 text-sm">{cart.lines.map((l) => <li key={l.key} className="flex justify-between"><span>{l.quantity}× {l.name}</span><span>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</span></li>)}</ul>
+              <div className="space-y-2 text-sm">
+                {groups.map(([brand, lines]) => (
+                  <div key={brand}>
+                    {hall && brand && <div className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-emerald-800"><GBadge className="h-3.5 w-3.5" /> {brand}</div>}
+                    <ul className="space-y-1">{lines.map((l) => <li key={l.key} className="flex justify-between"><span>{l.quantity}× {l.name}</span><span>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</span></li>)}</ul>
+                  </div>
+                ))}
+              </div>
+              {hall && groups.length > 1 && <p className="mt-2 text-xs text-emerald-800">{groups.length} menus, one order, one delivery.</p>}
               <div className="mt-3 flex justify-between border-t border-ink-100 pt-2 text-sm font-semibold"><span>Subtotal</span><span>{money(subtotal)}</span></div>
               <Link href="/checkout"><Button className="mt-3 w-full" size="lg">Checkout</Button></Link>
             </>
           ) : (
-            <p className="text-sm text-ink-500">Pick items to start an order. {loc.acceptsDelivery ? 'Pickup or delivery' : 'Pickup'}, now or scheduled.</p>
+            <p className="text-sm text-ink-500">Pick items to start an order. {loc.acceptsDelivery ? 'Pickup or delivery' : 'Pickup'}, now or scheduled.{hall ? ' Combine any menus on this page.' : ''}</p>
           )}
           {loc.partnerLinks.length > 0 && (
             <div className="mt-4 border-t border-ink-100 pt-3 text-xs text-ink-500">
@@ -117,7 +160,14 @@ function OrderTab({ loc, channel, src }: { loc: LocationPage; channel: Channel; 
           )}
         </Card>
       </aside>
-      {picked && <ItemModal item={picked.item} brand={picked.brand} currency={loc.currency} onClose={() => setPicked(null)} onAdd={(line) => { add({ id: loc.id, slug: loc.slug, name: loc.name }, line, channel, src); setPicked(null); }} />}
+      {picked && <ItemModal item={picked.item} brand={picked.brand} currency={loc.currency} onClose={() => setPicked(null)} onAdd={tryAdd} />}
+      <Modal open={!!pending} onClose={() => setPending(null)} title="Start a new order?">
+        <p className="text-sm text-ink-700">Your cart has items from <b>{cart.locationName}</b>. Each order comes from one place: a local restaurant, or one Made at Gutad food hall (where you can mix its menus). Starting a new order empties your current cart.</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setPending(null)}>Keep my cart</Button>
+          <Button onClick={() => { if (pending) doAdd(pending); setPending(null); }}>Start new order</Button>
+        </div>
+      </Modal>
     </div>
   );
 }

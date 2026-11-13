@@ -28,20 +28,22 @@ export const session = {
   },
 };
 
+async function refreshSession() {
+  const refresh = typeof window !== 'undefined' ? localStorage.getItem(REFRESH_KEY) : null;
+  if (!refresh) return;
+  try {
+    const res = await fetch(`${API_URL}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: refresh }) });
+    if (res.ok) session.set((await res.json()) as AuthResponse);
+    else session.clear();
+  } catch {
+    session.clear();
+  }
+}
+
 export const api = new GutadClient({
   baseUrl: API_URL,
   getToken: () => session.token(),
-  onUnauthorized: async () => {
-    const refresh = typeof window !== 'undefined' ? localStorage.getItem(REFRESH_KEY) : null;
-    if (!refresh) return;
-    try {
-      const res = await fetch(`${API_URL}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: refresh }) });
-      if (res.ok) session.set((await res.json()) as AuthResponse);
-      else session.clear();
-    } catch {
-      session.clear();
-    }
-  },
+  onUnauthorized: refreshSession,
 });
 
 export { newIdempotencyKey };
@@ -55,3 +57,28 @@ export const ago = (d?: string | Date | null) => {
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   return `${Math.round(s / 3600)}h ago`;
 };
+
+/** Multipart upload with the session token (the JSON client cannot send files). */
+export async function uploadFile<T>(path: string, form: FormData): Promise<T> {
+  const send = () => fetch(`${API_URL}${path}`, { method: 'POST', headers: session.token() ? { Authorization: `Bearer ${session.token()}` } : {}, body: form });
+  let res = await send();
+  if (res.status === 401) {
+    await refreshSession();
+    res = await send();
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((body as { message?: string }).message || `Upload failed (${res.status})`);
+  return body as T;
+}
+
+/** Download an authenticated file and hand it to the browser. */
+export async function downloadFile(path: string, fileName: string) {
+  const res = await fetch(`${API_URL}${path}`, { headers: session.token() ? { Authorization: `Bearer ${session.token()}` } : {} });
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}

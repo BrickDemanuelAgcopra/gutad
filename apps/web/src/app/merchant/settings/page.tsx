@@ -15,13 +15,13 @@ export default function SettingsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Settings</h1>
-      <Tabs tabs={[{ id: 'location', label: 'Location' }, { id: 'hours', label: 'Hours' }, { id: 'publish', label: 'Publishing & QR' }, { id: 'floor', label: 'Floor & shifts' }, { id: 'policy', label: 'Booking policy' }, { id: 'delivery', label: 'Delivery zones' }, { id: 'team', label: 'Team' }, { id: 'devices', label: 'Devices & POS' }, { id: 'brands', label: 'Brands' }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ id: 'location', label: 'Location' }, { id: 'hours', label: 'Hours' }, { id: 'publish', label: 'Publishing & QR' }, { id: 'floor', label: 'Floor & shifts' }, { id: 'policy', label: 'Booking policy' }, { id: 'delivery', label: 'Delivery' }, { id: 'team', label: 'Team' }, { id: 'devices', label: 'Devices & POS' }, { id: 'brands', label: 'Brands' }]} active={tab} onChange={setTab} />
       {tab === 'location' && <LocationTab loc={loc} reload={reload} />}
       {tab === 'hours' && <HoursTab locId={loc.id} />}
       {tab === 'publish' && <PublishTab locId={loc.id} />}
       {tab === 'floor' && <FloorTab locId={loc.id} />}
       {tab === 'policy' && <PolicyTab locId={loc.id} />}
-      {tab === 'delivery' && <ZonesTab locId={loc.id} />}
+      {tab === 'delivery' && <><FleetCard loc={loc} reload={reload} /><ZonesTab locId={loc.id} /></>}
       {tab === 'team' && <TeamTab orgId={org.id} members={org.members} locations={org.locations} reload={reload} />}
       {tab === 'devices' && <DevicesTab locId={loc.id} orgId={org.id} />}
       {tab === 'brands' && <BrandsTab orgId={org.id} brands={org.brands} kitchenId={loc.kitchenId} reload={reload} />}
@@ -53,7 +53,7 @@ function LocationTab({ loc, reload }: { loc: { id: string; status: string }; rel
       <div className="mt-3 flex gap-2">
         <Button onClick={() => run(async () => { await api.patch(`/locations/${loc.id}`, { ...v, cuisine: String(v.cuisine).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean), orderThrottlePer15m: v.orderThrottlePer15m ? Number(v.orderThrottlePer15m) : null }); reload(); })}>Save</Button>
         {loc.status === 'VERIFIED' && <Button variant="secondary" onClick={() => run(async () => { await api.post(`/locations/${loc.id}/status`, { status: 'LIVE' }); reload(); })}>Go live</Button>}
-        {loc.status === 'CLAIMED' && <span className="text-xs text-ink-500">Awaiting platform verification before you can go live.</span>}
+        {loc.status === 'CLAIMED' && <span className="text-xs text-ink-500">Awaiting platform verification before you can go live. <a className="underline" href="/merchant/onboarding">Onboarding status</a></span>}
       </div>
     </Card>
   );
@@ -128,12 +128,45 @@ function PolicyTab({ locId }: { locId: string }) {
   );
 }
 
+const FLEETS: Record<string, { label: string; detail: string }> = {
+  PLATFORM: { label: 'Gutad couriers', detail: 'Couriers hired or contracted by Gutad collect and deliver your orders.' },
+  PARTNER: { label: 'Gutad delivery partners', detail: 'Gutad books a partner courier (for example DoorDash Drive or Uber Direct) for each order.' },
+  MERCHANT: { label: 'Your own staff', detail: 'Your staff deliver orders and update their status in the Delivery screen. Needs Gutad approval.' },
+};
+
+/** Who delivers is set by Gutad; merchants request a change and platform staff approve it. */
+function FleetCard({ loc, reload }: { loc: { id: string; deliveryFleet: string; deliveryFleetRequested: string | null; deliveryFleetRequestedAt: string | null }; reload: () => void }) {
+  const [fleet, setFleet] = useState('');
+  const [note, setNote] = useState('');
+  const { run, error } = useAction();
+  const cur = FLEETS[loc.deliveryFleet];
+  return (
+    <Card title="Who delivers your orders" className="mb-4">
+      <p className="text-sm"><b>{cur?.label || loc.deliveryFleet}</b> <span className="text-ink-500">{cur?.detail}</span></p>
+      {loc.deliveryFleetRequested ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <Badge tone="info">Pending</Badge> You asked to switch to <b>{FLEETS[loc.deliveryFleetRequested]?.label}</b>{loc.deliveryFleetRequestedAt ? ` on ${new Date(loc.deliveryFleetRequestedAt).toLocaleDateString()}` : ''}. Gutad will review it.
+          <Button size="sm" variant="ghost" onClick={() => run(async () => { await api.delete(`/locations/${loc.id}/delivery-fleet-request`); reload(); })}>Withdraw</Button>
+        </div>
+      ) : (
+        <div className="mt-3 grid gap-2 sm:grid-cols-[220px_1fr_auto] sm:items-end">
+          <Select label="Request a change" value={fleet} onChange={(e) => setFleet(e.target.value)}><option value="">Choose…</option>{Object.entries(FLEETS).filter(([k]) => k !== loc.deliveryFleet).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select>
+          <Input label="Reason (helps approval)" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. we employ two insured drivers" />
+          <Button disabled={!fleet} onClick={() => run(async () => { await api.post(`/locations/${loc.id}/delivery-fleet-request`, { fleet, note: note || undefined }); setFleet(''); setNote(''); reload(); })}>Send request</Button>
+        </div>
+      )}
+      {error && <div className="mt-2"><Alert>{error}</Alert></div>}
+    </Card>
+  );
+}
+
 function ZonesTab({ locId }: { locId: string }) {
   const { data, reload } = useApi<{ id: string; name: string; feeCents: number; minOrderCents: number; etaMinutes: number; isActive: boolean }[]>(`/locations/${locId}/delivery-zones`);
   const [z, setZ] = useState({ name: '', fee: '3.99', min: '15', eta: '40', polygon: '' });
   const { run, error } = useAction();
   return (
     <Card title="Delivery zones (polygon or radius fallback)">
+      <p className="mb-2 text-xs text-ink-500">Zones set where you deliver and the minimum order. Customers currently pay a $0 delivery fee on Gutad; the zone fee is kept as your list price.</p>
       <ul className="text-sm">{data?.map((x) => <li key={x.id}>{x.name} · ${(x.feeCents / 100).toFixed(2)} · min ${(x.minOrderCents / 100).toFixed(2)} · {x.etaMinutes} min {!x.isActive && <Badge tone="bad">off</Badge>}</li>)}</ul>
       <div className="mt-2 grid gap-2 sm:grid-cols-4"><Input label="Name" value={z.name} onChange={(e) => setZ({ ...z, name: e.target.value })} /><Input label="Fee (USD)" value={z.fee} onChange={(e) => setZ({ ...z, fee: e.target.value })} /><Input label="Min order (USD)" value={z.min} onChange={(e) => setZ({ ...z, min: e.target.value })} /><Input label="ETA minutes" value={z.eta} onChange={(e) => setZ({ ...z, eta: e.target.value })} /></div>
       <Textarea className="mt-2" label="GeoJSON polygon (optional; leave blank to use the location radius)" value={z.polygon} onChange={(e) => setZ({ ...z, polygon: e.target.value })} rows={2} />

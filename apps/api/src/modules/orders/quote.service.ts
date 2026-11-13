@@ -1,7 +1,7 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { locations, openingHours, quotes } from '../../db/schema';
+import { locations, openingHours, platformSettings, quotes } from '../../db/schema';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
 import { DeliveryService } from '../delivery/delivery.service';
@@ -41,7 +41,7 @@ export interface QuoteSnapshotLine {
   specialInstructions?: string;
 }
 
-const SERVICE_FEE_BPS_MARKETPLACE = 500; // diner service fee on marketplace orders (capped)
+const SERVICE_FEE_BPS_MARKETPLACE = 500; // diner service fee on marketplace delivery orders (capped); pickup has none
 const SERVICE_FEE_CAP_CENTS = 400;
 const QUOTE_TTL_MINUTES = 10;
 
@@ -130,7 +130,10 @@ export class QuoteService {
       deliveryExpiresAt = q.expiresAt;
       deliveryFleet = q.fleet;
       etaMinutes = loc.defaultPrepMinutes + q.etaMinutes;
-      if (freeDelivery || (membership?.benefits.freeDeliveryAboveCents !== undefined && subtotalCents >= membership.benefits.freeDeliveryAboveCents)) {
+      if (await this.freeDeliveryForAll(tx)) {
+        // platform-wide $0 delivery: the diner pays nothing, the full courier cost is a platform subsidy
+        deliveryFeeCents = 0;
+      } else if (freeDelivery || (membership?.benefits.freeDeliveryAboveCents !== undefined && subtotalCents >= membership.benefits.freeDeliveryAboveCents)) {
         warnings.push('Delivery fee waived');
         deliveryFeeCents = 0;
       }
@@ -138,7 +141,8 @@ export class QuoteService {
 
     // fees, tax, tip
     const terms = await this.contracts.termsFor(loc.id, input.channel, now, tx);
-    let serviceFeeCents = input.channel === 'MARKETPLACE' ? Math.min(bps(subtotalCents, SERVICE_FEE_BPS_MARKETPLACE), SERVICE_FEE_CAP_CENTS) : 0;
+    // service fee applies to marketplace delivery orders only (pickup never carries it); members have it waived
+    let serviceFeeCents = input.channel === 'MARKETPLACE' && input.fulfillmentType === 'DELIVERY' ? Math.min(bps(subtotalCents, SERVICE_FEE_BPS_MARKETPLACE), SERVICE_FEE_CAP_CENTS) : 0;
     if (membership?.benefits.serviceFeeWaived) serviceFeeCents = 0;
     const taxableCents = Math.max(0, subtotalCents - discountCents);
     const taxCents = bps(taxableCents, loc.taxRateBps);
@@ -265,6 +269,12 @@ export class QuoteService {
   }
 
   /** Helper used by UI: convert a local "YYYY-MM-DD HH:MM" at the location into an ISO instant. */
+  /** Platform setting `fees.free_delivery` (default on): diners pay a $0 delivery fee on every order. */
+  private async freeDeliveryForAll(tx: DbOrTx) {
+    const [row] = await tx.select().from(platformSettings).where(eq(platformSettings.key, 'fees.free_delivery')).limit(1);
+    return row ? row.value !== false : true;
+  }
+
   async localToIso(locationId: string, ymd: string, hhmm: string) {
     const [loc] = await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
     if (!loc) throw new NotFoundException();

@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import type { LocationSummary, Paginated } from '@gutad/shared';
 import { api } from '@/api';
 import { Badge, Button, C, Input, Loading, Muted, s } from '@/ui';
+import { GBadge } from '@/made-at-gutad';
 
 export default function Discover() {
   const [q, setQ] = useState('');
@@ -40,13 +41,13 @@ export default function Discover() {
         </View>
       </View>
       {!data ? <Loading /> : (
-        <FlatList data={data.items} keyExtractor={(i) => i.id} contentContainerStyle={s.pad} ListEmptyComponent={<Muted>No restaurants match. Try another city.</Muted>} renderItem={({ item: l }) => (
-          <Link href={{ pathname: '/r/[slug]', params: { slug: l.slug } }} asChild>
+        <FlatList data={data.items} keyExtractor={(i) => `${i.id}:${i.brand?.id ?? ''}`} contentContainerStyle={s.pad} ListEmptyComponent={<Muted>No restaurants match. Try another city.</Muted>} renderItem={({ item: l }) => (
+          <Link href={{ pathname: '/r/[slug]', params: l.brand ? { slug: l.slug, brand: l.brand.slug } : { slug: l.slug } }} asChild>
             <Pressable style={[s.card, { padding: 0, overflow: 'hidden' }]}>
               {l.heroImageUrl ? <Image source={{ uri: l.heroImageUrl }} style={{ height: 140, width: '100%' }} /> : <View style={{ height: 80, backgroundColor: C.ink1 }} />}
               <View style={{ padding: 12 }}>
-                <View style={s.row}><Text style={{ fontWeight: '700', fontSize: 16 }}>{l.name}</Text><Badge text={l.isOpenNow ? 'OPEN' : 'CLOSED'} tone={l.isOpenNow ? 'good' : 'bad'} /></View>
-                <Muted>{l.cuisine.join(' · ')} · {l.city}{typeof l.distanceKm === 'number' ? ` · ${l.distanceKm.toFixed(1)} km` : ''}{l.rating ? ` · ★ ${l.rating.toFixed(1)}` : ''}</Muted>
+                <View style={s.row}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>{l.platformOperated && <GBadge />}<Text style={{ fontWeight: '700', fontSize: 16 }}>{l.name}</Text></View><Badge text={l.isOpenNow ? 'OPEN' : 'CLOSED'} tone={l.isOpenNow ? 'good' : 'bad'} /></View>
+                <Muted>{l.brand ? `Made at Gutad · ${l.foodHallName}` : `${l.platformOperated ? 'Made at Gutad · ' : ''}${l.cuisine.join(' · ')}`} · {l.city}{typeof l.distanceKm === 'number' ? ` · ${l.distanceKm.toFixed(1)} km` : ''}{l.rating ? ` · ★ ${l.rating.toFixed(1)}` : ''}</Muted>
                 <View style={{ flexDirection: 'row', gap: 4, marginTop: 6 }}>{l.acceptsPickup && <Badge text="Pickup" />}{l.acceptsDelivery && <Badge text="Delivery" />}{l.acceptsReservations && <Badge text="Tables" />}{l.acceptsEvents && <Badge text="Events" />}{l.sponsored && <Badge text="Sponsored" tone="info" />}</View>
               </View>
             </Pressable>

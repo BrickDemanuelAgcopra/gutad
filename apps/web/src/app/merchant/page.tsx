@@ -1,7 +1,8 @@
 'use client';
+import Link from 'next/link';
 import { money } from '@/lib/api';
 import { useApi } from '@/lib/hooks';
-import { Card, Spinner, Stat, Table } from '@/components/ui';
+import { Alert, Card, Spinner, Stat, Table } from '@/components/ui';
 import { useMerchant } from './context';
 
 export default function MerchantDashboard() {
@@ -12,6 +13,7 @@ export default function MerchantDashboard() {
   if (!d) return <Spinner />;
   return (
     <div className="space-y-6">
+      {!loc.verifiedAt && <Alert tone="info">Finish onboarding so Gutad can verify and activate {loc.name}: accept the Merchant Agreement and upload your business documents. <Link className="font-semibold underline" href="/merchant/onboarding">Continue onboarding</Link></Alert>}
       <h1 className="text-2xl font-bold">{loc.name} · last 30 days</h1>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Gross sales" value={money(d.sales.grossCents)} hint={`${d.sales.orders} orders`} />

@@ -36,6 +36,7 @@ async function main() {
   await db.insert(s.platformSettings).values([
     { key: 'fees.marketplace_service_fee_bps', value: 500 },
     { key: 'fees.marketplace_service_fee_cap_cents', value: 400 },
+    { key: 'fees.free_delivery', value: true },
     { key: 'support.auto_reject_minutes', value: 20 },
   ]).onConflictDoNothing();
 
@@ -136,7 +137,7 @@ async function main() {
   const [brandA] = await db.insert(s.brands).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Smash Society', slug: 'smash-society', description: 'Smash burgers', royaltyBps: 0 }).returning();
   const [brandB] = await db.insert(s.brands).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Bowl Theory', slug: 'bowl-theory', description: 'Grain bowls by chef-creator', royaltyBps: 500 }).returning();
   await db.insert(s.kitchenBrands).values([{ kitchenId: kitchen.id, brandId: brandA.id }, { kitchenId: kitchen.id, brandId: brandB.id }]);
-  const [kloc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, kitchenId: kitchen.id, name: 'Demo Kitchen Collective', slug: 'demo-kitchen-collective', description: 'Order from multiple brands in one bag.', cuisine: ['burgers', 'bowls'], addressLine1: '400 W 14th St', city: 'New York', region: 'NY', postalCode: '10014', lat: 40.7418, lng: -74.0067, status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, deliveryFleet: 'PLATFORM', deliveryRadiusKm: 5, taxRateBps: 888, defaultPrepMinutes: 15, heroImageUrl: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=1200' }).returning();
+  const [kloc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, kitchenId: kitchen.id, name: 'Demo Kitchen Collective', slug: 'demo-kitchen-collective', description: 'Made at Gutad food hall: mix dishes from every menu here in one order, delivered together.', platformOperated: true, cuisine: ['burgers', 'bowls'], addressLine1: '400 W 14th St', city: 'New York', region: 'NY', postalCode: '10014', lat: 40.7418, lng: -74.0067, status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, deliveryFleet: 'PLATFORM', deliveryRadiusKm: 5, taxRateBps: 888, defaultPrepMinutes: 15, heroImageUrl: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=1200' }).returning();
   await db.insert(s.reservationPolicies).values({ locationId: kloc.id });
   await db.insert(s.publications).values([{ locationId: kloc.id, kind: 'LISTING', channel: 'MARKETPLACE', slug: 'l-demo-kitchen' }, { locationId: kloc.id, kind: 'ORDER_LINK', channel: 'DIRECT', slug: 'order-demo-kitchen' }]);
   await db.insert(s.contractLocations).values({ contractId: contract.id, locationId: kloc.id, entitlements: { ordering: true, delivery: true, sharedKitchen: true } });

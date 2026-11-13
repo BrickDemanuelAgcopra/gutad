@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, ilike, or } from 'drizzle-orm';
+import { and, eq, ilike, isNotNull, or } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import {
   brands,
@@ -17,10 +17,14 @@ import { AuditService } from '../../core/audit.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES, RoleName } from '../../common/auth';
 import { shortCode, slugify, token } from '../../common/utils';
 import { loadConfig } from '../../config/config';
+import { RedisService } from '../../core/redis.service';
+import { OnboardingService } from '../onboarding/onboarding.service';
+
+type Fleet = 'MERCHANT' | 'PARTNER' | 'PLATFORM';
 
 @Injectable()
 export class MerchantsService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly onboarding: OnboardingService) {}
 
   // ───── organizations & membership (01/02/30) ─────
 
@@ -120,6 +124,11 @@ export class MerchantsService {
     const foreignDupe = dupes.find((d) => d.organizationId !== orgId);
     if (foreignDupe) throw new ConflictException(`A listing for this venue already exists (${foreignDupe.id}). Claim it instead.`);
     const slug = `${slugify(input.name)}-${slugify(input.city)}-${shortCode(3).toLowerCase()}`;
+    if (!isPlatformStaff(user)) {
+      // who delivers is set by Gutad; merchants request a change (see requestDeliveryFleet)
+      delete input.deliveryFleet;
+      delete input.platformOperated;
+    }
     return this.db.transaction(async (tx) => {
       const [loc] = await tx
         .insert(locations)
@@ -152,6 +161,11 @@ export class MerchantsService {
   /** Platform staff verify the operator; required before going LIVE. */
   async verifyLocation(user: JwtPayload, locationId: string, verified: boolean) {
     if (!isPlatformStaff(user)) throw new ForbiddenException();
+    if (verified) {
+      const loc = await this.requireLocation(locationId);
+      const missing = await this.onboarding.blockers(loc.organizationId);
+      if (missing.length) throw new BadRequestException(`Onboarding incomplete: ${missing.join('; ')}`);
+    }
     const [row] = await this.db
       .update(locations)
       .set({ status: verified ? 'VERIFIED' : 'CLAIMED', verifiedAt: verified ? new Date() : null })
@@ -164,9 +178,69 @@ export class MerchantsService {
   async updateLocation(user: JwtPayload, locationId: string, input: Partial<typeof locations.$inferInsert>) {
     const loc = await this.requireLocation(locationId);
     assertOrgAccess(user, loc.organizationId, locationId, MANAGER_ROLES);
-    const { id: _id, organizationId: _o, slug: _s, status: _st, verifiedAt: _v, ...safe } = input;
+    const { id: _id, organizationId: _o, slug: _s, status: _st, verifiedAt: _v, deliveryFleetRequested: _fr, deliveryFleetRequestedAt: _fra, deliveryFleetRequestNote: _frn, ...safe } = input;
+    if (!isPlatformStaff(user)) {
+      // the delivery option and the Made at Gutad designation are controlled by platform staff
+      if (safe.deliveryFleet !== undefined && safe.deliveryFleet !== loc.deliveryFleet) throw new ForbiddenException('Changing who delivers needs Gutad approval. Submit a request from Settings > Delivery.');
+      delete safe.deliveryFleet;
+      delete safe.platformOperated;
+    }
     const [row] = await this.db.update(locations).set(safe).where(eq(locations.id, locationId)).returning();
+    await this.redis.del(`loc:${loc.slug}`);
+    await this.redis.del(`loc:${loc.id}`);
     await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: 'location.update', entityType: 'location', entityId: locationId, before: loc, after: row });
+    return row;
+  }
+
+  // ───── delivery option approval (who delivers) ─────
+
+  /** Merchant asks to change who delivers its orders. Takes effect only after platform staff approve it. */
+  async requestDeliveryFleet(user: JwtPayload, locationId: string, fleet: Fleet, note?: string) {
+    const loc = await this.requireLocation(locationId);
+    assertOrgAccess(user, loc.organizationId, locationId, MANAGER_ROLES);
+    if (fleet === loc.deliveryFleet) throw new BadRequestException('That is already your delivery option');
+    const [row] = await this.db.update(locations).set({ deliveryFleetRequested: fleet, deliveryFleetRequestedAt: new Date(), deliveryFleetRequestNote: note ?? null }).where(eq(locations.id, locationId)).returning();
+    await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: 'location.delivery_fleet.request', entityType: 'location', entityId: locationId, before: { deliveryFleet: loc.deliveryFleet }, after: { requested: fleet, note } });
+    return row;
+  }
+
+  async cancelDeliveryFleetRequest(user: JwtPayload, locationId: string) {
+    const loc = await this.requireLocation(locationId);
+    assertOrgAccess(user, loc.organizationId, locationId, MANAGER_ROLES);
+    const [row] = await this.db.update(locations).set({ deliveryFleetRequested: null, deliveryFleetRequestedAt: null, deliveryFleetRequestNote: null }).where(eq(locations.id, locationId)).returning();
+    return row;
+  }
+
+  async listDeliveryFleetRequests(user: JwtPayload) {
+    if (!isPlatformStaff(user)) throw new ForbiddenException();
+    return this.db
+      .select({ id: locations.id, name: locations.name, city: locations.city, organizationId: locations.organizationId, organizationName: organizations.name, deliveryFleet: locations.deliveryFleet, requested: locations.deliveryFleetRequested, requestedAt: locations.deliveryFleetRequestedAt, note: locations.deliveryFleetRequestNote })
+      .from(locations)
+      .innerJoin(organizations, eq(organizations.id, locations.organizationId))
+      .where(isNotNull(locations.deliveryFleetRequested));
+  }
+
+  async reviewDeliveryFleet(user: JwtPayload, locationId: string, approve: boolean, note?: string) {
+    if (!isPlatformStaff(user)) throw new ForbiddenException('Platform staff only');
+    const loc = await this.requireLocation(locationId);
+    if (!loc.deliveryFleetRequested) throw new BadRequestException('No pending delivery option request');
+    const [row] = await this.db
+      .update(locations)
+      .set({ ...(approve ? { deliveryFleet: loc.deliveryFleetRequested } : {}), deliveryFleetRequested: null, deliveryFleetRequestedAt: null, deliveryFleetRequestNote: null })
+      .where(eq(locations.id, locationId))
+      .returning();
+    await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: approve ? 'location.delivery_fleet.approve' : 'location.delivery_fleet.decline', entityType: 'location', entityId: locationId, before: { deliveryFleet: loc.deliveryFleet }, after: { deliveryFleet: row.deliveryFleet, note } });
+    return row;
+  }
+
+  /** Mark a location as a Made at Gutad food hall (Gutad's culinary team prepares its brands). */
+  async setPlatformOperated(user: JwtPayload, locationId: string, value: boolean) {
+    if (!isPlatformStaff(user)) throw new ForbiddenException('Platform staff only');
+    const loc = await this.requireLocation(locationId);
+    const [row] = await this.db.update(locations).set({ platformOperated: value }).where(eq(locations.id, locationId)).returning();
+    await this.redis.del(`loc:${loc.slug}`);
+    await this.redis.del(`loc:${loc.id}`);
+    await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: value ? 'location.platform_operated.on' : 'location.platform_operated.off', entityType: 'location', entityId: locationId, before: { platformOperated: loc.platformOperated }, after: { platformOperated: value } });
     return row;
   }
 

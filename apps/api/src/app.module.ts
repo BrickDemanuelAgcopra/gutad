@@ -8,6 +8,7 @@ import { JwtAuthGuard, RolesGuard } from './common/auth';
 import { IdempotencyInterceptor } from './common/idempotency.interceptor';
 import { AuthModule } from './modules/auth/auth.module';
 import { MerchantsModule } from './modules/merchants/merchants.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { DiscoveryModule } from './modules/discovery/discovery.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
@@ -34,6 +35,7 @@ export const DOMAIN_MODULES = [
   CoreModule,
   AuthModule,
   MerchantsModule,
+  OnboardingModule,
   DiscoveryModule,
   CatalogModule,
   ContractsModule,

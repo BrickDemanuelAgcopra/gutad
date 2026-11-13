@@ -143,12 +143,13 @@ export default function CheckoutPage() {
               <Row l="Subtotal" v={money(quote.subtotalCents)} />
               {quote.discountCents > 0 && <Row l="Promo" v={`−${money(quote.discountCents)}`} />}
               <Row l="Tax" v={money(quote.taxCents)} />
-              {quote.serviceFeeCents > 0 && <Row l="Service fee" v={money(quote.serviceFeeCents)} />}
+              {quote.serviceFeeCents > 0 && <Row l="Service fee (delivery)" v={money(quote.serviceFeeCents)} />}
               {fulfillment === 'DELIVERY' && <Row l="Delivery" v={quote.deliveryFeeCents ? money(quote.deliveryFeeCents) : 'Free'} />}
               <Row l="Tip" v={money(quote.tipCents)} />
               {(quote as Quote & { creditsCents?: number }).creditsCents ? <Row l="Credits" v={`−${money((quote as Quote & { creditsCents: number }).creditsCents)}`} /> : null}
               <div className="flex justify-between border-t border-ink-100 pt-2 text-base font-semibold"><span>Total</span><span>{money(quote.totalCents)}</span></div>
               <p className="pt-1 text-xs text-ink-500">{quote.promiseAt ? `Estimated ${fulfillment === 'DELIVERY' ? 'delivery' : 'ready'}: ${when(quote.promiseAt)}` : ''}</p>
+              {fulfillment === 'DELIVERY' && quote.serviceFeeCents > 0 && <p className="text-xs text-ink-500">Delivery is free. Delivery orders carry a service fee, waived for Gutad+ members. Pickup has no service fee.</p>}
               {quote.warnings.map((w) => <p key={w} className="text-xs text-amber-700">{w}</p>)}
               <Button className="mt-3 w-full" size="lg" disabled={busy} onClick={place}>{busy ? 'Placing…' : `Place order · ${money(quote.totalCents)}`}</Button>
               <p className="text-[11px] text-ink-300">Quote valid until {when(quote.expiresAt)}; prices revalidate automatically.</p>

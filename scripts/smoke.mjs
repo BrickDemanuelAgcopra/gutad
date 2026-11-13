@@ -47,6 +47,13 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   // ── discovery
   const search = (await call('GET', '/public/search?city=New%20York&service=pickup')).json;
   check('search returns demo bistro', search.items?.some((i) => i.slug === 'demo-bistro-new-york'), search);
+  const hallSearch = (await call('GET', '/public/search?city=New%20York')).json;
+  const hallBrands = hallSearch.items?.filter((i) => i.slug === 'demo-kitchen-collective') || [];
+  check('Made at Gutad food hall listed once per brand', hallBrands.length === 2 && hallBrands.every((i) => i.platformOperated && i.brand && i.foodHallName === 'Demo Kitchen Collective'), hallBrands.map((i) => i.name));
+  const bistroResult = hallSearch.items?.find((i) => i.slug === 'demo-bistro-new-york');
+  check('independent restaurant is not Made at Gutad', bistroResult && !bistroResult.platformOperated && !bistroResult.brand, bistroResult);
+  const bowlSearch = (await call('GET', '/public/search?q=bowl')).json;
+  check('brand search finds the brand inside the food hall', bowlSearch.items?.some((i) => i.brand?.slug === 'bowl-theory') && !bowlSearch.items?.some((i) => i.brand?.slug === 'smash-society'), bowlSearch.items?.map((i) => i.name));
   const page = (await call('GET', '/public/locations/demo-bistro-new-york')).json;
   check('location page has hours & shifts', page.hours?.length && page.diningShifts?.length, page);
   const locId = page.id;
@@ -99,7 +106,9 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
 
   // ── delivery
   const dq = (await call('POST', '/quotes', { locationId: locId, channel: 'MARKETPLACE', fulfillmentType: 'DELIVERY', lines: [{ menuItemId: burger.id, quantity: 1, modifierOptionIds: [doneness] }], tipCents: 500, deliveryAddress: { line1: '55 W 9th St', city: 'New York', region: 'NY', postalCode: '10011', lat: 40.7346, lng: -73.9975 } }, C)).json;
-  check('delivery quote has fee + promise', dq.deliveryFeeCents === 349 && dq.promiseAt, dq);
+  check('delivery is free for the diner ($0 delivery fee)', dq.deliveryFeeCents === 0 && dq.promiseAt, dq);
+  check('marketplace delivery carries the service fee', dq.serviceFeeCents > 0, dq);
+  check('marketplace pickup has no service fee', quote.serviceFeeCents === 0, quote);
   const d1 = (await call('POST', '/orders', { quoteId: dq.id }, C, { 'Idempotency-Key': uuid() })).json;
   check('delivery order has QUOTED job', d1.delivery?.status === 'QUOTED', d1.delivery);
   const dAcc = (await call('POST', `/orders/${d1.id}/accept`, {}, O)).json;
@@ -234,6 +243,70 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   check('customers cannot reach admin', forbidden.status === 403, forbidden.status);
   const tenants = (await call('GET', '/admin/tenants', undefined, A)).json;
   check('admin lists tenants', Array.isArray(tenants) && tenants.length >= 1, tenants.length);
+
+  // ── customer tracking stages
+  const { trackingStages } = await import('../packages/shared/dist/index.js');
+  const onTheWay = trackingStages({ status: 'READY', fulfillmentType: 'DELIVERY', deliveryStatus: 'PICKED_UP' });
+  check('tracking shows "Courier on the way" when the courier has the food', onTheWay.find((st) => st.current)?.label === 'Courier on the way' && onTheWay.length === 5, onTheWay);
+  const delivered = trackingStages({ status: 'COMPLETED', fulfillmentType: 'DELIVERY', deliveryStatus: 'DELIVERED' });
+  check('tracking completes at Delivered', delivered.every((st) => st.done), delivered);
+  check('pickup tracking has no courier step', trackingStages({ status: 'PREPARING', fulfillmentType: 'PICKUP' }).every((st) => st.key !== 'on_the_way'));
+
+  // ── delivery option is locked behind platform approval
+  const fleetPatch = await call('PATCH', `/locations/${locId}`, { deliveryFleet: 'MERCHANT' }, O);
+  check('merchant cannot switch who delivers directly', fleetPatch.status === 403, fleetPatch.json);
+  const fleetReq = (await call('POST', `/locations/${locId}/delivery-fleet-request`, { fleet: 'MERCHANT', note: 'smoke' }, O)).json;
+  check('merchant can request a delivery option change', fleetReq.deliveryFleetRequested === 'MERCHANT' && fleetReq.deliveryFleet === 'PARTNER', fleetReq);
+  const ownerReview = await call('POST', `/locations/${locId}/delivery-fleet-request/review`, { approve: true }, O);
+  check('merchant cannot approve its own request', ownerReview.status === 403, ownerReview.status);
+  const queue = (await call('GET', '/admin/delivery-fleet-requests', undefined, A)).json;
+  check('request appears in the admin queue', queue.some((r) => r.id === locId), queue);
+  const approved = (await call('POST', `/locations/${locId}/delivery-fleet-request/review`, { approve: true }, A)).json;
+  check('admin approval applies the change', approved.deliveryFleet === 'MERCHANT' && !approved.deliveryFleetRequested, approved);
+  await call('POST', `/locations/${locId}/delivery-fleet-request`, { fleet: 'PARTNER' }, O);
+  const restored = (await call('POST', `/locations/${locId}/delivery-fleet-request/review`, { approve: true }, A)).json;
+  check('fleet restored after test', restored.deliveryFleet === 'PARTNER', restored);
+
+  // ── onboarding: agreement + documents gate verification
+  const nEmail = `smoke-owner-${Date.now()}@example.com`;
+  const nOwner = (await call('POST', '/auth/register', { email: nEmail, password: 'merchant12345', name: 'New Owner' })).json;
+  let N = nOwner.accessToken;
+  const nOrg = (await call('POST', '/organizations', { name: `Smoke Diner ${Date.now()}` }, N)).json;
+  N = (await call('POST', '/auth/refresh', { refreshToken: nOwner.refreshToken })).json.accessToken;
+  const nLoc = (await call('POST', `/organizations/${nOrg.id}/locations`, { name: `Smoke Diner ${Date.now()}`, addressLine1: '1 Test St', city: 'New York', region: 'NY', postalCode: '10001', deliveryFleet: 'MERCHANT' }, N)).json;
+  check('new location ignores a merchant-chosen fleet', nLoc.id && nLoc.deliveryFleet === 'PARTNER', nLoc);
+  const early = await call('POST', `/locations/${nLoc.id}/verify`, { verified: true }, A);
+  check('verification blocked until onboarding is complete', early.status === 400 && /Agreement/.test(early.json.message), early.json);
+  const agreement = (await call('GET', '/public/merchant-agreement')).json;
+  const agreed = (await call('POST', `/organizations/${nOrg.id}/onboarding/accept`, { agreementVersion: agreement.version, signatureName: 'New Owner', signatureTitle: 'Owner' }, N)).json;
+  check('owner accepts the Merchant Agreement', agreed.id && agreed.agreementVersion === agreement.version, agreed);
+  const upload = async (docType, mime = 'application/pdf', bytes = 1024) => {
+    const form = new FormData();
+    form.append('docType', docType);
+    form.append('file', new Blob([new Uint8Array(bytes)], { type: mime }), `${docType.toLowerCase()}.pdf`);
+    const res = await fetch(`${API}/organizations/${nOrg.id}/documents`, { method: 'POST', headers: { Authorization: `Bearer ${N}` }, body: form });
+    return { status: res.status, json: await res.json() };
+  };
+  const badType = await upload('BUSINESS_LICENSE', 'text/html');
+  check('upload rejects non-document file types', badType.status === 400, badType.json);
+  const docs = [];
+  for (const t of agreement.documentTypes.filter((d) => d.required)) docs.push((await upload(t.type)).json);
+  check('required documents uploaded', docs.length === 4 && docs.every((d) => d.id && d.status === 'SUBMITTED' && !('content' in d)), docs);
+  const otherCust = await fetch(`${API}/documents/${docs[0].id}/file`, { headers: { Authorization: `Bearer ${C}` } });
+  check('other users cannot download merchant documents', otherCust.status === 403, otherCust.status);
+  const dl = await fetch(`${API}/documents/${docs[0].id}/file`, { headers: { Authorization: `Bearer ${A}` } });
+  check('admin can download a document', dl.status === 200 && (await dl.arrayBuffer()).byteLength === 1024, dl.status);
+  for (const d of docs) await call('POST', `/documents/${d.id}/review`, { status: 'APPROVED' }, A);
+  const noForm = await call('POST', `/locations/${nLoc.id}/verify`, { verified: true }, A);
+  check('verification needs a signed Order Form', noForm.status === 400 && /Order Form/.test(noForm.json.message), noForm.json);
+  const form = (await call('POST', `/organizations/${nOrg.id}/contracts`, { planCode: 'DIRECT_FREE', locationIds: [], sign: false }, A)).json;
+  const ob1 = (await call('GET', `/organizations/${nOrg.id}/onboarding`, undefined, N)).json;
+  check('merchant sees the unsigned Order Form', ob1.orderForm?.id === form.id && !ob1.orderForm.signedAt, ob1.orderForm);
+  await call('POST', `/organizations/${nOrg.id}/onboarding/accept`, { agreementVersion: agreement.version, signatureName: 'New Owner', contractId: form.id }, N);
+  const ob2 = (await call('GET', `/organizations/${nOrg.id}/onboarding`, undefined, N)).json;
+  check('onboarding complete after signing the Order Form', ob2.orderForm.signedAt && ob2.blockers.length === 0, ob2.blockers);
+  const verified = (await call('POST', `/locations/${nLoc.id}/verify`, { verified: true }, A)).json;
+  check('admin verifies once onboarding is complete', verified.status === 'VERIFIED', verified);
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

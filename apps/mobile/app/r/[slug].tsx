@@ -1,38 +1,62 @@
-import { useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Image, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
 import type { MenuDto, MenuItemDto } from '@gutad/shared';
 import { api, money, when } from '@/api';
 import { useApi, useSession } from '@/hooks';
 import { useCart } from '@/cart';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s } from '@/ui';
+import { GBadge, MadeAtGutad } from '@/made-at-gutad';
 
-interface Loc { id: string; slug: string; name: string; description: string | null; heroImageUrl: string | null; cuisine: string[]; isOpenNow: boolean; acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; addressLine1: string; city: string; rating: number | null; experiences: { id: string; name: string; priceCents: number; pricingMode: string }[]; currency: string }
+interface Loc { id: string; slug: string; name: string; description: string | null; heroImageUrl: string | null; cuisine: string[]; isOpenNow: boolean; acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; addressLine1: string; city: string; rating: number | null; platformOperated?: boolean; experiences: { id: string; name: string; priceCents: number; pricingMode: string }[]; currency: string }
 
 export default function Restaurant() {
-  const { slug } = useLocalSearchParams<{ slug: string }>();
+  const { slug, brand } = useLocalSearchParams<{ slug: string; brand?: string }>();
+  const [brandY, setBrandY] = useState<Record<string, number>>({});
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const router = useRouter();
   const { data: loc } = useApi<Loc>(`/public/locations/${slug}`);
-  const { data: menus } = useApi<(MenuDto & { brand?: { name: string } | null })[]>(loc ? `/public/locations/${loc.id}/menus?channel=MARKETPLACE` : null, { deps: [loc?.id] });
+  const { data: menus } = useApi<(MenuDto & { brand?: { slug: string; name: string; description: string | null } | null })[]>(loc ? `/public/locations/${loc.id}/menus?channel=MARKETPLACE` : null, { deps: [loc?.id] });
   const { cart, add, count, subtotal } = useCart();
   const [picked, setPicked] = useState<MenuItemDto | null>(null);
   const [tab, setTab] = useState<'order' | 'experiences'>('order');
+  useEffect(() => {
+    if (brand && brandY[brand] !== undefined) scrollRef.current?.scrollTo({ y: brandY[brand], animated: true });
+  }, [brand, brandY]);
   if (!loc) return <Loading />;
+  const hall = !!loc.platformOperated && (menus?.length || 0) > 1;
+  const addLine = (l: Parameters<typeof add>[1]) => {
+    setPicked(null);
+    if (cart.locationId && cart.locationId !== loc.id && cart.lines.length) {
+      Alert.alert('Start a new order?', `Your cart has items from ${cart.locationName}. Each order comes from one local restaurant or one Made at Gutad food hall.`, [
+        { text: 'Keep my cart', style: 'cancel' },
+        { text: 'Start new order', style: 'destructive', onPress: () => add({ id: loc.id, name: loc.name, slug: loc.slug }, l) },
+      ]);
+    } else add({ id: loc.id, name: loc.name, slug: loc.slug }, l);
+  };
   return (
     <View style={s.screen}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 100 }}>
+      <ScrollView ref={scrollRef} contentContainerStyle={{ paddingBottom: 100 }}>
         {loc.heroImageUrl && <Image source={{ uri: loc.heroImageUrl }} style={{ height: 180, width: '100%' }} />}
         <View style={s.pad}>
           <View style={s.row}><Text style={{ fontSize: 22, fontWeight: '700', flex: 1 }}>{loc.name}</Text><Badge text={loc.isOpenNow ? 'OPEN' : 'CLOSED'} tone={loc.isOpenNow ? 'good' : 'bad'} /></View>
+          {loc.platformOperated && <View style={{ marginTop: 4 }}><MadeAtGutad /></View>}
           <Muted>{loc.cuisine.join(' · ')} · {loc.addressLine1}, {loc.city}{loc.rating ? ` · ★ ${loc.rating.toFixed(1)}` : ''}</Muted>
           {loc.description && <Text style={{ marginTop: 6, color: C.ink7 }}>{loc.description}</Text>}
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
             {loc.acceptsReservations && <Link href={{ pathname: '/reserve/[slug]', params: { slug: loc.slug } }} asChild><Button title="Reserve a table" variant="secondary" onPress={() => undefined} /></Link>}
             {loc.experiences.length > 0 && <Button title="Experiences" variant={tab === 'experiences' ? 'primary' : 'secondary'} onPress={() => setTab(tab === 'experiences' ? 'order' : 'experiences')} />}
           </View>
+          {tab === 'order' && hall && (
+            <View style={{ marginTop: 12, backgroundColor: '#ecfdf5', borderRadius: 14, padding: 12, borderWidth: 1, borderColor: '#a7f3d0' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><GBadge size={20} /><Text style={{ fontWeight: '700', color: '#064e3b' }}>Mix menus in one order</Text></View>
+              <Text style={{ color: '#065f46', marginTop: 4 }}>Every menu here is cooked by Gutad&apos;s culinary team in this food hall. Add dishes from any of them: they&apos;re prepared together and arrive in one delivery.</Text>
+            </View>
+          )}
           {tab === 'experiences' ? <Experiences locId={loc.id} /> : !menus ? <Loading /> : menus.map((m) => (
-            <View key={m.id} style={{ marginTop: 12 }}>
-              {menus.length > 1 && <Text style={{ fontSize: 18, fontWeight: '700' }}>{m.brand?.name || m.name}</Text>}
+            <View key={m.id} style={{ marginTop: 12 }} onLayout={(e) => { const y = e.nativeEvent.layout.y; if (m.brand) setBrandY((b) => (b[m.brand!.slug] === y ? b : { ...b, [m.brand!.slug]: y })); }}>
+              {menus.length > 1 && <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>{loc.platformOperated && m.brand && <GBadge size={20} />}<Text style={{ fontSize: 18, fontWeight: '700' }}>{m.brand?.name || m.name}</Text></View>}
+              {menus.length > 1 && m.brand?.description ? <Muted>{m.brand.description}</Muted> : null}
               {m.categories.map((c) => (
                 <View key={c.id} style={{ marginTop: 8 }}>
                   <Text style={{ fontWeight: '700', fontSize: 15, marginBottom: 4 }}>{c.name}</Text>
@@ -52,7 +76,7 @@ export default function Restaurant() {
         <View style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}><Button title={`View cart · ${count} items · ${money(subtotal)}`} onPress={() => router.push('/checkout')} /></View>
       )}
       <Modal visible={!!picked} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPicked(null)}>
-        {picked && <ItemSheet item={picked} onClose={() => setPicked(null)} onAdd={(l) => { add({ id: loc.id, name: loc.name, slug: loc.slug }, l); setPicked(null); }} />}
+        {picked && <ItemSheet item={picked} onClose={() => setPicked(null)} onAdd={addLine} />}
       </Modal>
     </View>
   );

@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
+import { trackingStages } from '@gutad/shared';
 import { api, money, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Spinner, statusTone, Textarea } from '@/components/ui';
@@ -13,7 +14,9 @@ interface Order {
   delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; proofPhotoUrl: string | null } | null;
 }
 
-const STEPS = ['SUBMITTED', 'ACCEPTED', 'PREPARING', 'READY', 'COLLECTED', 'COMPLETED'];
+
+const COURIER: Record<string, string> = { QUOTED: 'Waiting for the restaurant', REQUESTED: 'Finding a courier', ASSIGNED: 'Courier heading to pick up', PICKED_UP: 'Courier on the way', DELIVERED: 'Delivered', UNASSIGNED: 'Finding a new courier', CANCELED: 'Delivery canceled', FAILED: 'Delivery problem: support has been notified', RETURNED: 'Returned to the restaurant', QUOTE_EXPIRED: 'Delivery quote expired' };
+const courierLabel = (s: string) => COURIER[s] || s.replace(/_/g, ' ').toLowerCase();
 
 export default function OrderPage() {
   const { id } = useParams<{ id: string }>();
@@ -25,18 +28,24 @@ export default function OrderPage() {
   const [review, setReview] = useState({ rating: 5, body: '' });
   const [msg, setMsg] = useState<string | null>(null);
   if (!o) return <Spinner />;
-  const stepIdx = STEPS.indexOf(o.status);
+  const stages = trackingStages({ status: o.status, fulfillmentType: o.fulfillmentType, deliveryStatus: track?.status || o.delivery?.status });
+  const current = stages?.find((s) => s.current);
   const terminalBad = ['REJECTED', 'CANCELED'].includes(o.status);
   const unavailable = o.lines.filter((l) => l.status === 'UNAVAILABLE');
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <div className="flex items-start justify-between">
         <div><h1 className="text-2xl font-bold">Order {o.number}</h1><p className="text-sm text-ink-500">{o.locationName} · {when(o.createdAt)}</p></div>
-        <Badge tone={statusTone(o.status)}>{o.status}</Badge>
+        <Badge tone={terminalBad ? 'bad' : current ? 'info' : 'good'}>{terminalBad ? (o.status === 'REJECTED' ? 'Not accepted' : 'Canceled') : current?.label || stages?.[stages.length - 1].label}</Badge>
       </div>
-      {!terminalBad && (
-        <ol className="grid grid-cols-6 gap-1 text-center text-[11px]">
-          {STEPS.filter((s) => o.fulfillmentType !== 'DELIVERY' || s !== 'COMPLETED' || true).map((s, i) => <li key={s} className={`rounded-md py-1 ${i <= stepIdx ? 'bg-brand-500 text-white' : 'bg-ink-100 text-ink-500'}`}>{s === 'COLLECTED' && o.fulfillmentType === 'DELIVERY' ? 'PICKED UP' : s}</li>)}
+      {stages && (
+        <ol className="flex gap-1" aria-label="Order progress">
+          {stages.map((st) => (
+            <li key={st.key} className="flex-1" aria-current={st.current ? 'step' : undefined}>
+              <div className={`h-1.5 rounded-full ${st.done ? 'bg-brand-500' : st.current ? 'animate-pulse bg-brand-300' : 'bg-ink-100'}`} />
+              <div className={`mt-1 text-center text-[11px] leading-tight ${st.done || st.current ? 'font-semibold text-ink-900' : 'text-ink-500'}`}>{st.label}</div>
+            </li>
+          ))}
         </ol>
       )}
       {o.status === 'READY' && o.fulfillmentType === 'PICKUP' && <Alert tone="good">Ready for pickup — show code <b className="text-lg">{o.pickupCode}</b> at the counter.</Alert>}
@@ -53,12 +62,12 @@ export default function OrderPage() {
       )}
       {o.delivery && (
         <Card title="Delivery">
-          <div className="flex items-center justify-between text-sm"><span>Courier status</span><Badge tone={statusTone(track?.status || o.delivery.status)}>{track?.status || o.delivery.status}</Badge></div>
+          <div className="flex items-center justify-between text-sm"><span>Courier</span><Badge tone={statusTone(track?.status || o.delivery.status)}>{courierLabel(track?.status || o.delivery.status)}</Badge></div>
           {track?.etaAt && <p className="mt-1 text-sm">ETA {when(track.etaAt)}</p>}
           {track?.courierLocation && <p className="text-xs text-ink-500">Courier at {track.courierLocation.lat.toFixed(4)}, {track.courierLocation.lng.toFixed(4)}</p>}
           {o.delivery.proofPhotoUrl && <a className="mt-2 inline-block text-sm text-brand-600 underline" href={o.delivery.proofPhotoUrl} target="_blank" rel="noreferrer">Proof of delivery photo</a>}
           {o.delivery.trackingUrl && <a className="ml-3 text-sm text-brand-600 underline" href={o.delivery.trackingUrl} target="_blank" rel="noreferrer">Provider tracking</a>}
-          <ul className="mt-2 text-xs text-ink-500">{track?.events.slice(-5).map((e, i) => <li key={i}>{e.type} · {when(e.at)}</li>)}</ul>
+          <ul className="mt-2 text-xs text-ink-500">{track?.events.slice(-5).map((e, i) => <li key={i}>{courierLabel(e.type)} · {when(e.at)}</li>)}</ul>
         </Card>
       )}
       <Card title="Items">

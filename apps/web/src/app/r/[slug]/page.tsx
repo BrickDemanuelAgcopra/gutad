@@ -15,5 +15,5 @@ export default async function RestaurantPage({ params, searchParams }: { params:
   const sp = await searchParams;
   const loc = await serverGet<LocationPage>(`/public/locations/${slug}`);
   if (!loc) notFound();
-  return <RestaurantView loc={loc} channel="MARKETPLACE" src={sp.src || null} initialTab={sp.tab} />;
+  return <RestaurantView loc={loc} channel="MARKETPLACE" src={sp.src || null} initialTab={sp.tab} initialBrand={sp.brand} />;
 }

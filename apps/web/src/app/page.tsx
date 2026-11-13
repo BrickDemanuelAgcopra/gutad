@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { serverGet } from '@/lib/server';
 import type { LocationSummary, Paginated } from '@gutad/shared';
-import { RestaurantCard } from '@/components/restaurant-card';
+import { cardKey, RestaurantCard } from '@/components/restaurant-card';
+import { GBadge } from '@/components/made-at-gutad';
 
 export const revalidate = 60;
 
@@ -30,8 +31,9 @@ export default async function Home() {
           <h2 className="text-2xl font-bold">Popular near you</h2>
           <Link href="/search" className="text-sm font-medium text-brand-600">See all</Link>
         </div>
+        <p className="mb-4 flex items-center gap-1.5 text-sm text-ink-500"><GBadge className="h-4 w-4" /> Made at Gutad menus are cooked together in a Gutad food hall, so you can mix them in one order. Local restaurants are one per order.</p>
         {items.length ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{items.map((l) => <RestaurantCard key={l.id} l={l} />)}</div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{items.map((l) => <RestaurantCard key={cardKey(l)} l={l} />)}</div>
         ) : (
           <p className="text-ink-500">No restaurants published yet. <Link className="underline" href="/for-restaurants">List yours</Link>.</p>
         )}
@@ -39,7 +41,7 @@ export default async function Home() {
 
       <section className="mt-14 grid gap-4 md:grid-cols-3">
         {[
-          ['Order', 'Scheduled pickup, delivery with live tracking, group orders for teams, and multi-brand bags from shared kitchens.'],
+          ['Order', 'Scheduled pickup, delivery with live tracking, group orders for teams, and Made at Gutad orders that mix several menus in one delivery.'],
           ['Reserve', 'Real table inventory, waitlists, deposits and guarantees — no double booking, ever.'],
           ['Experience', 'Ticketed tastings and classes, private dining inquiries with proposals and deposits.'],
         ].map(([t, d]) => (

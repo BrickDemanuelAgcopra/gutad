@@ -45,6 +45,20 @@ export interface LocationSummary {
   isOpenNow: boolean;
   sponsored?: boolean;
   distanceKm?: number | null;
+  /** Prepared by Gutad's own culinary team at a Gutad food hall ("Made at Gutad", green G badge). */
+  platformOperated?: boolean;
+  /** Set when a search result is one brand served from a Made at Gutad food hall. */
+  brand?: BrandSummary | null;
+  /** Name of the food hall the brand is prepared at (brand results only). */
+  foodHallName?: string | null;
+}
+
+export interface BrandSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  logoUrl: string | null;
 }
 
 export interface MenuItemDto {

@@ -57,7 +57,7 @@ export class CatalogService {
       id: m.id,
       name: m.name,
       locationId: m.locationId,
-      brand: brand ? { id: brand.id, name: brand.name, logoUrl: brand.logoUrl } : null,
+      brand: brand ? { id: brand.id, slug: brand.slug, name: brand.name, description: brand.description, logoUrl: brand.logoUrl } : null,
       categories: cats.map((c) => ({
         id: c.id,
         name: c.name,
