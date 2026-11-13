@@ -1,3 +1,4 @@
+import { WorkspaceGate } from '@/ops';
 import { FlatList, Text, View } from 'react-native';
 import { api, when } from '@/api';
 import { useAction, useApi } from '@/hooks';
@@ -8,7 +9,7 @@ import { allowed, Locked, useEntitlements } from '@/plan';
 interface R { id: string; status: string; partySize: number; actualPartySize: number | null; startAt: string; guestName: string; confirmationCode: string; channel: string; tableIds: string[] }
 interface Board { reservations: R[]; waitlist: { id: string; guestName: string; partySize: number; status: string; position: number }[]; floor: { tables: { id: string; name: string; occupied: boolean }[] } }
 
-export default function Host() {
+function Host() {
   const { loc } = useMerchantLocation();
   const { data: ent } = useEntitlements(loc?.id);
   const canHost = allowed(ent, 'floor_plan');
@@ -35,4 +36,8 @@ export default function Host() {
       )} ListFooterComponent={<View><Text style={{ fontWeight: '700', fontSize: 16, marginVertical: 8 }}>Waitlist ({b.waitlist.length})</Text>{b.waitlist.map((w) => <Card key={w.id}><View style={s.row}><Text>#{w.position} {w.guestName} · {w.partySize}</Text><View style={{ flexDirection: 'row', gap: 6 }}>{w.status === 'WAITING' && <Button title="Table ready" variant="secondary" onPress={() => act(() => api.post(`/waitlist/${w.id}/notify`, {}))} />}<Button title="Seat" onPress={() => act(() => api.post(`/waitlist/${w.id}/seat`, {}))} /></View></View></Card>)}<Text style={{ fontWeight: '700', fontSize: 16, marginVertical: 8 }}>Floor</Text><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>{b.floor.tables.map((t) => <Badge key={t.id} text={t.name} tone={t.occupied ? 'bad' : 'good'} />)}</View>{when(new Date()) ? null : null}</View>} />
     </View>
   );
+}
+
+export default function Screen() {
+  return <WorkspaceGate page="/merchant/host"><Host /></WorkspaceGate>;
 }

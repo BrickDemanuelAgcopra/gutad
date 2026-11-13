@@ -14,6 +14,11 @@ export const roleEnum = pgEnum('role', [
   'FINANCE',
   'PLATFORM_ADMIN',
   'ORG_MEMBER',
+  'EXECUTIVE',
+  'OPERATIONS',
+  'CULINARY',
+  'MARKETING',
+  'IT',
 ]);
 
 export const channelEnum = pgEnum('channel', [

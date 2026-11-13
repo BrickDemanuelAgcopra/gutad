@@ -11,3 +11,4 @@ export * from './finance';
 export * from './platform';
 export * from './onboarding';
 export * from './plans';
+export * from './security';

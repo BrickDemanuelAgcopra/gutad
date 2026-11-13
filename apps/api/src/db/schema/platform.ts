@@ -124,6 +124,11 @@ export const auditLogs = pgTable(
     before: jsonb('before'),
     after: jsonb('after'),
     ip: text('ip'),
+    /** why the change was made (required for sensitive actions) */
+    reason: text('reason'),
+    requestId: text('request_id'),
+    /** emergency or support grant the actor was using */
+    grantId: uuid('grant_id'),
     createdAt: createdAt(),
   },
   (t) => [

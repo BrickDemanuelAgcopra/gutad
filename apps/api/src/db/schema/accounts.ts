@@ -30,6 +30,14 @@ export const users = pgTable(
     timezone: text('timezone').notNull().default('America/New_York'),
     dietaryNotes: text('dietary_notes'),
     isGuest: boolean('is_guest').notNull().default(false),
+    /** ACTIVE | DISABLED (staff access removed) | RESTRICTED (customer ordering blocked) */
+    status: text('status').notNull().default('ACTIVE'),
+    statusReason: text('status_reason'),
+    /** TOTP secret, encrypted with CryptoService */
+    mfaSecret: text('mfa_secret'),
+    mfaEnabledAt: ts('mfa_enabled_at'),
+    /** sha256 hashes of one-time recovery codes */
+    mfaRecoveryCodes: text('mfa_recovery_codes').array().notNull().default([]),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -42,6 +50,7 @@ export const refreshTokens = pgTable('refresh_tokens', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').notNull().unique(),
+  sessionId: uuid('session_id'),
   expiresAt: ts('expires_at').notNull(),
   revokedAt: ts('revoked_at'),
   createdAt: createdAt(),
@@ -95,6 +104,8 @@ export const organizations = pgTable('organizations', {
   name: text('name').notNull(),
   slug: text('slug').notNull().unique(),
   kind: text('kind').notNull().default('MERCHANT'),
+  /** parent company for groups of organizations */
+  parentId: uuid('parent_id'),
   taxId: text('tax_id'),
   billingEmail: text('billing_email'),
   status: merchantStatusEnum('status').notNull().default('PROSPECT'),

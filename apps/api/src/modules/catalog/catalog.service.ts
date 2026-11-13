@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, eq, inArray } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import { brands, itemModifierGroups, locations, menuCategories, menuItems, menus, modifierGroups, modifierOptions } from '../../db/schema';
@@ -6,6 +6,7 @@ import { assertOrgAccess, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
 import { localParts } from '../../common/utils';
+import { ApprovalsService } from '../security/approvals.service';
 
 type Channel = (typeof menus.channels.enumValues)[number];
 
@@ -26,8 +27,21 @@ export interface ResolvedItem {
 }
 
 @Injectable()
-export class CatalogService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService) {}
+export class CatalogService implements OnModuleInit {
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly approvals: ApprovalsService) {}
+
+  onModuleInit() {
+    this.approvals.register('PRICE_CHANGE', {
+      execute: async (req) => {
+        const p = req.payload as { itemId: string; priceCents: number; locationId: string };
+        const [item] = await this.db.update(menuItems).set({ priceCents: p.priceCents }).where(eq(menuItems.id, p.itemId)).returning();
+        await this.audit.log({ organizationId: req.organizationId, actorId: req.decidedById, action: 'menu_item.price', entityType: 'menu_item', entityId: p.itemId, after: { priceCents: p.priceCents }, reason: req.reason });
+        await this.invalidate(p.locationId);
+        return item;
+      },
+      canDecide: (user, req) => !!req.organizationId && !!user.orgs?.[req.organizationId]?.roles.includes('MERCHANT_OWNER'),
+    });
+  }
 
   /** Public menu for a location on a channel, honoring schedules, channel overrides and sold-outs. */
   async publicMenus(locationId: string, channel: Channel = 'MARKETPLACE', at = new Date()) {
@@ -191,10 +205,21 @@ export class CatalogService {
   async updateItem(user: JwtPayload, itemId: string, input: Partial<typeof menuItems.$inferInsert>) {
     const found = await this.itemWithMenu(itemId);
     assertOrgAccess(user, found.menu.organizationId, found.menu.locationId, MANAGER_ROLES);
-    const { id: _i, categoryId: _c, ...safe } = input;
-    const [item] = await this.db.update(menuItems).set(safe).where(eq(menuItems.id, itemId)).returning();
+    const { id: _i, categoryId: _c, reason, ...safe } = input as typeof input & { reason?: string };
+    let approval = null;
+    if (safe.priceCents !== undefined && safe.priceCents !== found.item.priceCents) {
+      const t = await this.approvals.thresholds();
+      const changeBps = found.item.priceCents ? Math.abs(safe.priceCents - found.item.priceCents) * 10000 / found.item.priceCents : 10000;
+      const owner = !!user.orgs?.[found.menu.organizationId]?.roles.includes('MERCHANT_OWNER') || user.roles.includes('PLATFORM_ADMIN');
+      if (t.priceChangeBps > 0 && changeBps > t.priceChangeBps && !owner) {
+        approval = (await this.approvals.submit(user, { kind: 'PRICE_CHANGE', summary: `${found.item.name}: $${(found.item.priceCents / 100).toFixed(2)} → $${(safe.priceCents / 100).toFixed(2)} (${(changeBps / 100).toFixed(1)}%)`, organizationId: found.menu.organizationId, subjectType: 'menu_item', subjectId: itemId, amountCents: safe.priceCents, payload: { itemId, priceCents: safe.priceCents, locationId: found.menu.locationId, previousCents: found.item.priceCents }, reason: reason || 'Menu price update', dedupeKey: `price:${itemId}` })).approval;
+        delete safe.priceCents;
+      }
+    }
+    const [item] = Object.keys(safe).length ? await this.db.update(menuItems).set(safe).where(eq(menuItems.id, itemId)).returning() : [found.item];
+    await this.audit.log({ organizationId: found.menu.organizationId, actorId: user.sub, action: 'menu_item.update', entityType: 'menu_item', entityId: itemId, before: Object.fromEntries(Object.keys(safe).map((k) => [k, (found.item as Record<string, unknown>)[k]])), after: safe });
     await this.invalidate(found.menu.locationId);
-    return item;
+    return approval ? { ...item, approval } : item;
   }
 
   /** Sold-out controls — any staff member can flip these from the tablet. */

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DB, Db, DbOrTx } from '../db/db.module';
 import { auditLogs, configChanges } from '../db/schema';
+import { ctx } from '../common/request-context';
 
 @Injectable()
 export class AuditService {
@@ -16,9 +17,11 @@ export class AuditService {
       before?: unknown;
       after?: unknown;
       ip?: string | null;
+      reason?: string | null;
     },
     tx: DbOrTx = this.db,
   ) {
+    const c = ctx();
     await tx.insert(auditLogs).values({
       organizationId: input.organizationId ?? null,
       actorId: input.actorId ?? null,
@@ -27,7 +30,10 @@ export class AuditService {
       entityId: input.entityId,
       before: input.before ?? null,
       after: input.after ?? null,
-      ip: input.ip ?? null,
+      ip: input.ip ?? c?.ip ?? null,
+      reason: input.reason ?? c?.reason ?? null,
+      requestId: c?.requestId ?? null,
+      grantId: c?.grantId ?? null,
     });
   }
 

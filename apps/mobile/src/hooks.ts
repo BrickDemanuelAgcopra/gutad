@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { AuthUser } from '@gutad/shared';
+import { STAFF_ROLES, type AuthUser } from '@gutad/shared';
 import { api, session } from './api';
 
 export function useApi<T>(path: string | null, opts?: { poll?: number; deps?: unknown[] }) {
@@ -39,7 +39,19 @@ export function useSession() {
     void sync();
     return session.subscribe(() => void sync());
   }, []);
-  return { user, ready, isMerchant: !!user && (user.merchantIds.length > 0 || user.roles.includes('PLATFORM_ADMIN')), isDriver: !!user && user.roles.includes('DRIVER'), logout: () => session.clear() };
+  const perms = user?.permissions || [];
+  const isStaff = !!user && (user.roles.some((r) => (STAFF_ROLES as readonly string[]).includes(r)) || !!user.elevated);
+  const memberRoles = Object.values(user?.memberRoles || {}).flat();
+  return {
+    user,
+    ready,
+    isMerchant: !!user && user.merchantIds.length > 0,
+    isDriver: !!user && user.roles.includes('DRIVER'),
+    isStaff,
+    memberRoles,
+    can: (p: string) => perms.includes(p),
+    logout: () => session.clear(),
+  };
 }
 
 export function useAction() {

@@ -84,6 +84,8 @@ export const locations = pgTable(
     region: text('region').notNull(),
     postalCode: text('postal_code').notNull(),
     country: text('country').notNull().default('US'),
+    /** operating region (admin hierarchy); `region` above is the postal state/province */
+    regionId: uuid('region_id'),
     lat: doublePrecision('lat'),
     lng: doublePrecision('lng'),
     timezone: text('timezone').notNull().default('America/New_York'),

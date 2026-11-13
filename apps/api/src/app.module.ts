@@ -7,6 +7,7 @@ import { CoreModule } from './core/core.module';
 import { JwtAuthGuard, RolesGuard } from './common/auth';
 import { IdempotencyInterceptor } from './common/idempotency.interceptor';
 import { AuthModule } from './modules/auth/auth.module';
+import { SecurityModule } from './modules/security/security.module';
 import { MerchantsModule } from './modules/merchants/merchants.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { EntitlementsModule } from './modules/entitlements/entitlements.module';
@@ -36,6 +37,7 @@ export const DOMAIN_MODULES = [
   DbModule,
   CoreModule,
   AuthModule,
+  SecurityModule,
   MerchantsModule,
   OnboardingModule,
   EntitlementsModule,

@@ -99,5 +99,10 @@ export const Role = {
   FINANCE: 'FINANCE',
   PLATFORM_ADMIN: 'PLATFORM_ADMIN',
   ORG_MEMBER: 'ORG_MEMBER',
+  EXECUTIVE: 'EXECUTIVE',
+  OPERATIONS: 'OPERATIONS',
+  CULINARY: 'CULINARY',
+  MARKETING: 'MARKETING',
+  IT: 'IT',
 } as const;
 export type Role = (typeof Role)[keyof typeof Role];

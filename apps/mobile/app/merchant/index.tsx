@@ -1,3 +1,4 @@
+import { WorkspaceGate } from '@/ops';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
 import { Link } from 'expo-router';
@@ -10,7 +11,7 @@ import { PlanSummary } from '@/plan';
 interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; createdAt: string; pickupCode: string | null; lines: { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null }[]; delivery: { status: string } | null }
 
 /** Tablet order inbox: acknowledge/accept/reject, prep time, ready, handoff, pause. Polls every 4 s. */
-export default function MerchantInbox() {
+function MerchantInbox() {
   const { loc, locs, setLocId, deviceToken, setDeviceToken } = useMerchantLocation();
   const { data, reload } = useApi<Order[]>(loc ? `/locations/${loc.id}/orders` : null, { poll: 4000, deps: [loc?.id] });
   const { run, error } = useAction();
@@ -40,4 +41,8 @@ export default function MerchantInbox() {
       )} />
     </View>
   );
+}
+
+export default function Screen() {
+  return <WorkspaceGate page="/merchant/orders"><MerchantInbox /></WorkspaceGate>;
 }

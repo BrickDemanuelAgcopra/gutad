@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, eq, ilike, isNotNull, or } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import {
@@ -14,7 +14,9 @@ import {
   users,
 } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
-import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES, RoleName } from '../../common/auth';
+import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES, RoleName, staffCovers } from '../../common/auth';
+import { isStaffRole } from '@gutad/shared';
+import { ApprovalsService } from '../security/approvals.service';
 import { shortCode, slugify, token } from '../../common/utils';
 import { loadConfig } from '../../config/config';
 import { RedisService } from '../../core/redis.service';
@@ -24,8 +26,40 @@ import { EntitlementsService } from '../entitlements/entitlements.service';
 type Fleet = 'MERCHANT' | 'PARTNER' | 'PLATFORM';
 
 @Injectable()
-export class MerchantsService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly onboarding: OnboardingService, private readonly entitlements: EntitlementsService) {}
+export class MerchantsService implements OnModuleInit {
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly onboarding: OnboardingService, private readonly entitlements: EntitlementsService, private readonly approvals: ApprovalsService) {}
+
+  onModuleInit() {
+    this.approvals.register('BANK_ACCOUNT_CHANGE', {
+      execute: async (req) => {
+        const p = req.payload as { sellerId: string; changes?: Record<string, string | null>; reconnect?: boolean };
+        if (p.reconnect) {
+          await this.db.update(legalSellers).set({ payoutOnboardingState: 'PENDING' }).where(eq(legalSellers.id, p.sellerId));
+          await this.audit.log({ organizationId: req.organizationId, actorId: req.decidedById, action: 'seller.payout_reconnect_approved', entityType: 'legal_seller', entityId: p.sellerId, reason: req.reason });
+          return { sellerId: p.sellerId, next: 'Merchant reconnects the payout account from Finance' };
+        }
+        p.changes = p.changes || {};
+        const [before] = await this.db.select().from(legalSellers).where(eq(legalSellers.id, p.sellerId)).limit(1);
+        const [row] = await this.db.update(legalSellers).set(p.changes).where(eq(legalSellers.id, p.sellerId)).returning();
+        await this.audit.log({ organizationId: req.organizationId, actorId: req.decidedById, action: 'seller.bank_change', entityType: 'legal_seller', entityId: p.sellerId, before: { beneficiaryName: before?.beneficiaryName, bankLast4: before?.bankLast4, taxId: before?.taxId }, after: p.changes, reason: req.reason });
+        return { id: row.id, beneficiaryName: row.beneficiaryName, bankLast4: row.bankLast4 };
+      },
+    });
+  }
+
+  /**
+   * Bank and beneficiary details never change on one person's say-so: the change becomes a BANK_ACCOUNT_CHANGE
+   * request that a different person with `finance.approve` must approve before it applies.
+   */
+  async requestBankChange(user: JwtPayload, sellerId: string, input: { beneficiaryName?: string; bankLast4?: string; taxId?: string; reason: string }) {
+    const [seller] = await this.db.select().from(legalSellers).where(eq(legalSellers.id, sellerId)).limit(1);
+    if (!seller) throw new NotFoundException();
+    assertOrgAccess(user, seller.organizationId, null, MANAGER_ROLES);
+    const changes: Record<string, string | null> = {};
+    for (const k of ['beneficiaryName', 'bankLast4', 'taxId'] as const) if (input[k] !== undefined && input[k] !== seller[k]) changes[k] = input[k] ?? null;
+    if (!Object.keys(changes).length) return { status: 'NO_CHANGE' };
+    return this.approvals.submit(user, { kind: 'BANK_ACCOUNT_CHANGE', summary: `Payout details for ${seller.legalName}: ${Object.keys(changes).join(', ')}`, organizationId: seller.organizationId, subjectType: 'legal_seller', subjectId: seller.id, payload: { sellerId: seller.id, changes }, reason: input.reason, dedupeKey: `bank:${seller.id}` });
+  }
 
   // ───── organizations & membership (01/02/30) ─────
 
@@ -43,7 +77,10 @@ export class MerchantsService {
   }
 
   async listMyOrganizations(user: JwtPayload) {
-    if (isPlatformStaff(user)) return this.db.select().from(organizations).limit(200);
+    if (isPlatformStaff(user)) {
+      const all = await this.db.select().from(organizations).limit(1000);
+      return all.filter((o) => staffCovers(user, o.id)).slice(0, 200);
+    }
     const ids = Object.keys(user.orgs || {});
     if (!ids.length) return [];
     return this.db.select().from(organizations).where(or(...ids.map((id) => eq(organizations.id, id))));
@@ -67,7 +104,7 @@ export class MerchantsService {
   /** Invite staff with a limited, location-scoped role. Creates a guest user record if needed. */
   async inviteMember(user: JwtPayload, orgId: string, input: { email: string; role: RoleName; locationIds?: string[]; approvalLimitCents?: number }) {
     assertOrgAccess(user, orgId, null, MANAGER_ROLES);
-    if (['PLATFORM_ADMIN', 'SUPPORT', 'FINANCE'].includes(input.role)) throw new ForbiddenException('Cannot grant platform roles');
+    if (isStaffRole(input.role) && input.role !== 'DISPATCHER') throw new ForbiddenException('Cannot grant platform roles');
     const email = input.email.toLowerCase();
     let [u] = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
     const alreadyMember = u ? (await this.db.select({ id: orgMemberships.id }).from(orgMemberships).where(and(eq(orgMemberships.userId, u.id), eq(orgMemberships.organizationId, orgId))).limit(1)).length > 0 : false;
@@ -97,8 +134,16 @@ export class MerchantsService {
   async upsertLegalSeller(user: JwtPayload, orgId: string, input: { id?: string; legalName: string; taxId?: string; country?: string; beneficiaryName?: string; billingContact?: string }) {
     assertOrgAccess(user, orgId, null, MANAGER_ROLES);
     if (input.id) {
-      const [row] = await this.db.update(legalSellers).set(input).where(and(eq(legalSellers.id, input.id), eq(legalSellers.organizationId, orgId))).returning();
-      await this.audit.log({ organizationId: orgId, actorId: user.sub, action: 'seller.update', entityType: 'legal_seller', entityId: row.id, after: row });
+      const [cur] = await this.db.select().from(legalSellers).where(and(eq(legalSellers.id, input.id), eq(legalSellers.organizationId, orgId))).limit(1);
+      if (!cur) throw new NotFoundException();
+      const { beneficiaryName, taxId, ...rest } = input;
+      const sensitive = (beneficiaryName !== undefined && beneficiaryName !== cur.beneficiaryName) || (taxId !== undefined && taxId !== cur.taxId);
+      const [row] = await this.db.update(legalSellers).set(cur.payoutAccountId ? rest : input).where(eq(legalSellers.id, input.id)).returning();
+      await this.audit.log({ organizationId: orgId, actorId: user.sub, action: 'seller.update', entityType: 'legal_seller', entityId: row.id, before: cur, after: row });
+      if (sensitive && cur.payoutAccountId) {
+        const r = await this.requestBankChange(user, cur.id, { beneficiaryName, taxId, reason: 'Merchant updated legal seller details' });
+        return { ...row, approval: 'approval' in r ? r.approval : null };
+      }
       return row;
     }
     const [row] = await this.db.insert(legalSellers).values({ ...input, organizationId: orgId, payoutProvider: loadConfig().PAYMENT_PROVIDER }).returning();
@@ -108,10 +153,13 @@ export class MerchantsService {
   async upsertBrand(user: JwtPayload, orgId: string, input: { id?: string; name: string; legalSellerId?: string; description?: string; logoUrl?: string; royaltyBps?: number; contentRightsOk?: boolean }) {
     assertOrgAccess(user, orgId, null, MANAGER_ROLES);
     if (input.id) {
+      const [before] = await this.db.select().from(brands).where(eq(brands.id, input.id)).limit(1);
       const [row] = await this.db.update(brands).set(input).where(and(eq(brands.id, input.id), eq(brands.organizationId, orgId))).returning();
+      await this.audit.log({ organizationId: orgId, actorId: user.sub, action: 'brand.update', entityType: 'brand', entityId: input.id, before, after: row });
       return row;
     }
     const [row] = await this.db.insert(brands).values({ ...input, organizationId: orgId, slug: `${slugify(input.name)}-${shortCode(3).toLowerCase()}` }).returning();
+    await this.audit.log({ organizationId: orgId, actorId: user.sub, action: 'brand.create', entityType: 'brand', entityId: row.id, after: row });
     return row;
   }
 
@@ -272,6 +320,7 @@ export class MerchantsService {
       .set({ isPaused: true, pausedReason: reason ?? 'Paused by merchant', pausedUntil: minutes ? new Date(Date.now() + minutes * 60_000) : null })
       .where(eq(locations.id, locationId))
       .returning();
+    await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: 'location.pause', entityType: 'location', entityId: locationId, after: { minutes, reason }, reason });
     return row;
   }
 
@@ -279,6 +328,7 @@ export class MerchantsService {
     const loc = await this.requireLocation(locationId);
     assertOrgAccess(user, loc.organizationId, locationId);
     const [row] = await this.db.update(locations).set({ isPaused: false, pausedReason: null, pausedUntil: null }).where(eq(locations.id, locationId)).returning();
+    await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: 'location.resume', entityType: 'location', entityId: locationId, before: { pausedReason: loc.pausedReason } });
     return row;
   }
 

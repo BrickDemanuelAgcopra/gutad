@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { deliveryJobs, devices, locations, orderEvents, orderLines, orders, payments, quotes } from '../../db/schema';
-import { assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
+import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
@@ -260,7 +260,7 @@ export class OrdersService {
   async getForCustomer(user: JwtPayload | null, orderId: string, guestEmail?: string) {
     const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!o) throw new NotFoundException();
-    const allowed = (user && (o.userId === user.sub || isPlatformStaff(user) || user.orgs?.[o.organizationId])) || (!o.userId && guestEmail && o.guestEmail?.toLowerCase() === guestEmail.toLowerCase());
+    const allowed = (user && (o.userId === user.sub || (isPlatformStaff(user) && staffCovers(user, o.organizationId, o.locationId)) || user.orgs?.[o.organizationId])) || (!o.userId && guestEmail && o.guestEmail?.toLowerCase() === guestEmail.toLowerCase());
     if (!allowed) throw new ForbiddenException();
     return this.present(orderId);
   }
@@ -305,7 +305,7 @@ export class OrdersService {
     const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!o) throw new NotFoundException();
     const isOwner = o.userId === user.sub;
-    if (!isOwner && !isPlatformStaff(user)) assertOrgAccess(user, o.organizationId, o.locationId);
+    if (!isOwner) assertOrgAccess(user, o.organizationId, o.locationId);
     const [line] = await this.db.select().from(orderLines).where(and(eq(orderLines.id, lineId), eq(orderLines.orderId, orderId))).limit(1);
     if (!line || line.status !== 'UNAVAILABLE') throw new ConflictException('Line is not awaiting a decision');
     await this.db.transaction(async (tx) => {
@@ -379,7 +379,7 @@ export class OrdersService {
   async timeline(user: JwtPayload, orderId: string) {
     const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!o) throw new NotFoundException();
-    if (o.userId !== user.sub && !isPlatformStaff(user)) assertOrgAccess(user, o.organizationId, o.locationId);
+    if (o.userId !== user.sub) assertOrgAccess(user, o.organizationId, o.locationId);
     const events = await this.db.select().from(orderEvents).where(eq(orderEvents.orderId, orderId)).orderBy(orderEvents.createdAt);
     const tickets = await this.kitchen.ticketsForOrder(orderId);
     const pay = await this.payments.listForOrder(orderId);
@@ -398,7 +398,7 @@ export class OrdersService {
   async requireStaffOrder(user: JwtPayload, orderId: string) {
     const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!o) throw new NotFoundException('Order not found');
-    if (!isPlatformStaff(user)) assertOrgAccess(user, o.organizationId, o.locationId);
+    assertOrgAccess(user, o.organizationId, o.locationId);
     return o;
   }
 

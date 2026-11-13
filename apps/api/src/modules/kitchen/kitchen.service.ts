@@ -1,14 +1,27 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { brands, ingredientStock, ingredients, kitchenBrands, kitchenTickets, kitchens, laborEntries, locations, menuItems, orderLines, orders, packingTasks, purchaseOrderLines, purchaseOrders, recipeLines, recipes, stations, wasteEvents } from '../../db/schema';
 import { assertOrgAccess, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
 import { shortCode } from '../../common/utils';
+import { ApprovalsService } from '../security/approvals.service';
+import { AuditService } from '../../core/audit.service';
 
 @Injectable()
-export class KitchenService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService) {}
+export class KitchenService implements OnModuleInit {
+  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService) {}
+
+  onModuleInit() {
+    this.approvals.register('PURCHASE_ORDER', {
+      execute: async (req) => {
+        const [po] = await this.db.update(purchaseOrders).set({ status: 'ORDERED' }).where(and(eq(purchaseOrders.id, req.subjectId), eq(purchaseOrders.status, 'PENDING_APPROVAL'))).returning();
+        return po || (await this.db.select().from(purchaseOrders).where(eq(purchaseOrders.id, req.subjectId)))[0];
+      },
+      // the kitchen's owner (or a manager) may approve a purchase raised by their own staff
+      canDecide: (user, req) => !!req.organizationId && !!user.orgs?.[req.organizationId]?.roles.some((r) => r === 'MERCHANT_OWNER' || r === 'MERCHANT_MANAGER'),
+    });
+  }
 
   // ───── kitchens, stations, brands ─────
 
@@ -224,14 +237,21 @@ export class KitchenService {
     return { ok: true };
   }
 
-  async createPurchaseOrder(user: JwtPayload, kitchenId: string, input: { supplier: string; lines: { ingredientId: string; quantity: number; unitCostCents: number }[] }) {
-    await this.requireKitchen(user, kitchenId);
-    return this.db.transaction(async (tx) => {
-      const total = input.lines.reduce((a, l) => a + l.quantity * l.unitCostCents, 0);
-      const [po] = await tx.insert(purchaseOrders).values({ kitchenId, supplier: input.supplier, status: 'ORDERED', totalCents: Math.round(total) }).returning();
-      await tx.insert(purchaseOrderLines).values(input.lines.map((l) => ({ ...l, purchaseOrderId: po.id })));
-      return po;
+  async createPurchaseOrder(user: JwtPayload, kitchenId: string, input: { supplier: string; reason?: string; lines: { ingredientId: string; quantity: number; unitCostCents: number }[] }) {
+    const k = await this.requireKitchen(user, kitchenId);
+    const t = await this.approvals.thresholds();
+    const total = Math.round(input.lines.reduce((a, l) => a + l.quantity * l.unitCostCents, 0));
+    const owner = !!user.orgs?.[k.organizationId]?.roles.includes('MERCHANT_OWNER') || user.roles.includes('PLATFORM_ADMIN');
+    const needsApproval = t.purchaseOrderCents > 0 && total > t.purchaseOrderCents && !owner;
+    const po = await this.db.transaction(async (tx) => {
+      const [row] = await tx.insert(purchaseOrders).values({ kitchenId, supplier: input.supplier, status: needsApproval ? 'PENDING_APPROVAL' : 'ORDERED', totalCents: total }).returning();
+      await tx.insert(purchaseOrderLines).values(input.lines.map((l) => ({ ...l, purchaseOrderId: row.id })));
+      await this.audit.log({ organizationId: k.organizationId, actorId: user.sub, action: 'po.create', entityType: 'purchase_order', entityId: row.id, after: row }, tx);
+      return row;
     });
+    if (!needsApproval) return po;
+    const r = await this.approvals.submit(user, { kind: 'PURCHASE_ORDER', summary: `Purchase order $${(total / 100).toFixed(2)} from ${po.supplier} for ${k.name}`, organizationId: k.organizationId, subjectType: 'purchase_order', subjectId: po.id, amountCents: total, payload: { kitchenId }, reason: input.reason || `Supplier order over the $${(t.purchaseOrderCents / 100).toFixed(0)} approval limit`, dedupeKey: `po:${po.id}` });
+    return { ...po, approval: r.approval };
   }
 
   /** Receiving increases on-hand stock and refreshes ingredient cost (last price). */
@@ -240,6 +260,7 @@ export class KitchenService {
     if (!po) throw new NotFoundException();
     await this.requireKitchen(user, po.kitchenId);
     if (po.status === 'RECEIVED') throw new ConflictException('Already received');
+    if (po.status === 'PENDING_APPROVAL') throw new ConflictException('This purchase order is waiting for approval');
     return this.db.transaction(async (tx) => {
       const lines = await tx.select().from(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, poId));
       for (const l of lines) {

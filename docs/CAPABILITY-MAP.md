@@ -61,3 +61,15 @@ Direct/marketplace pickup · food delivery · shared-kitchen multi-brand meal ·
 | Self-serve | `BillingService` (overview, preview/change/cancel, add-ons, promotions), `/merchant/billing` |
 | Admin | `/admin/plans` tabs; `POST /admin/plan-versions/:id/migrate`; `POST /admin/billing/run` (`asOf` only with `ALLOW_BILLING_TIME_TRAVEL=true`, CI only) |
 | Settings | `fees.free_delivery`, `approvals.plan_publish`, `plans.default_plan_code` |
+
+## Admin platform (docs/ADMIN-PLATFORM-PLAN.md)
+
+| Phase | Piece | Where |
+|---|---|---|
+| A | Module registry, staff roles → permissions, data sensitivity, approval kinds | `packages/shared/src/admin.ts` (`ADMIN_MODULES`, `ROLE_PERMISSIONS`, `permissionsFor`, `merchantPageAllowed`) |
+| A | Access checks | `apps/api/src/common/auth.ts` (`can`, `assertCan`, `@RequiresPermission`, `@RequiresReason`, scope-aware `assertOrgAccess`, emergency elevation `elev`, support access `sup`), `common/request-context.ts` (request id, reason, grant id for audit) |
+| A | Sessions, MFA (TOTP), SSO (OIDC) | `modules/auth/auth.service.ts`, `common/totp.ts`; tables `user_sessions`, `users.mfa_*`; `/auth/sessions`, `/auth/mfa/*`, `/auth/sso/*` |
+| A | Staff & access, emergency/support grants, structure, audit search/export | `modules/security/security.service.ts`; tables `staff_scopes`, `access_grants`, `regions`; `/admin/security/*`, `/access-grants/*`, `/admin/structure`, `/admin/regions`, `/admin/audit/search`, `/admin/audit/export.csv` |
+| A | Approval engine (refund, bank change, setting, purchase order, price change, payout release) | `modules/security/approvals.service.ts`; table `approval_requests`; `/approvals*`; handlers registered in Support, Merchants, Admin, Kitchen, Catalog |
+| A | Web | `/admin` (grouped nav), `/admin/approvals`, `/admin/security`, `/admin/audit`, `/admin/structure`, `/admin/settings` (thresholds), `/account` → Security, `/account/sso`, merchant portal support gate |
+| A | Mobile | `ops/index`, `ops/approvals`, `ops/security`, `ops/audit`, `ops/structure`, `security`, MFA step in `login`, `WorkspaceGate` on merchant screens |

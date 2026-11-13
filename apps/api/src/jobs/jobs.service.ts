@@ -14,6 +14,7 @@ import { PaymentsService } from '../modules/payments/payments.service';
 import { GroupOrdersService } from '../modules/programs/group-orders.service';
 import { ProgramsService } from '../modules/programs/programs.service';
 import { addDays } from '../common/utils';
+import { ApprovalsService } from '../modules/security/approvals.service';
 
 /**
  * Background jobs. Every job takes a Redis lock so several worker replicas never double-run,
@@ -37,6 +38,7 @@ export class JobsService {
     private readonly payments: PaymentsService,
     private readonly groupOrders: GroupOrdersService,
     private readonly programs: ProgramsService,
+    private readonly approvals: ApprovalsService,
   ) {}
 
   private async locked(name: string, ttlMs: number, fn: () => Promise<unknown>) {
@@ -55,6 +57,7 @@ export class JobsService {
   @Interval(3000) outbox() { return this.locked('outbox', 30_000, () => this.notifications.relayOutbox()); }
   @Interval(4000) deliverNotifications() { return this.locked('notify', 30_000, () => this.notifications.deliverQueued()); }
   @Interval(30_000) orderEscalation() { return this.locked('order-escalation', 60_000, () => this.orders.escalateUnacknowledged()); }
+  @Interval(300_000) approvalExpiry() { return this.locked('approval-expiry', 60_000, () => this.approvals.expireStale()); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {
     return this.locked('delivery', 60_000, async () => ({ expiredQuotes: await this.delivery.expireQuotes(), expiredOffers: await this.delivery.expireOffers(), late: await this.delivery.flagLate(), simulated: await this.delivery.simulateMock() }));

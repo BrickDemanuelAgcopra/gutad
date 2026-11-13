@@ -15,12 +15,29 @@ export interface AuthUser {
   roles: Role[];
   merchantIds: string[];
   locationIds: string[];
+  /** member roles per organization the person belongs to */
+  memberRoles?: Record<string, Role[]>;
+  /** admin-console permissions (staff only), already capped by scope and sensitivity */
+  permissions?: string[];
+  /** active emergency (break-glass) elevation */
+  elevated?: { roles: Role[]; until: string; grantId: string } | null;
+  /** active audited support session ("view as merchant") */
+  supportAccess?: { organizationId: string; until: string; readOnly: boolean; grantId: string } | null;
+  mfaEnabled?: boolean;
+  /** true when the person's role requires MFA and they have not enrolled yet */
+  mfaSetupRequired?: boolean;
 }
 
 export interface AuthResponse {
   accessToken: string;
   refreshToken: string;
   user: AuthUser;
+}
+
+/** Login answer when the account has MFA: call `/auth/mfa/verify` with the challenge and a code. */
+export interface MfaChallenge {
+  mfaRequired: true;
+  challengeToken: string;
 }
 
 export interface LocationSummary {

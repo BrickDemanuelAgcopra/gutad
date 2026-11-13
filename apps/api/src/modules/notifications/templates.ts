@@ -79,6 +79,12 @@ export function render(template: string, p: Record<string, unknown>): Rendered {
       return sub(`Unacknowledged order ${p.number}`, `Order ${p.number} has not been acknowledged. ${p.offline ? 'Your tablet appears offline. ' : ''}Please accept or reject it now.`);
     case 'campaign':
       return sub(String(p.subject || 'A note from your favorite restaurant'), String(p.body || ''));
+    case 'approval.requested':
+      return sub(`Approval needed: ${p.summary}`, `${p.requester} asked for approval: ${p.summary}${p.amountCents ? ` (${money(p.amountCents as number)})` : ''}. Reason: ${p.reason}. Review it in Admin → Approvals.`);
+    case 'approval.decided':
+      return sub(`Your request was ${String(p.status).toLowerCase()}`, `${p.summary} was ${String(p.status).toLowerCase()}${p.note ? `: ${p.note}` : ''}.`);
+    case 'access.emergency':
+      return sub('Emergency access activated', `${p.email} activated emergency access (${(p.roles as string[]).join(', ')}) until ${when(p.until)}. Reason: ${p.reason}. Review it in Admin → Staff & access.`);
     default:
       return sub(template, JSON.stringify(p));
   }

@@ -6,6 +6,7 @@ import { LedgerService } from '../../core/ledger.service';
 import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
 import { isPlatformStaff, JwtPayload } from '../../common/auth';
+import { ApprovalsService } from '../security/approvals.service';
 import { loadConfig } from '../../config/config';
 import { PAYMENT_PROVIDER } from './payments.constants';
 import type { PaymentProvider, ProviderEvent } from './providers/payment-provider';
@@ -20,6 +21,7 @@ export class PaymentsService {
     private readonly ledger: LedgerService,
     private readonly outbox: OutboxService,
     private readonly audit: AuditService,
+    private readonly approvals: ApprovalsService,
   ) {}
 
   get providerName() {
@@ -305,10 +307,13 @@ export class PaymentsService {
   }
 
   /** Merchant payout onboarding (Stripe Express or mock). */
-  async onboardLegalSeller(user: JwtPayload, legalSellerId: string) {
+  async onboardLegalSeller(user: JwtPayload, legalSellerId: string, opts?: { approved?: boolean; reason?: string }) {
     const [s] = await this.db.select().from(legalSellers).where(eq(legalSellers.id, legalSellerId)).limit(1);
     if (!s) throw new NotFoundException();
     if (!isPlatformStaff(user) && !user.orgs?.[s.organizationId]) throw new ForbiddenException();
+    if (s.payoutAccountId && s.payoutOnboardingState === 'COMPLETE' && !opts?.approved) {
+      return this.approvals.submit(user, { kind: 'BANK_ACCOUNT_CHANGE', summary: `Replace the payout account of ${s.legalName}`, organizationId: s.organizationId, subjectType: 'legal_seller', subjectId: s.id, payload: { sellerId: s.id, reconnect: true }, reason: opts?.reason || 'Merchant asked to connect a different payout account', dedupeKey: `bank:${s.id}` });
+    }
     const web = loadConfig().PUBLIC_WEB_URL;
     const res = await this.provider.createConnectedAccount({ legalName: s.legalName, email: s.billingContact || user.email, country: s.country, returnUrl: `${web}/merchant/payouts?done=1`, refreshUrl: `${web}/merchant/payouts?refresh=1` });
     const complete = !res.onboardingUrl; // mock completes instantly

@@ -1,8 +1,11 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DB, Db, DbService } from '../../db/db.module';
 import { auditLogs, configChanges, deliveryJobs, integrationAccounts, locations, orders, orgMemberships, organizations, outboxEvents, platformSettings, refreshTokens, reservations, users, notifications, payouts } from '../../db/schema';
-import { isPlatformStaff, JwtPayload, RoleName } from '../../common/auth';
+import { assertCan, isPlatformStaff, JwtPayload, RoleName, staffCovers } from '../../common/auth';
+import { isStaffRole, type Permission } from '@gutad/shared';
+import { ApprovalsService } from '../security/approvals.service';
+import { AuthService } from '../auth/auth.service';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
 import { LedgerService } from '../../core/ledger.service';
@@ -10,16 +13,25 @@ import { loadConfig } from '../../config/config';
 
 /** 30 — tenant provisioning, entitlements, staff roles, approval limits, config history, credentials, monitoring, offboarding. */
 @Injectable()
-export class AdminService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly dbs: DbService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly ledger: LedgerService) {}
+export class AdminService implements OnModuleInit {
+  constructor(@Inject(DB) private readonly db: Db, private readonly dbs: DbService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly ledger: LedgerService, private readonly approvals: ApprovalsService, private readonly auth: AuthService) {}
 
-  private staff(user: JwtPayload) {
-    if (!user.roles.includes('PLATFORM_ADMIN')) throw new ForbiddenException('Platform admin only');
+  onModuleInit() {
+    this.approvals.register('SETTING_CHANGE', {
+      execute: async (req) => {
+        const p = req.payload as { key: string; value: unknown };
+        return this.writeSetting(p.key, p.value, req.requestedById, req.decidedById);
+      },
+    });
+  }
+
+  private staff(user: JwtPayload, perm: Permission = 'settings.manage') {
+    assertCan(user, perm);
   }
 
   /** Provision a tenant (organization + owner invite + feature entitlements) in one step. */
   async provisionTenant(user: JwtPayload, input: { name: string; kind?: string; ownerEmail: string; featureFlags?: Record<string, boolean | number | null>; billingEmail?: string }) {
-    this.staff(user);
+    this.staff(user, 'merchants.manage');
     return this.db.transaction(async (tx) => {
       const slug = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Math.random().toString(36).slice(2, 6)}`;
       const [org] = await tx.insert(organizations).values({ name: input.name, slug, kind: input.kind || 'MERCHANT', billingEmail: input.billingEmail || input.ownerEmail, status: 'PROSPECT', featureFlags: input.featureFlags || {} }).returning();
@@ -33,7 +45,7 @@ export class AdminService {
 
   /** Per-organization feature overrides on top of the plan: true/false switches a feature, a number sets a limit, null removes the override. */
   async setFeatureFlags(user: JwtPayload, orgId: string, flags: Record<string, boolean | number | null>) {
-    this.staff(user);
+    this.staff(user, 'merchants.manage');
     const [org] = await this.db.select().from(organizations).where(eq(organizations.id, orgId)).limit(1);
     if (!org) throw new NotFoundException();
     const merged: Record<string, unknown> = { ...(org.featureFlags as object) };
@@ -47,19 +59,20 @@ export class AdminService {
   }
 
   async grantPlatformRole(user: JwtPayload, targetEmail: string, role: RoleName, grant: boolean) {
-    this.staff(user);
-    if (!['PLATFORM_ADMIN', 'SUPPORT', 'FINANCE', 'DISPATCHER'].includes(role)) throw new BadRequestException('Not a platform role');
+    this.staff(user, 'security.manage');
+    if (!isStaffRole(role)) throw new BadRequestException('Not a platform role');
+    if (role === 'PLATFORM_ADMIN' && !user.roles.includes('PLATFORM_ADMIN')) throw new ForbiddenException('Only a platform admin can grant platform admin');
     const [t] = await this.db.select().from(users).where(eq(users.email, targetEmail.toLowerCase())).limit(1);
     if (!t) throw new NotFoundException('User not found');
     const roles = grant ? Array.from(new Set([...t.roles, role])) : t.roles.filter((r) => r !== role);
     await this.db.update(users).set({ roles: roles as never }).where(eq(users.id, t.id));
-    await this.db.update(refreshTokens).set({ revokedAt: new Date() }).where(eq(refreshTokens.userId, t.id)); // force re-login with new claims
+    await this.auth.revokeAllSessions(t.id, 'roles changed'); // force re-login with new claims
     await this.audit.log({ actorId: user.sub, action: grant ? 'role.grant' : 'role.revoke', entityType: 'user', entityId: t.id, before: t.roles, after: roles });
     return { userId: t.id, roles };
   }
 
   async setApprovalLimit(user: JwtPayload, membershipId: string, approvalLimitCents: number) {
-    this.staff(user);
+    this.staff(user, 'security.manage');
     const [m] = await this.db.update(orgMemberships).set({ approvalLimitCents }).where(eq(orgMemberships.id, membershipId)).returning();
     if (!m) throw new NotFoundException();
     await this.audit.configChange({ organizationId: m.organizationId, key: `approvalLimit:${membershipId}`, after: { approvalLimitCents }, actorId: user.sub, approvedById: user.sub });
@@ -74,19 +87,25 @@ export class AdminService {
   }
 
   /** High-value settings require a second approver (configured via `approvals.required` setting). */
-  async setSetting(user: JwtPayload, key: string, value: unknown, approvedByEmail?: string) {
+  /**
+   * Sensitive settings (fees, payouts, beneficiaries, approval thresholds) never apply on one person's say-so:
+   * they become a SETTING_CHANGE request that a different person with `settings.manage` must approve.
+   */
+  async setSetting(user: JwtPayload, key: string, value: unknown, reason?: string) {
     this.staff(user);
-    const [existing] = await this.db.select().from(platformSettings).where(eq(platformSettings.key, key)).limit(1);
-    const sensitive = key.startsWith('fees.') || key.startsWith('payout.') || key.startsWith('beneficiary.');
-    let approvedById: string | null = null;
+    if (key.startsWith('security.')) throw new BadRequestException('Use Admin → Staff & access → Security settings for security.* keys');
+    const sensitive = ['fees.', 'payout.', 'beneficiary.', 'approvals.'].some((p) => key.startsWith(p));
     if (sensitive) {
-      if (!approvedByEmail) throw new BadRequestException('This setting requires a second approver');
-      const [a] = await this.db.select().from(users).where(eq(users.email, approvedByEmail.toLowerCase())).limit(1);
-      if (!a || !a.roles.includes('PLATFORM_ADMIN') || a.id === user.sub) throw new ForbiddenException('Approver must be a different platform admin');
-      approvedById = a.id;
+      const [existing] = await this.db.select().from(platformSettings).where(eq(platformSettings.key, key)).limit(1);
+      return this.approvals.submit(user, { kind: 'SETTING_CHANGE', summary: `Change setting ${key}`, subjectType: 'setting', subjectId: key, payload: { key, value, before: existing?.value ?? null }, reason: reason || `Update ${key}`, dedupeKey: `setting:${key}` });
     }
+    return this.writeSetting(key, value, user.sub, user.sub);
+  }
+
+  private async writeSetting(key: string, value: unknown, actorId: string, approvedById: string | null) {
+    const [existing] = await this.db.select().from(platformSettings).where(eq(platformSettings.key, key)).limit(1);
     const [row] = await this.db.insert(platformSettings).values({ key, value: value as never }).onConflictDoUpdate({ target: platformSettings.key, set: { value: value as never } }).returning();
-    await this.audit.configChange({ key, before: existing?.value, after: value, actorId: user.sub, approvedById });
+    await this.audit.configChange({ key, before: existing?.value, after: value, actorId, approvedById });
     await this.redis.del(`setting:${key}`);
     return row;
   }
@@ -105,7 +124,7 @@ export class AdminService {
   }
 
   async rotateIntegrationSecret(user: JwtPayload, integrationId: string) {
-    this.staff(user);
+    this.staff(user, 'integrations.manage');
     const secret = Buffer.from(Array.from({ length: 24 }, () => Math.floor(Math.random() * 256))).toString('base64url');
     const [i] = await this.db.update(integrationAccounts).set({ webhookSecret: secret }).where(eq(integrationAccounts.id, integrationId)).returning();
     if (!i) throw new NotFoundException();
@@ -128,7 +147,8 @@ export class AdminService {
 
   /** Offboarding: pause selling, resolve open commitments, revoke access & integrations, settle, export. */
   async offboard(user: JwtPayload, orgId: string) {
-    this.staff(user);
+    this.staff(user, 'merchants.manage');
+    if (!staffCovers(user, orgId)) throw new ForbiddenException('Outside your access scope');
     const [org] = await this.db.select().from(organizations).where(eq(organizations.id, orgId)).limit(1);
     if (!org) throw new NotFoundException();
     const locs = await this.db.select({ id: locations.id }).from(locations).where(eq(locations.organizationId, orgId));
@@ -156,6 +176,7 @@ export class AdminService {
 
   async listTenants(user: JwtPayload) {
     if (!isPlatformStaff(user)) throw new ForbiddenException();
-    return this.db.select({ org: organizations, locations: sql<number>`(select count(*) from locations l where l.organization_id = ${organizations.id})::int` }).from(organizations).orderBy(desc(organizations.createdAt)).limit(500);
+    const rows = await this.db.select({ org: organizations, locations: sql<number>`(select count(*) from locations l where l.organization_id = ${organizations.id})::int` }).from(organizations).orderBy(desc(organizations.createdAt)).limit(500);
+    return rows.filter((r) => staffCovers(user, r.org.id));
   }
 }

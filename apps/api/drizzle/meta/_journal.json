@@ -43,6 +43,13 @@
       "when": 1794606689995,
       "tag": "0005_promotions",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794610971547,
+      "tag": "0006_admin_security",
+      "breakpoints": true
     }
   ]
 }

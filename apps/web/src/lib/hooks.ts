@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AuthUser } from '@gutad/shared';
+import { STAFF_ROLES, type AuthUser } from '@gutad/shared';
 import { api, session } from './api';
 
 /** Fetch helper with loading/error state and optional polling. */
@@ -48,8 +48,11 @@ export function useSession() {
     };
   }, []);
   const isMerchant = !!user && (user.merchantIds.length > 0 || user.roles.includes('PLATFORM_ADMIN'));
-  const isAdmin = !!user && user.roles.some((r) => ['PLATFORM_ADMIN', 'SUPPORT', 'FINANCE'].includes(r));
-  return { user, ready, isMerchant, isAdmin, logout: () => session.clear() };
+  const perms = user?.permissions || [];
+  const isStaff = !!user && (user.roles.some((r) => (STAFF_ROLES as readonly string[]).includes(r)) || !!user.elevated);
+  const isAdmin = isStaff && (perms.length > 0 || !!user?.mfaSetupRequired || user.roles.includes('PLATFORM_ADMIN'));
+  const can = (p: string) => perms.includes(p);
+  return { user, ready, isMerchant, isAdmin, isStaff, can, logout: () => session.clear() };
 }
 
 /** Generic mutation wrapper that surfaces errors as strings. */

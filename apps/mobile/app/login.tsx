@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import type { AuthResponse } from '@gutad/shared';
+import type { AuthResponse, MfaChallenge } from '@gutad/shared';
 import { api, session } from '@/api';
 import { Button, Card, ErrorText, Input, Muted, s } from '@/ui';
 import { BrandLogo } from '@/brand';
@@ -11,14 +11,33 @@ export default function Login() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [f, setF] = useState({ email: '', password: '', name: '', phone: '' });
   const [error, setError] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [code, setCode] = useState('');
   const submit = async () => {
     setError(null);
     try {
-      const r = await api.post<AuthResponse>(mode === 'login' ? '/auth/login' : '/auth/register', mode === 'login' ? { email: f.email, password: f.password } : f);
+      if (challenge) {
+        await session.set(await api.post<AuthResponse>('/auth/mfa/verify', { challengeToken: challenge, code }));
+        router.back();
+        return;
+      }
+      const r = await api.post<AuthResponse | MfaChallenge>(mode === 'login' ? '/auth/login' : '/auth/register', mode === 'login' ? { email: f.email, password: f.password } : f);
+      if ('mfaRequired' in r) { setChallenge(r.challengeToken); return; }
       await session.set(r);
       router.back();
     } catch (e) { setError((e as Error).message); }
   };
+  if (challenge) return (
+    <ScrollView style={s.screen} contentContainerStyle={s.pad}>
+      <Card title="Two-factor authentication">
+        <Muted>Enter the 6-digit code from your authenticator app, or a recovery code.</Muted>
+        <Input label="Code" autoFocus keyboardType="number-pad" value={code} onChangeText={setCode} />
+        <ErrorText msg={error} />
+        <Button title="Verify" onPress={submit} />
+        <Button title="Start over" variant="ghost" onPress={() => { setChallenge(null); setCode(''); }} />
+      </Card>
+    </ScrollView>
+  );
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       <View style={{ alignItems: 'center', marginVertical: 24 }}><BrandLogo size={44} /></View>

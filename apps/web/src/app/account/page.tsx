@@ -2,7 +2,8 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import type { AuthResponse } from '@gutad/shared';
+import type { AuthResponse, MfaChallenge } from '@gutad/shared';
+import { AccountSecurity } from '@/components/account-security';
 import { api, money, session, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Spinner, Tabs, statusTone, Textarea } from '@/components/ui';
@@ -12,14 +13,36 @@ function AuthForm() {
   const [f, setF] = useState({ email: '', password: '', name: '', phone: '', marketingConsent: false });
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const { data: sso } = useApi<{ enabled: boolean; label: string }>('/auth/sso/config');
   const submit = async () => {
     setError(null);
     try {
+      if (challenge) { session.set(await api.post<AuthResponse>('/auth/mfa/verify', { challengeToken: challenge, code })); return; }
       if (mode === 'recover') { await api.post('/auth/recover', { email: f.email }); setInfo('If that email exists, a reset link has been sent.'); return; }
-      const r = await api.post<AuthResponse>(mode === 'login' ? '/auth/login' : '/auth/register', mode === 'login' ? { email: f.email, password: f.password } : f);
+      const r = await api.post<AuthResponse | MfaChallenge>(mode === 'login' ? '/auth/login' : '/auth/register', mode === 'login' ? { email: f.email, password: f.password } : f);
+      if ('mfaRequired' in r) { setChallenge(r.challengeToken); return; }
       session.set(r);
     } catch (e) { setError((e as Error).message); }
   };
+  const startSso = async () => {
+    setError(null);
+    try { window.location.href = (await api.post<{ url: string }>('/auth/sso/start', {})).url; } catch (e) { setError((e as Error).message); }
+  };
+  if (challenge) return (
+    <div className="mx-auto max-w-md">
+      <Card title="Two-factor authentication">
+        <div className="space-y-2">
+          <p className="text-sm text-ink-500">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+          <Input label="Code" autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
+          {error && <Alert>{error}</Alert>}
+          <Button className="w-full" onClick={submit}>Verify</Button>
+          <button className="text-xs text-ink-500 underline" onClick={() => { setChallenge(null); setCode(''); }}>Start over</button>
+        </div>
+      </Card>
+    </div>
+  );
   return (
     <div className="mx-auto max-w-md">
       <Card title={mode === 'login' ? 'Sign in' : mode === 'register' ? 'Create account' : 'Recover account'}>
@@ -32,6 +55,7 @@ function AuthForm() {
           {error && <Alert>{error}</Alert>}
           {info && <Alert tone="info">{info}</Alert>}
           <Button className="w-full" onClick={submit}>{mode === 'login' ? 'Sign in' : mode === 'register' ? 'Create account' : 'Send reset link'}</Button>
+          {mode === 'login' && sso?.enabled && <Button className="w-full" variant="secondary" onClick={startSso}>{sso.label}</Button>}
           <div className="flex justify-between text-xs text-ink-500">
             <button onClick={() => setMode(mode === 'login' ? 'register' : 'login')} className="underline">{mode === 'login' ? 'Create an account' : 'Have an account? Sign in'}</button>
             <button onClick={() => setMode('recover')} className="underline">Forgot password</button>
@@ -52,7 +76,7 @@ function AccountInner() {
   return (
     <div>
       <h1 className="text-2xl font-bold">Hi {user.name || user.email}</h1>
-      <div className="mt-4"><Tabs tabs={[{ id: 'orders', label: 'Orders' }, { id: 'reservations', label: 'Reservations' }, { id: 'tickets', label: 'Tickets' }, { id: 'kits', label: 'Meal kits' }, { id: 'rewards', label: 'Rewards & membership' }, { id: 'profile', label: 'Profile' }]} active={tab} onChange={setTab} /></div>
+      <div className="mt-4"><Tabs tabs={[{ id: 'orders', label: 'Orders' }, { id: 'reservations', label: 'Reservations' }, { id: 'tickets', label: 'Tickets' }, { id: 'kits', label: 'Meal kits' }, { id: 'rewards', label: 'Rewards & membership' }, { id: 'profile', label: 'Profile' }, { id: 'security', label: 'Security' }]} active={tab} onChange={setTab} /></div>
       <div className="mt-6">
         {tab === 'orders' && <Orders />}
         {tab === 'reservations' && <Reservations />}
@@ -60,6 +84,7 @@ function AccountInner() {
         {tab === 'kits' && <Kits />}
         {tab === 'rewards' && <Rewards />}
         {tab === 'profile' && <Profile />}
+        {tab === 'security' && <AccountSecurity />}
       </div>
     </div>
   );

@@ -265,7 +265,7 @@ export class DeliveryService {
     if (!job) throw new NotFoundException();
     if (user) {
       const [loc] = await this.db.select().from(locations).where(eq(locations.id, job.locationId)).limit(1);
-      if (!isPlatformStaff(user)) assertOrgAccess(user, loc!.organizationId, job.locationId);
+      assertOrgAccess(user, loc!.organizationId, job.locationId);
     }
     let feeCents = 0;
     if (job.fleet === 'PARTNER' && job.providerJobId) feeCents = (await this.provider.cancel(job.providerJobId)).feeCents;
@@ -345,7 +345,7 @@ export class DeliveryService {
     const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.id, jobId)).limit(1);
     if (!job) throw new NotFoundException();
     const [loc] = await this.db.select().from(locations).where(eq(locations.id, job.locationId)).limit(1);
-    if (!isPlatformStaff(user)) assertOrgAccess(user, loc!.organizationId, job.locationId);
+    assertOrgAccess(user, loc!.organizationId, job.locationId);
     return this.db.transaction((tx) => this.transition(jobId, status, { ...data, actorId: user.sub }, tx));
   }
 
@@ -354,7 +354,7 @@ export class DeliveryService {
     const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.id, jobId)).limit(1);
     if (!job) throw new NotFoundException();
     const [loc] = await this.db.select().from(locations).where(eq(locations.id, job.locationId)).limit(1);
-    if (!isPlatformStaff(user)) assertOrgAccess(user, loc!.organizationId, job.locationId);
+    assertOrgAccess(user, loc!.organizationId, job.locationId);
     if (!['UNASSIGNED', 'QUOTE_EXPIRED', 'REQUESTED'].includes(job.status)) throw new ConflictException(`Cannot reassign a ${job.status} job`);
     await this.db.update(deliveryJobs).set({ status: 'UNASSIGNED', providerJobId: null, driverId: null }).where(eq(deliveryJobs.id, jobId));
     await this.audit.log({ organizationId: loc!.organizationId, actorId: user.sub, action: 'delivery.reassign', entityType: 'delivery_job', entityId: jobId });

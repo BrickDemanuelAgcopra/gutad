@@ -1,3 +1,4 @@
+import { WorkspaceGate } from '@/ops';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
 import { api, when } from '@/api';
@@ -9,7 +10,7 @@ interface Ticket { id: string; stationCode: string | null; status: string; order
 interface Pack { id: string; orderNumber: string; bagCode: string; status: string; verifiedLineIds: string[]; blockedReason: string | null; lines: { id: string; name: string; quantity: number; status: string }[] }
 
 /** Station screen + packing screen for shared kitchens (large type for the line). */
-export default function Kitchen() {
+function Kitchen() {
   const { loc } = useMerchantLocation();
   const [mode, setMode] = useState<'stations' | 'packing'>('stations');
   const kid = loc?.kitchenId || null;
@@ -34,4 +35,8 @@ export default function Kitchen() {
       )}
     </View>
   );
+}
+
+export default function Screen() {
+  return <WorkspaceGate page="/merchant/kitchen"><Kitchen /></WorkspaceGate>;
 }
