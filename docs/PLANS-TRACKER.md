@@ -42,7 +42,7 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 - [x] Marketplace visibility boost for plans with `marketplace_boost` (ranked after sponsored placements)
 - [x] Smoke tests: features not in the plan return 403; limits enforced; overrides; search masking (11 new checks)
 
-- [~] Deploy Phase 2 to gutad.io and verify
+- [x] Deploy Phase 2 to gutad.io and verify (existing restaurants are grandfathered and keep every service; availability, search and portal checked)
 
 ## Phase 3: merchant self-serve
 
@@ -70,3 +70,4 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 
 - 2026-11-13: tracker created; Phase 1 started.
 - 2026-11-13: Phase 1 shipped (commits 9ded42c, 81d4e75). 111 smoke checks; 110 pass, the 1 failure is the time-of-day waitlist issue listed above. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-214147.dump. Next: Phase 2 (enforcement).
+- 2026-11-13: Phase 2 shipped (commit d416398). 122 smoke checks; 121 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-221940.dump. Next: Phase 3 (merchant self-serve).
