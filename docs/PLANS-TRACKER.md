@@ -28,7 +28,7 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 - [x] Fix: "NaN% marketplace" and "$0.00/network cover" on plan cards
 - [x] Order Form views (onboarding, merchant finance) list fee rules in plain words
 - [x] Smoke tests for fee resolution, plan versioning and the admin API (17 new checks)
-- [~] Deploy to gutad.io and verify
+- [x] Deploy to gutad.io and verify (catalog seeded in production; /pricing, /admin/plans, /for-restaurants live)
 
 ## Phase 2: enforcement
 
@@ -67,3 +67,4 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 ## Log
 
 - 2026-11-13: tracker created; Phase 1 started.
+- 2026-11-13: Phase 1 shipped (commits 9ded42c, 81d4e75). 111 smoke checks; 110 pass, the 1 failure is the time-of-day waitlist issue listed above. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-214147.dump. Next: Phase 2 (enforcement).
