@@ -19,6 +19,11 @@ export default function RootLayout() {
         <Stack.Screen name="merchant/kitchen" options={{ title: 'Kitchen' }} />
         <Stack.Screen name="driver/index" options={{ title: 'Driver' }} />
         <Stack.Screen name="ops/index" options={{ title: 'Gutad Ops' }} />
+        <Stack.Screen name="ops/executive" options={{ title: 'Executive dashboard' }} />
+        <Stack.Screen name="ops/live" options={{ title: 'Live operations' }} />
+        <Stack.Screen name="ops/alerts" options={{ title: 'Alerts' }} />
+        <Stack.Screen name="ops/orders" options={{ title: 'Orders' }} />
+        <Stack.Screen name="ops/order/[id]" options={{ title: 'Order' }} />
         <Stack.Screen name="ops/approvals" options={{ title: 'Approvals' }} />
         <Stack.Screen name="ops/security" options={{ title: 'Staff & access' }} />
         <Stack.Screen name="ops/audit" options={{ title: 'Audit history' }} />

@@ -84,3 +84,60 @@ Verification:
 - **X.3 (Phase A)** Typecheck is clean for shared, API, web and mobile.
 - Plan, Pending and Completed trackers created in `docs/`.
 
+## Phase B: executive dashboard, live operations, central orders (shipped 2026-11-13, not yet committed)
+
+Verification:
+- Typecheck is clean for API, web and mobile.
+- `next build`: OK.
+- `npm run smoke` on a fresh database: **219/219 checks pass**, including 28 new Phase B checks in `scripts/smoke-admin-b.mjs`.
+- Migration `0007_ops_alerts_notes.sql` adds `ops_alerts`, `order_notes`, `message_templates` and `orders.partial_fulfillment`.
+- API module `modules/ops` (`OpsService`, `AlertsService`); worker jobs run detectors and escalation every minute.
+
+### 1. Executive dashboard & live operations
+- **1.1** Orders, gross sales, refunds (amount and count), cancellations and rejections (with rate), and AOV, each compared with the previous period of the same length, plus a daily gross-sales trend.
+  - **W** `/admin` is now the executive dashboard: KPI tiles, a trend chart and a filter row (Today / 7d / 30d / 90d, region, merchant, location, brand, channel).
+  - **M** `ops/executive`.
+- **1.2** Separate figures for gross food sales, platform revenue (from the ledger, broken down by revenue stream) and merchant amounts payable (ledger `MERCHANT_PAYABLE`), plus platform expenses. **W M**
+- **1.3** Performance by region, location, merchant, brand (from order lines) and ordering channel, as bars plus a table; every row drills down. **W M**
+- **1.4** Platform-wide live board, scoped to the viewer: awaiting acceptance, cooking, ready for pickup, awaiting courier, out for delivery, and overdue (minutes past promise). Refreshes every 10 s. **W** `/admin/live`. **M** `ops/live`.
+- **1.5** Capacity:
+  - Kitchen load per location: last 15 minutes against the throttle, as a percentage, and orders cooking.
+  - Couriers available, approved and busy; jobs waiting for a courier.
+  - Items sold out per location, paused locations, offline devices.
+  - One-tap pause/resume with a reason.
+  - **W M**
+- **1.6** Contribution margin per order: revenue minus food (recipe ingredient cost), labor (recipe minutes × `ops.labor_rate_cents_per_hour`, default $18/h), delivery (provider cost plus driver base pay), processing and promotions.
+  - Shows the average, margin %, the number of orders below zero, the lowest-margin orders, and the platform's own ledger contribution per order.
+  - Follow-up for actual labor hours: 1.6-L. **W M**
+- **1.7** Alerts (`ops_alerts`):
+  - Each alert has a type, severity, owning team or person, an escalation deadline per severity, and a full history (raised, acknowledged, assigned, comment, escalated, resolved, auto-resolved, reopened).
+  - Detectors run every minute and look for: unaccepted orders, overdue orders, ready orders waiting, late deliveries, status conflicts, duplicate events, offline devices, locations paused with no reopening time, failed or held payouts, and failed webhooks. Duplicates are suppressed while an alert is open, and an alert auto-resolves when its condition clears.
+  - Escalation moves ownership up a level (e.g. operations → executive → platform admin) and pages the new owner. HIGH and CRITICAL alerts page the owning team.
+  - Acting on an alert needs the owning team's manage permission; anyone who can see it can comment. People can also raise alerts manually.
+  - **W** `/admin/alerts`. **M** `ops/alerts`.
+- **1.8** Drill-down: every KPI tile, live bucket and performance row links to `/admin/orders` with the same filter (bucket, overdue, refunded, canceled, location, merchant, brand, region, channel, dates). **W M**
+
+### 12. Central order management
+- **12.1** `/admin/orders` search, scoped to the viewer:
+  - by order number, order id, payment intent/charge id, delivery provider job id, POS ticket or external id
+  - by customer name, email or phone
+  - by location, merchant, region, brand, channel, courier, status and dates
+  - Paginated. Customer contact is masked for roles without `customers.pii`.
+  - **W M**
+- **12.2** The order detail shows one timeline that merges order events, kitchen tickets, delivery events, refunds and notes, plus the notifications sent. **W** `/admin/orders/[id]`. **M** `ops/order/[id]`.
+- **12.3** The detail page shows the customer order, payment (with refunds and dispute state), kitchen tickets, and the delivery job (proof link for staff) as separate panels. **W M**
+- **12.4** Staff actions from the order page:
+  - accept for the merchant, mark ready, confirm handoff
+  - cancel with a reason and a cost owner (audited)
+  - **W M**
+- **12.5** Routing: tickets per station are shown; `POST /admin/orders/:id/reroute` moves open tickets to another station, logging an order event and an audit entry. **W**
+- **12.6** Partial fulfillment: crediting an unavailable line sets `orders.partial_fulfillment`. It shows as a badge and is filterable (`partial=true`). Scheduled and rejected orders are filterable too. **API W M**
+- **12.7** Controlled remedy from the order page: refund, credit, remake or redelivery opens a ticket and resolves it through the support flow, so approval limits and the repeat-compensation check apply. **W M**
+- **12.8** Stuck orders, duplicate events and conflicting statuses, checked both per order (`issues` on the detail page) and platform-wide (detectors → alerts). The conflicts covered:
+  - delivered but the order is not completed
+  - completed but the delivery is not finished
+  - canceled with captured money not refunded
+  - completed but the payment was only authorized
+  - canceled with a courier still assigned
+  - **API W M**
+- **12.9** Order notes (internal, or customer-visible, which sends the `order.message` notification) and approved response templates (`message_templates`, six seeded; `{{number}}` and `{{name}}` are filled in; editable via `POST /admin/message-templates`). The detail page lists the messages sent. **W M**

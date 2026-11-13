@@ -52,6 +52,8 @@ export const orders = pgTable(
     readyAt: ts('ready_at'),
     collectedAt: ts('collected_at'),
     completedAt: ts('completed_at'),
+    /** true when the order finished with some lines credited or unavailable */
+    partialFulfillment: boolean('partial_fulfillment').notNull().default(false),
     canceledAt: ts('canceled_at'),
     cancelReason: text('cancel_reason'),
     rejectReason: text('reject_reason'),

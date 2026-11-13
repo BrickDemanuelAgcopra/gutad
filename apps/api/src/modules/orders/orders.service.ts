@@ -313,6 +313,7 @@ export class OrdersService {
         await tx.update(orderLines).set({ status: 'READY', replacementNote: replacementNote || line.replacementNote }).where(eq(orderLines.id, lineId));
       } else {
         await tx.update(orderLines).set({ status: 'CREDITED' }).where(eq(orderLines.id, lineId));
+        await tx.update(orders).set({ partialFulfillment: true }).where(eq(orders.id, orderId));
         const [p] = await tx.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
         const creditCents = line.lineTotalCents + Math.round((line.lineTotalCents * o.taxCents) / Math.max(1, o.subtotalCents));
         if (p && p.capturedCents - p.refundedCents >= creditCents) await this.payments.refund({ paymentId: p.id, amountCents: creditCents, reason: `Item unavailable: ${line.name}`, funder: 'MERCHANT', approvedById: user.sub, idempotencyKey: `line-credit:${lineId}` }, tx);

@@ -42,6 +42,18 @@ async function main() {
   ]).onConflictDoNothing();
 
   if (await seedPlanCatalog(db)) log('created plan catalog');
+  // approved customer response templates (support & operations); existing ones are left as edited
+  await db
+    .insert(s.messageTemplates)
+    .values([
+      { key: 'delay_kitchen', title: 'Kitchen running late', category: 'DELAY', body: 'Hi {{name}}, the kitchen is running a little behind on order {{number}}. We are on it and will update you as soon as it is ready. Sorry for the wait!' },
+      { key: 'delay_courier', title: 'Courier delayed', category: 'DELAY', body: 'Hi {{name}}, your order {{number}} is ready and we are getting a courier to it now. Thanks for your patience.' },
+      { key: 'item_unavailable', title: 'Item unavailable', category: 'ITEM', body: 'Hi {{name}}, one item in order {{number}} is unavailable today. Open the order in the app to pick a replacement or take a credit.' },
+      { key: 'refund_issued', title: 'Refund issued', category: 'REFUND', body: 'Hi {{name}}, we have issued a refund for order {{number}}. It can take 5–10 business days to appear on your statement.' },
+      { key: 'credit_issued', title: 'Credit added', category: 'REFUND', body: 'Hi {{name}}, we added a credit to your Gutad account for the trouble with order {{number}}. It applies automatically at your next checkout.' },
+      { key: 'pickup_reminder', title: 'Pickup reminder', category: 'PICKUP', body: 'Hi {{name}}, order {{number}} is ready and waiting for you at the pickup shelf.' },
+    ])
+    .onConflictDoNothing();
 
   if (process.env.SEED_DEMO === 'false') {
     await pool.end();

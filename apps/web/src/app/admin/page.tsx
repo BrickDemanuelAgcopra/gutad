@@ -1,52 +1,80 @@
 'use client';
-import { useState } from 'react';
-import { api, downloadFile, money, when } from '@/lib/api';
-import { useAction, useApi } from '@/lib/hooks';
-import { Alert, Badge, Button, Card, Input, Select, Stat, statusTone, Table } from '@/components/ui';
-import { PRODUCT_LINES, type PublicPlanDto } from '@gutad/shared';
-import { FeeList, planPrice } from '@/components/plan-ui';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { modulesFor } from '@gutad/shared';
+import { money, when } from '@/lib/api';
+import { useApi, useSession } from '@/lib/hooks';
+import { Card, Spinner, Table, Tabs } from '@/components/ui';
+import { SectionTitle } from '@/components/admin-ui';
+import { BarList, FilterBar, KpiTile, pct, TrendBars, useFilter } from '@/components/ops-ui';
 
+interface M { orders: number; completed: number; canceled: number; rejected: number; partial: number; cancellationRate: number; grossSalesCents: number; foodSalesCents: number; discountsCents: number; taxCents: number; tipsCents: number; refundsCents: number; refundCount: number; aovCents: number; platformRevenueCents: number; platformExpenseCents: number; merchantPayableCents: number; revenueByStream: Record<string, number> }
+interface Exec { window: { from: string; to: string }; current: M; previous: M; trend: { day: string; orders: number; grossCents: number }[]; locations: number }
+interface Row { key: string | null; label: string; orders: number; salesCents: number; canceled: number; aovCents: number }
+interface Contribution { orders: number; laborRateCentsPerHour: number; average: Record<string, number>; marginPct: number; negative: number; worst: { id: string; number: string; locationName?: string; revenueCents: number; contributionCents: number; marginPct: number }[]; note: string }
+
+/** Executive dashboard (landing page of the admin console). People without the overview permission go to their first module. */
 export default function AdminHome() {
-  const { data: p } = useApi<{ orders: { n: number; gmv: number }; revenueCents: number; expenseCents: number; contributionCents: number; merchants: { live: number; paused: number; churned: number; onboarding: number }; payouts: { paid: number; pending: number; failed: number }; incidents: { open: number; avgHrs: number }; delivery: { jobs: number; failed: number; late: number } }>('/admin/reports/platform');
-  const { data: tenants, reload } = useApi<{ org: { id: string; name: string; kind: string; status: string; featureFlags: Record<string, boolean>; createdAt: string }; locations: number }[]>('/admin/tenants');
-  const { run, error } = useAction();
-  const [t, setT] = useState({ name: '', ownerEmail: '', kind: 'MERCHANT' });
-  const [contract, setContract] = useState({ orgId: '', planCode: 'DIRECT_FREE' });
-  const { data: plans } = useApi<PublicPlanDto[]>('/public/plans');
-  const chosen = plans?.find((p) => p.code === contract.planCode);
-  const [sel, setSel] = useState<{ id: string; name: string; locations: { id: string; name: string; status: string; verifiedAt: string | null; city: string; platformOperated: boolean; deliveryFleet: string }[] } | null>(null);
-  const [selOb, setSelOb] = useState<{ blockers: string[]; agreement: { signatureName: string; acceptedAt: string } | null; orderForm: { name: string; signedAt: string | null } | null } | null>(null);
-  const { data: fleetReqs, reload: reloadFleet } = useApi<{ id: string; name: string; city: string; organizationName: string; deliveryFleet: string; requested: string; requestedAt: string; note: string | null }[]>('/admin/delivery-fleet-requests');
-  const { data: docQueue, reload: reloadDocs } = useApi<{ id: string; organizationId: string; organizationName: string; docType: string; fileName: string; sizeBytes: number; createdAt: string }[]>('/admin/onboarding/documents');
-  const openOrg = async (orgId: string) => { setSel(await api.get(`/organizations/${orgId}`)); setSelOb(await api.get(`/organizations/${orgId}/onboarding`)); };
+  const { user, can } = useSession();
+  const router = useRouter();
+  const allowed = can('overview.read');
+  useEffect(() => {
+    if (user && !allowed) {
+      const first = modulesFor(user.permissions || []).find((m) => m.web !== '/admin');
+      if (first) router.replace(first.web);
+    }
+  }, [user, allowed, router]);
+  if (!allowed) return <Spinner />;
+  return <Executive />;
+}
+
+function Executive() {
+  const { f, setF, q } = useFilter();
+  const [dim, setDim] = useState('location');
+  const { data: ex } = useApi<Exec>(`/admin/ops/executive?${q}`, { deps: [q] });
+  const { data: rows } = useApi<Row[]>(`/admin/ops/breakdown?dim=${dim}&${q}`, { deps: [q, dim] });
+  const { data: cm } = useApi<Contribution>(`/admin/ops/contribution?${q}`, { deps: [q] });
+  const c = ex?.current, p = ex?.previous;
+  const drill = (extra: string) => `/admin/orders?${q}${extra}`;
+  const dimParam: Record<string, string> = { location: 'locationId', merchant: 'organizationId', region: 'regionId', brand: 'brandId', channel: 'channel' };
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Platform control</h1>
-      {p && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Stat label="GMV (30d)" value={money(p.orders.gmv)} hint={`${p.orders.n} orders`} /><Stat label="Platform revenue" value={money(p.revenueCents)} hint={`expenses ${money(p.expenseCents)} · contribution ${money(p.contributionCents)}`} /><Stat label="Merchants" value={p.merchants.live} hint={`${p.merchants.onboarding} onboarding · ${p.merchants.paused} paused · ${p.merchants.churned} churned`} /><Stat label="Payouts" value={money(p.payouts.paid)} hint={`${money(p.payouts.pending)} pending · ${p.payouts.failed} failed/held`} /><Stat label="Open incidents" value={p.incidents.open} hint={`avg resolve ${p.incidents.avgHrs}h`} /><Stat label="Delivery" value={`${p.delivery.jobs} jobs`} hint={`${p.delivery.failed} failed · ${p.delivery.late} late`} /></div>}
-      {error && <Alert>{error}</Alert>}
-      <Card title="Tenants">
-        <Table rows={tenants || []} cols={[{ key: 'n', label: 'Organization', render: (r) => <button className="underline" onClick={() => run(() => openOrg(r.org.id))}>{r.org.name}</button> }, { key: 'k', label: 'Kind', render: (r) => r.org.kind }, { key: 's', label: 'Status', render: (r) => <Badge tone={statusTone(r.org.status)}>{r.org.status}</Badge> }, { key: 'l', label: 'Locations', render: (r) => r.locations }, { key: 'f', label: 'Overrides', render: (r) => Object.entries(r.org.featureFlags).map(([k, v]) => v === true ? k : v === false ? 'no ' + k : k + ' ' + v).join(', ') || '—' }, { key: 'c', label: 'Since', render: (r) => when(r.org.createdAt) }, { key: 'a', label: '', render: (r) => <div className="flex gap-1"><a className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50" href={`/merchant?support=${r.org.id}`}>View as merchant</a><Button size="sm" variant="ghost" onClick={() => { const f = prompt('Feature overrides on top of the plan, as JSON. true/false turns a feature on/off; a number sets a limit. Example: {"reservations": true, "locations": 5}', JSON.stringify(r.org.featureFlags)); if (f) run(async () => { await api.patch(`/admin/tenants/${r.org.id}/features`, JSON.parse(f)); reload(); }); }}>Overrides</Button><Button size="sm" variant="ghost" onClick={() => confirm('Offboard tenant? New sales stop; open commitments must resolve first.') && run(async () => { const res = await api.post(`/admin/tenants/${r.org.id}/offboard`, {}); alert(JSON.stringify(res)); reload(); })}>Offboard</Button></div> }]} />
-        {sel && <div className="mt-3 rounded-lg bg-ink-50 p-3 text-sm">{selOb && <div className="mb-2"><b>Onboarding</b> · agreement {selOb.agreement ? `signed by ${selOb.agreement.signatureName}` : 'not accepted'} · Order Form {selOb.orderForm ? (selOb.orderForm.signedAt ? 'signed' : 'awaiting merchant signature') : 'not assigned'}{selOb.blockers.length ? <div className="text-xs text-amber-700">Blocks verification: {selOb.blockers.join('; ')}</div> : <div className="text-xs text-emerald-700">Ready to verify</div>}</div>}<b>Locations</b>{sel.locations.map((l) => <div key={l.id} className="flex items-center justify-between py-1"><span>{l.name} · {l.city} <Badge tone={statusTone(l.status)}>{l.status}</Badge>{l.platformOperated && <Badge tone="good">Made at Gutad</Badge>} <span className="text-xs text-ink-500">delivery: {l.deliveryFleet.toLowerCase()}</span></span><div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => run(async () => { await api.post(`/locations/${l.id}/platform-operated`, { value: !l.platformOperated }); await openOrg(sel.id); })}>{l.platformOperated ? 'Unset Made at Gutad' : 'Mark Made at Gutad'}</Button>{!l.verifiedAt && <Button size="sm" onClick={() => run(async () => { await api.post(`/locations/${l.id}/verify`, { verified: true }); await openOrg(sel.id); })}>Verify operator</Button>}{l.status === 'VERIFIED' && <Button size="sm" variant="secondary" onClick={() => run(async () => { await api.post(`/locations/${l.id}/status`, { status: 'LIVE' }); await openOrg(sel.id); })}>Go live</Button>}{!['SUSPENDED', 'OFFBOARDED'].includes(l.status) && <Button size="sm" variant="ghost" onClick={() => run(async () => { await api.post(`/locations/${l.id}/status`, { status: 'SUSPENDED', reason: 'Policy' }); await openOrg(sel.id); })}>Suspend</Button>}</div></div>)}</div>}
-      </Card>
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card title="Onboarding documents to review">
-          <Table rows={docQueue || []} empty="No documents waiting." cols={[
-            { key: 'o', label: 'Merchant', render: (d) => <button className="underline" onClick={() => run(() => openOrg(d.organizationId))}>{d.organizationName}</button> },
-            { key: 't', label: 'Type', render: (d) => d.docType.replace(/_/g, ' ').toLowerCase() },
-            { key: 'f', label: 'File', render: (d) => <button className="underline" onClick={() => run(() => downloadFile(`/documents/${d.id}/file`, d.fileName))}>{d.fileName}</button> },
-            { key: 'a', label: '', render: (d) => <div className="flex gap-1"><Button size="sm" onClick={() => run(async () => { await api.post(`/documents/${d.id}/review`, { status: 'APPROVED' }); reloadDocs(); })}>Approve</Button><Button size="sm" variant="ghost" onClick={() => { const note = prompt('Reason shown to the merchant'); if (note) run(async () => { await api.post(`/documents/${d.id}/review`, { status: 'REJECTED', note }); reloadDocs(); }); }}>Reject</Button></div> },
-          ]} />
-        </Card>
-        <Card title="Delivery option requests">
-          <Table rows={fleetReqs || []} empty="No pending requests." cols={[
-            { key: 'l', label: 'Location', render: (r) => <span>{r.name} <span className="text-xs text-ink-500">{r.organizationName} · {r.city}</span></span> },
-            { key: 'c', label: 'Change', render: (r) => <span>{r.deliveryFleet.toLowerCase()} → <b>{r.requested.toLowerCase()}</b>{r.note && <span className="block text-xs text-ink-500">{r.note}</span>}</span> },
-            { key: 'a', label: '', render: (r) => <div className="flex gap-1"><Button size="sm" onClick={() => run(async () => { await api.post(`/locations/${r.id}/delivery-fleet-request/review`, { approve: true }); reloadFleet(); })}>Approve</Button><Button size="sm" variant="ghost" onClick={() => run(async () => { await api.post(`/locations/${r.id}/delivery-fleet-request/review`, { approve: false }); reloadFleet(); })}>Decline</Button></div> },
-          ]} />
-        </Card>
-        <Card title="Provision tenant"><div className="space-y-2"><Input label="Name" value={t.name} onChange={(e) => setT({ ...t, name: e.target.value })} /><Input label="Owner email" value={t.ownerEmail} onChange={(e) => setT({ ...t, ownerEmail: e.target.value })} /><Select label="Kind" value={t.kind} onChange={(e) => setT({ ...t, kind: e.target.value })}>{['MERCHANT', 'CORPORATE', 'CAMPUS', 'PARTNER', 'CREATOR'].map((k) => <option key={k}>{k}</option>)}</Select><Button onClick={() => run(async () => { await api.post('/admin/tenants', t); setT({ name: '', ownerEmail: '', kind: 'MERCHANT' }); reload(); })}>Provision</Button></div></Card>
-        <Card title="Commercial: assign contract"><div className="space-y-2"><Select label="Organization" value={contract.orgId} onChange={(e) => setContract({ ...contract, orgId: e.target.value })}><option value="">Choose…</option>{tenants?.map((r) => <option key={r.org.id} value={r.org.id}>{r.org.name}</option>)}</Select><Select label="Plan" value={contract.planCode} onChange={(e) => setContract({ ...contract, planCode: e.target.value })}>{PRODUCT_LINES.map((l) => <optgroup key={l.key} label={l.label}>{plans?.filter((p) => p.productLine === l.key).map((p) => <option key={p.code} value={p.code}>{p.name} · {planPrice(p)}</option>)}</optgroup>)}</Select>{chosen && <div className="rounded-lg bg-ink-50 p-2"><div className="text-xs font-semibold">{chosen.name} v{chosen.version} · {planPrice(chosen)}</div><FeeList fees={chosen.fees} className="text-xs" /></div>}<Button disabled={!contract.orgId} onClick={() => run(async () => { await api.post(`/organizations/${contract.orgId}/contracts`, { planCode: contract.planCode, locationIds: [], sign: false }); alert('Order Form sent. The merchant signs it from Onboarding in their portal.'); })}>Create versioned agreement</Button><p className="text-xs text-ink-500">Creates a new Order Form version bound to all locations (the previous version ends at the effective date). The merchant signs it in their portal; verification waits for that signature.</p></div></Card>
-      </div>
+      <SectionTitle title="Executive dashboard" hint={ex ? `${when(ex.window.from)} – now · ${ex.locations} locations · compared with the previous period` : undefined} />
+      <FilterBar f={f} setF={setF} />
+      {!c ? <Spinner /> : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiTile label="Orders" value={c.orders.toLocaleString()} cur={c.orders} prev={p?.orders} href={drill('')} hint={`${c.completed} completed`} />
+            <KpiTile label="Gross sales" value={money(c.grossSalesCents)} cur={c.grossSalesCents} prev={p?.grossSalesCents} href={drill('')} hint="incl. tax, fees, tips" />
+            <KpiTile label="Average order value" value={money(c.aovCents)} cur={c.aovCents} prev={p?.aovCents} />
+            <KpiTile label="Refunds" value={money(c.refundsCents)} cur={c.refundsCents} prev={p?.refundsCents} invert href={drill('&bucket=refunded')} hint={`${c.refundCount} refunds`} />
+            <KpiTile label="Cancellations & rejections" value={pct(c.cancellationRate)} cur={c.cancellationRate} prev={p?.cancellationRate} invert href={drill('&bucket=canceled')} hint={`${c.canceled} canceled · ${c.rejected} rejected`} />
+            <KpiTile label="Gross food sales" value={money(c.foodSalesCents)} cur={c.foodSalesCents} prev={p?.foodSalesCents} hint={`after ${money(c.discountsCents)} discounts`} />
+            <KpiTile label="Platform revenue" value={money(c.platformRevenueCents)} cur={c.platformRevenueCents} prev={p?.platformRevenueCents} hint={`expenses ${money(c.platformExpenseCents)}`} />
+            <KpiTile label="Merchant amounts payable" value={money(c.merchantPayableCents)} cur={c.merchantPayableCents} prev={p?.merchantPayableCents} hint="owed to sellers (ledger)" />
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+            <Card title="Gross sales per day"><TrendBars data={ex!.trend.map((t) => ({ day: t.day, value: t.grossCents }))} label={(v) => money(v)} /></Card>
+            <Card title="Platform revenue by stream"><BarList rows={Object.entries(c.revenueByStream).map(([k, v]) => ({ key: k, label: k.toLowerCase().replace(/_/g, ' '), v }))} value={(r: { v: number }) => r.v} fmt={money} /></Card>
+          </div>
+          <Card title="Performance">
+            <Tabs tabs={[{ id: 'location', label: 'Location' }, { id: 'merchant', label: 'Merchant' }, { id: 'brand', label: 'Brand' }, { id: 'region', label: 'Region' }, { id: 'channel', label: 'Channel' }]} active={dim} onChange={setDim} />
+            <div className="mt-3 grid gap-4 lg:grid-cols-2">
+              <BarList rows={rows || []} value={(r: Row) => r.salesCents} fmt={money} href={(r: Row) => drill(r.key && r.key !== 'none' ? `&${dimParam[dim]}=${r.key}` : '')} />
+              <Table rows={rows || []} cols={[{ key: 'l', label: dim[0].toUpperCase() + dim.slice(1), render: (r) => r.label }, { key: 'o', label: 'Orders', render: (r) => r.orders }, { key: 's', label: 'Sales', render: (r) => money(r.salesCents) }, { key: 'a', label: 'AOV', render: (r) => money(r.aovCents) }, { key: 'c', label: 'Canceled', render: (r) => r.canceled }]} />
+            </div>
+          </Card>
+          {cm && (
+            <Card title="Contribution margin per order">
+              <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
+                {([['Revenue', 'revenueCents'], ['Food', 'foodCents'], ['Labor', 'laborCents'], ['Delivery', 'deliveryCents'], ['Processing', 'processingCents'], ['Promotions', 'promotionsCents'], ['Contribution', 'contributionCents']] as const).map(([l, k]) => <div key={k} className={`rounded-xl p-3 ${k === 'contributionCents' ? 'bg-brand-50' : 'bg-ink-50'}`}><div className="text-xs text-ink-500">{l}</div><div className="font-semibold tabular-nums">{k !== 'revenueCents' && k !== 'contributionCents' ? '−' : ''}{money(cm.average[k])}</div></div>)}
+              </div>
+              <p className="mt-2 text-xs text-ink-500">Average of {cm.orders} completed orders · margin {pct(cm.marginPct)} · {cm.negative} orders below zero · platform contribution {money(cm.average.platformContributionCents)}/order from the ledger. {cm.note} Labor at {money(cm.laborRateCentsPerHour)}/h.</p>
+              {cm.worst.length > 0 && <div className="mt-3"><div className="mb-1 text-xs font-semibold text-ink-500">Lowest-margin orders</div><Table rows={cm.worst.slice(0, 8)} cols={[{ key: 'n', label: 'Order', render: (r) => <a className="underline" href={`/admin/orders/${r.id}`}>{r.number}</a> }, { key: 'l', label: 'Location', render: (r) => r.locationName }, { key: 'r', label: 'Revenue', render: (r) => money(r.revenueCents) }, { key: 'c', label: 'Contribution', render: (r) => money(r.contributionCents) }, { key: 'm', label: 'Margin', render: (r) => pct(r.marginPct) }]} /></div>}
+            </Card>
+          )}
+        </>
+      )}
     </div>
   );
 }

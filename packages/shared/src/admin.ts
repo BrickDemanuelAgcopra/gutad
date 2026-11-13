@@ -103,7 +103,11 @@ export interface AdminModule {
  * filtered by the signed-in person's permissions.
  */
 export const ADMIN_MODULES: AdminModule[] = [
-  { key: 'overview', group: 'Overview', label: 'Platform overview', description: 'Tenants, verification queues and headline numbers', permission: 'merchants.read', web: '/admin', mobile: '/ops' },
+  { key: 'executive', group: 'Overview', label: 'Executive dashboard', description: 'Sales, revenue, payables, margin and performance by region, merchant, brand and channel', permission: 'overview.read', web: '/admin', mobile: '/ops/executive' },
+  { key: 'live', group: 'Operations', label: 'Live operations', description: 'Orders by stage, overdue orders, kitchen capacity, couriers, stockouts and outages', permission: 'ops.read', web: '/admin/live', mobile: '/ops/live' },
+  { key: 'alerts', group: 'Operations', label: 'Alerts', description: 'Owned alerts with escalation deadlines and history', permission: 'ops.read', web: '/admin/alerts', mobile: '/ops/alerts' },
+  { key: 'orders', group: 'Operations', label: 'Orders', description: 'Search every order; timeline, payments, kitchen, delivery, notes and remedies', permission: 'orders.read', web: '/admin/orders', mobile: '/ops/orders' },
+  { key: 'merchants', group: 'Merchants', label: 'Merchants & verification', description: 'Tenants, verification queues, documents and contracts', permission: 'merchants.read', web: '/admin/merchants' },
   { key: 'approvals', group: 'Overview', label: 'Approvals', description: 'Refunds, bank changes, payouts and settings waiting for a decision', permission: 'approvals.decide', web: '/admin/approvals', mobile: '/ops/approvals' },
   { key: 'plans', group: 'Merchants', label: 'Plans & pricing', description: 'Plan catalog, add-ons, subscriptions, promotions, revenue', permission: 'finance.read', web: '/admin/plans' },
   { key: 'finance', group: 'Finance', label: 'Settlement', description: 'Close periods, payouts, reconciliation', permission: 'finance.read', web: '/admin/finance' },

@@ -23,26 +23,9 @@ Phase A shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase B: executive dashboard, live ops, central orders
 
-### 1. Executive dashboard & live operations
-- [ ] 1.1 [improve] Orders, sales, refunds, cancellations and AOV, with period comparison · API W M
-- [ ] 1.2 [improve] Separate gross food sales, platform revenue (by stream) and merchant amounts payable, from the ledger · API W M
-- [ ] 1.3 [new] Breakdown by region, location, brand, merchant and ordering channel · API W M
-- [ ] 1.4 [improve] Live board, platform-wide: awaiting acceptance, cooking, ready, awaiting courier, overdue (filterable by region and location) · API W M
-- [ ] 1.5 [new] Capacity panel: kitchen load against throughput, available couriers, stockouts, paused/offline locations and devices · API W M
-- [ ] 1.6 [new] Contribution margin per order after food, labor, delivery, processing and promotions (averaged, and per order in drill-down) · API W M
-- [ ] 1.7 [new] `ops_alerts` with owner, severity, escalation deadline, ack/assign/resolve and history; worker detectors; escalation job · API W M
-- [ ] 1.8 [new] Drill-down from each metric to the filtered order list or ledger lines · API W M
-
-### 12. Central order management
-- [ ] 12.1 [new] Platform-wide order search by customer, merchant, location, courier, transaction (payment or provider id), order number and time · API W M
-- [ ] 12.2 [improve] Full order timeline (order events, kitchen tickets, packing, payments, refunds, delivery events, notes, notifications) in admin · API W M
-- [ ] 12.3 [improve] Order detail shows the customer order, kitchen tasks, payment records and delivery job as separate panels · W M
-- [ ] 12.4 [improve] Admin actions: accept, mark ready, hand off, complete and cancel with reason and cost owner (audited) · API W M
-- [ ] 12.5 [improve] Routing view showing which merchant, kitchen and stations got each line; re-route a stuck ticket · API W
-- [ ] 12.6 [improve] Partial fulfillment: set `PARTIALLY_FULFILLED` when lines are credited or unavailable; scheduled and rejected order filters · API W M
-- [ ] 12.7 [improve] Controlled remake, refund and replacement from the order page, going through approval thresholds · API W M
-- [ ] 12.8 [new] Detectors: stuck ACCEPTED/READY orders, duplicate events, order vs delivery vs payment status conflicts → alerts · API W M
-- [ ] 12.9 [new] Order notes (internal or customer-visible) and a customer message log with templates · API W M
+Phase B shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 1.6-L [improve] Contribution: use actual labor hours (`labor_entries`, then 23.3 attendance) instead of recipe labor minutes × the hourly rate, wherever a kitchen records them · API W M
+- [ ] 1.V [verify] Look at the dashboard, live board and order pages in a browser and on a device. Only the build, HTTP checks and smoke have been run so far · W M
 
 ---
 
