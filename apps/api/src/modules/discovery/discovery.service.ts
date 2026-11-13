@@ -4,6 +4,7 @@ import { DB, Db } from '../../db/db.module';
 import { brands, deliveryZones, experiences, locations, menus, openingHours, publications, shifts, sponsoredPlacements } from '../../db/schema';
 import { RedisService } from '../../core/redis.service';
 import { haversineKm, isWithin, localParts, pointInPolygon } from '../../common/utils';
+import { can, EntitlementsService, type Entitlements } from '../entitlements/entitlements.service';
 
 export interface SearchParams {
   q?: string;
@@ -20,7 +21,13 @@ export interface SearchParams {
 
 @Injectable()
 export class DiscoveryService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService, private readonly entitlements: EntitlementsService) {}
+
+  /** Customers only see services the restaurant's plan includes (and the restaurant has switched on). */
+  private masked<T extends { acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; acceptsCatering: boolean }>(s: T, e: Entitlements | undefined): T {
+    if (!e) return s;
+    return { ...s, acceptsPickup: s.acceptsPickup && can(e, 'ordering'), acceptsDelivery: s.acceptsDelivery && can(e, 'ordering') && can(e, 'delivery'), acceptsReservations: s.acceptsReservations && can(e, 'reservations'), acceptsEvents: s.acceptsEvents && can(e, 'private_events'), acceptsCatering: s.acceptsCatering && can(e, 'group_orders') };
+  }
 
   async search(p: SearchParams) {
     const page = Math.max(1, p.page || 1);
@@ -45,7 +52,10 @@ export class DiscoveryService {
       const dLng = r / (111 * Math.cos((p.lat * Math.PI) / 180));
       conds.push(gte(locations.lat, p.lat - dLat), lte(locations.lat, p.lat + dLat), gte(locations.lng, p.lng - dLng), lte(locations.lng, p.lng + dLng));
     }
-    const rows = await this.db.select().from(locations).where(and(...conds)).limit(500);
+    const found = await this.db.select().from(locations).where(and(...conds)).limit(500);
+    const ents = await this.entitlements.forLocations(found.map((r) => r.id));
+    // only plans with a marketplace listing appear in Gutad search
+    const rows = found.filter((r) => { const e = ents.get(r.id); return !e || can(e, 'marketplace_listing'); });
     const ids = rows.map((r) => r.id);
     const hours = ids.length ? await this.db.select().from(openingHours).where(inArray(openingHours.locationId, ids)) : [];
     const now = new Date();
@@ -57,19 +67,26 @@ export class DiscoveryService {
       const isOpenNow = !loc.isPaused && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
       const distanceKm = p.lat !== undefined && p.lng !== undefined && loc.lat !== null && loc.lng !== null ? haversineKm(p.lat, p.lng, loc.lat, loc.lng) : null;
       const sp = sponsored.find((s) => s.locationId === loc.id);
-      return { ...this.summary(loc), isOpenNow, distanceKm, sponsored: !!sp, _bid: sp?.bidCents || 0, _spId: sp?.id };
+      const e = ents.get(loc.id);
+      return { ...this.masked(this.summary(loc), e), isOpenNow, distanceKm, sponsored: !!sp, _bid: sp?.bidCents || 0, _spId: sp?.id, _boost: e && can(e, 'marketplace_boost') && !e.unrestricted ? 1 : 0 };
     });
+    // a requested service must survive plan masking
+    if (p.service === 'pickup') items = items.filter((i) => i.acceptsPickup);
+    if (p.service === 'delivery') items = items.filter((i) => i.acceptsDelivery);
+    if (p.service === 'reservations') items = items.filter((i) => i.acceptsReservations);
+    if (p.service === 'events') items = items.filter((i) => i.acceptsEvents);
+    if (p.service === 'catering') items = items.filter((i) => i.acceptsCatering);
     if (p.radiusKm && p.lat !== undefined) items = items.filter((i) => i.distanceKm === null || i.distanceKm <= p.radiusKm!);
     if (p.openNow) items = items.filter((i) => i.isOpenNow);
     items = await this.expandFoodHalls(items, p.q);
-    // ranking: sponsored first (by bid), then open, then rating, then distance
-    items.sort((a, b) => b._bid - a._bid || Number(b.isOpenNow) - Number(a.isOpenNow) || (b.rating || 0) - (a.rating || 0) || (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
+    // ranking: sponsored first (by bid), then plans with a marketplace boost, then open, then rating, then distance
+    items.sort((a, b) => b._bid - a._bid || b._boost - a._boost || Number(b.isOpenNow) - Number(a.isOpenNow) || (b.rating || 0) - (a.rating || 0) || (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
     const total = items.length;
     const pageItems = items.slice((page - 1) * pageSize, page * pageSize);
     // count impressions for sponsored placements shown (best-effort)
     const shownSp = pageItems.filter((i) => i._spId).map((i) => i._spId!);
     if (shownSp.length) void this.db.update(sponsoredPlacements).set({ impressions: sql`${sponsoredPlacements.impressions} + 1` }).where(inArray(sponsoredPlacements.id, shownSp));
-    return { items: pageItems.map(({ _bid, _spId, ...rest }) => rest), total, page, pageSize };
+    return { items: pageItems.map(({ _bid, _spId, _boost, ...rest }) => rest), total, page, pageSize };
   }
 
   /**
@@ -166,14 +183,15 @@ export class DiscoveryService {
     const lp = localParts(new Date(), loc.timezone);
     const todays = hours.filter((h) => h.dayOfWeek === lp.dayOfWeek);
     const isOpenNow = !loc.isPaused && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
+    const e = await this.entitlements.forLocation(loc.id);
     const result = {
-      ...this.summary(loc),
+      ...this.masked(this.summary(loc), e),
       isOpenNow,
       hours,
       pickupTimes: this.eligibleTimes(loc, hours, 'ORDERING'),
-      deliveryTimes: loc.acceptsDelivery ? this.eligibleTimes(loc, hours, 'ORDERING') : [],
-      diningShifts: shiftRows.map((s) => ({ id: s.id, name: s.name, daysOfWeek: s.daysOfWeek, startTime: s.startTime, endTime: s.endTime, maxPartySize: s.maxPartySize })),
-      experiences: exps.map((e) => ({ id: e.id, name: e.name, description: e.description, pricingMode: e.pricingMode, priceCents: e.priceCents, imageUrl: e.imageUrl })),
+      deliveryTimes: loc.acceptsDelivery && can(e, 'delivery') ? this.eligibleTimes(loc, hours, 'ORDERING') : [],
+      diningShifts: (can(e, 'reservations') ? shiftRows : []).map((s) => ({ id: s.id, name: s.name, daysOfWeek: s.daysOfWeek, startTime: s.startTime, endTime: s.endTime, maxPartySize: s.maxPartySize })),
+      experiences: (can(e, 'experiences') ? exps : []).map((e) => ({ id: e.id, name: e.name, description: e.description, pricingMode: e.pricingMode, priceCents: e.priceCents, imageUrl: e.imageUrl })),
       partnerLinks: pubs.filter((p) => p.kind === 'PARTNER_LINK').map((p) => ({ id: p.id, partnerName: p.partnerName })),
     };
     await this.redis.setJson(`loc:${slugOrId}`, result, 30);

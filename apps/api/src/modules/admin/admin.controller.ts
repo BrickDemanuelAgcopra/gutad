@@ -5,7 +5,7 @@ import { CurrentUser, JwtPayload, Public, RoleName } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { AdminService } from './admin.service';
 
-const TenantDto = z.object({ name: z.string(), kind: z.enum(['MERCHANT', 'CORPORATE', 'CAMPUS', 'PARTNER', 'CREATOR']).optional(), ownerEmail: z.string().email(), featureFlags: z.record(z.boolean()).optional(), billingEmail: z.string().email().optional() });
+const TenantDto = z.object({ name: z.string(), kind: z.enum(['MERCHANT', 'CORPORATE', 'CAMPUS', 'PARTNER', 'CREATOR']).optional(), ownerEmail: z.string().email(), featureFlags: z.record(z.union([z.boolean(), z.number().int().min(0), z.null()])).optional(), billingEmail: z.string().email().optional() });
 const RoleDto = z.object({ email: z.string().email(), role: z.enum(['PLATFORM_ADMIN', 'SUPPORT', 'FINANCE', 'DISPATCHER']), grant: z.boolean() });
 const SettingDto = z.object({ key: z.string(), value: z.unknown(), approvedByEmail: z.string().email().optional() });
 
@@ -17,7 +17,7 @@ export class AdminController {
   @Public() @Get('health') health() { return this.svc.health(); }
   @ApiBearerAuth() @Get('admin/tenants') tenants(@CurrentUser() u: JwtPayload) { return this.svc.listTenants(u); }
   @ApiBearerAuth() @Post('admin/tenants') provision(@CurrentUser() u: JwtPayload, @Body(zod(TenantDto)) b: z.infer<typeof TenantDto>) { return this.svc.provisionTenant(u, b); }
-  @ApiBearerAuth() @Patch('admin/tenants/:id/features') features(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.record(z.boolean()))) b: Record<string, boolean>) { return this.svc.setFeatureFlags(u, id, b); }
+  @ApiBearerAuth() @Patch('admin/tenants/:id/features') features(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.record(z.union([z.boolean(), z.number().int().min(0), z.null()])))) b: Record<string, boolean | number | null>) { return this.svc.setFeatureFlags(u, id, b); }
   @ApiBearerAuth() @Post('admin/tenants/:id/offboard') offboard(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.offboard(u, id); }
   @ApiBearerAuth() @Post('admin/roles') roles(@CurrentUser() u: JwtPayload, @Body(zod(RoleDto)) b: z.infer<typeof RoleDto>) { return this.svc.grantPlatformRole(u, b.email, b.role as RoleName, b.grant); }
   @ApiBearerAuth() @Patch('admin/memberships/:id/approval-limit') limit(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ approvalLimitCents: z.number().int().min(0) }))) b: { approvalLimitCents: number }) { return this.svc.setApprovalLimit(u, id, b.approvalLimitCents); }

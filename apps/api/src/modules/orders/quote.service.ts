@@ -7,6 +7,7 @@ import { ContractsService } from '../contracts/contracts.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { GrowthService } from '../growth/growth.service';
 import { KitchenService } from '../kitchen/kitchen.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 import { PaymentsService } from '../payments/payments.service';
 import { addMinutes, bps, isWithin, localParts, zonedTimeToUtc } from '../../common/utils';
 import type { Address } from '../delivery/providers/delivery-provider';
@@ -56,6 +57,7 @@ export class QuoteService {
     private readonly growth: GrowthService,
     private readonly kitchen: KitchenService,
     private readonly payments: PaymentsService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   async quote(input: QuoteInput, tx: DbOrTx = this.db) {
@@ -63,6 +65,9 @@ export class QuoteService {
     if (!loc) throw new NotFoundException('Restaurant not found');
     const warnings: string[] = [];
     if (!['LIVE', 'VERIFIED'].includes(loc.status)) throw new BadRequestException('Restaurant is not accepting orders');
+    // plan gating: ordering for every order, delivery on top for delivery orders
+    await this.entitlements.assertLocation(loc.id, 'ordering', 'customer', tx);
+    if (input.fulfillmentType === 'DELIVERY') await this.entitlements.assertLocation(loc.id, 'delivery', 'customer', tx);
     if (loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new BadRequestException(loc.pausedReason || 'Restaurant is temporarily paused');
     if (input.fulfillmentType === 'PICKUP' && !loc.acceptsPickup) throw new BadRequestException('Pickup not offered');
     if (input.fulfillmentType === 'DELIVERY' && !loc.acceptsDelivery) throw new BadRequestException('Delivery not offered');

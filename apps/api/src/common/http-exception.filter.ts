@@ -12,15 +12,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] = 'Internal server error';
     let error = 'InternalServerError';
+    let extra: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const body = exception.getResponse();
       if (typeof body === 'string') message = body;
       else if (body && typeof body === 'object') {
-        const b = body as { message?: string | string[]; error?: string };
+        const b = body as { message?: string | string[]; error?: string; code?: string; feature?: string; plan?: string | null; limit?: number; used?: number };
         message = b.message ?? exception.message;
         error = b.error ?? exception.name;
+        // machine-readable details for plan gating (FEATURE_NOT_IN_PLAN / PLAN_LIMIT_REACHED)
+        if (b.code) extra = { code: b.code, feature: b.feature, plan: b.plan, limit: b.limit, used: b.used };
       }
     } else if (exception && typeof exception === 'object' && 'code' in exception) {
       // Postgres unique violation → 409 rather than 500
@@ -41,6 +44,6 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (status >= 500) this.log.error(`${req.method} ${req.url} → ${status}`, (exception as Error)?.stack);
-    res.status(status).json({ statusCode: status, message, error, path: req.url, timestamp: new Date().toISOString() });
+    res.status(status).json({ statusCode: status, message, error, ...extra, path: req.url, timestamp: new Date().toISOString() });
   }
 }

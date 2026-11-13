@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
+import { RequiresFeature } from '../entitlements/requires-feature';
 import { CurrentUser, JwtPayload, Public } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { ReservationsService } from './reservations.service';
@@ -19,8 +20,8 @@ const WaitlistDto = z.object({ guestName: z.string(), guestPhone: z.string().opt
 export class ReservationsController {
   constructor(private readonly svc: ReservationsService) {}
 
-  @Public() @Get('public/locations/:id/availability') availability(@Param('id') id: string, @Query('date') date: string, @Query('partySize') party: string) { return this.svc.availability(id, date, Number(party || 2)); }
-  @Public() @Post('reservations') book(@CurrentUser() u: JwtPayload | undefined, @Body(zod(BookDto)) b: z.infer<typeof BookDto>, @Headers('idempotency-key') key?: string) { return this.svc.book(u ?? null, { ...b, idempotencyKey: key }); }
+  @Public() @RequiresFeature('reservations', 'param:id', 'customer') @Get('public/locations/:id/availability') availability(@Param('id') id: string, @Query('date') date: string, @Query('partySize') party: string) { return this.svc.availability(id, date, Number(party || 2)); }
+  @Public() @RequiresFeature('reservations', 'body:locationId', 'customer') @Post('reservations') book(@CurrentUser() u: JwtPayload | undefined, @Body(zod(BookDto)) b: z.infer<typeof BookDto>, @Headers('idempotency-key') key?: string) { return this.svc.book(u ?? null, { ...b, idempotencyKey: key }); }
   @Public() @Post('reservations/:id/confirm') confirm(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(z.object({ paymentMethodId: z.string() }))) b: { paymentMethodId: string }) { return this.svc.confirmHold(u ?? null, id, b.paymentMethodId); }
   @Public() @Patch('reservations/:id') modify(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(ModifyDto)) b: z.infer<typeof ModifyDto>) { return this.svc.modify(u ?? null, id, b); }
   @Public() @Post('reservations/:id/cancel') cancel(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(z.object({ reason: z.string().optional() }))) b: { reason?: string }) { return this.svc.cancel(u ?? null, id, b.reason); }
@@ -30,15 +31,15 @@ export class ReservationsController {
 
   @ApiBearerAuth() @Post('locations/:id/floor') floor(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(FloorDto)) b: z.infer<typeof FloorDto>) { return this.svc.setupFloor(u, id, b); }
   @ApiBearerAuth() @Get('locations/:id/floor') getFloor(@Param('id') id: string) { return this.svc.floor(id); }
-  @ApiBearerAuth() @Post('locations/:id/shifts') shift(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ShiftDto)) b: z.infer<typeof ShiftDto>) { return this.svc.upsertShift(u, id, b); }
+  @ApiBearerAuth() @RequiresFeature('reservations', 'param:id') @Post('locations/:id/shifts') shift(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ShiftDto)) b: z.infer<typeof ShiftDto>) { return this.svc.upsertShift(u, id, b); }
   @ApiBearerAuth() @Patch('locations/:id/reservation-policy') policy(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(PolicyDto)) b: z.infer<typeof PolicyDto>) { return this.svc.setPolicy(u, id, b); }
   @ApiBearerAuth() @Post('locations/:id/blackouts') blackout(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ date: z.string(), reason: z.string().optional() }))) b: { date: string; reason?: string }) { return this.svc.addBlackout(u, id, b.date, b.reason); }
 
-  @ApiBearerAuth() @Get('locations/:id/host') host(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Query('date') date?: string) { return this.svc.hostBoard(u, id, date); }
-  @ApiBearerAuth() @Post('locations/:id/host/book') hostBook(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(HostBookDto)) b: z.infer<typeof HostBookDto>) { return this.svc.hostBook(u, id, b); }
+  @ApiBearerAuth() @RequiresFeature('floor_plan', 'param:id') @Get('locations/:id/host') host(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Query('date') date?: string) { return this.svc.hostBoard(u, id, date); }
+  @ApiBearerAuth() @RequiresFeature('floor_plan', 'param:id') @Post('locations/:id/host/book') hostBook(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(HostBookDto)) b: z.infer<typeof HostBookDto>) { return this.svc.hostBook(u, id, b); }
   @ApiBearerAuth() @Post('reservations/:id/host') hostAction(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(HostActionDto)) b: z.infer<typeof HostActionDto>) { const { action, ...data } = b; return this.svc.hostTransition(u, id, action, data); }
 
-  @Public() @Post('public/locations/:id/waitlist') join(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(WaitlistDto)) b: z.infer<typeof WaitlistDto>) { return this.svc.joinWaitlist(u ?? null, id, b); }
+  @Public() @RequiresFeature('waitlist', 'param:id', 'customer') @Post('public/locations/:id/waitlist') join(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(WaitlistDto)) b: z.infer<typeof WaitlistDto>) { return this.svc.joinWaitlist(u ?? null, id, b); }
   @Public() @Get('public/waitlist/:id') wlStatus(@Param('id') id: string) { return this.svc.waitlistStatus(id); }
   @Public() @Post('public/waitlist/:id/leave') leave(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string) { return this.svc.leaveWaitlist(u ?? null, id); }
   @ApiBearerAuth() @Post('waitlist/:id/notify') notify(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.notifyWaitlist(u, id); }

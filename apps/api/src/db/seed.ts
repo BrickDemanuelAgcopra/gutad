@@ -62,7 +62,7 @@ async function main() {
   const [driverUser] = await db.insert(s.users).values({ email: 'driver@demo.gutad.io', passwordHash: await argon2.hash('driver12345'), name: 'Drew Driver', roles: ['CUSTOMER', 'DRIVER'] }).returning();
   await db.insert(s.drivers).values({ userId: driverUser.id, status: 'APPROVED', vehicle: 'Bike', licenseVerified: true, isAvailable: true, lastLat: 40.7306, lastLng: -73.9866, lastSeenAt: new Date(), payoutAccountId: 'mock_acct_driver' });
 
-  const [org] = await db.insert(s.organizations).values({ name: 'Demo Bistro Group', slug: 'demo-bistro', kind: 'MERCHANT', billingEmail: owner.email, status: 'LIVE', featureFlags: { ordering: true, reservations: true, delivery: true, events: true, sharedKitchen: true, programs: true } }).returning();
+  const [org] = await db.insert(s.organizations).values({ name: 'Demo Bistro Group', slug: 'demo-bistro', kind: 'MERCHANT', billingEmail: owner.email, status: 'LIVE', featureFlags: {} }).returning();
   await db.insert(s.orgMemberships).values([
     { userId: owner.id, organizationId: org.id, role: 'MERCHANT_OWNER', acceptedAt: new Date(), approvalLimitCents: 10_000 },
     { userId: host.id, organizationId: org.id, role: 'HOST', acceptedAt: new Date() },

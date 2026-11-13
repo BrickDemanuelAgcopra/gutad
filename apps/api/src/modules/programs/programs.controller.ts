@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
+import { RequiresFeature } from '../entitlements/requires-feature';
 import { CurrentUser, JwtPayload, Public } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { GroupOrdersService } from './group-orders.service';
@@ -23,7 +24,7 @@ export class ProgramsController {
 
   // 18
   @ApiBearerAuth() @Post('organizations/:id/budgets') budget(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ name: z.string(), perPersonCents: z.number().int(), periodCents: z.number().int().optional() }))) b: { name: string; perPersonCents: number; periodCents?: number }) { return this.groups.createBudget(u, id, b); }
-  @ApiBearerAuth() @Post('group-orders') createGroup(@CurrentUser() u: JwtPayload, @Body(zod(GroupDto)) b: z.infer<typeof GroupDto>) { return this.groups.create(u, b); }
+  @ApiBearerAuth() @RequiresFeature('group_orders', 'body:locationId', 'customer') @Post('group-orders') createGroup(@CurrentUser() u: JwtPayload, @Body(zod(GroupDto)) b: z.infer<typeof GroupDto>) { return this.groups.create(u, b); }
   @ApiBearerAuth() @Get('me/group-orders') myGroups(@CurrentUser() u: JwtPayload) { return this.groups.myGroupOrders(u); }
   @Public() @Get('public/group-orders/:code') getGroup(@Param('code') code: string) { return this.groups.get(code); }
   @Public() @Post('public/group-orders/:code/choices') choose(@CurrentUser() u: JwtPayload | undefined, @Param('code') code: string, @Body(zod(ChoiceDto)) b: z.infer<typeof ChoiceDto>) { return this.groups.submitChoice(u ?? null, code, b); }

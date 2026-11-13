@@ -9,6 +9,8 @@ import { IdempotencyInterceptor } from './common/idempotency.interceptor';
 import { AuthModule } from './modules/auth/auth.module';
 import { MerchantsModule } from './modules/merchants/merchants.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
+import { EntitlementsModule } from './modules/entitlements/entitlements.module';
+import { FeatureGuard } from './modules/entitlements/requires-feature';
 import { DiscoveryModule } from './modules/discovery/discovery.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
@@ -36,6 +38,7 @@ export const DOMAIN_MODULES = [
   AuthModule,
   MerchantsModule,
   OnboardingModule,
+  EntitlementsModule,
   DiscoveryModule,
   CatalogModule,
   ContractsModule,
@@ -62,6 +65,7 @@ export const DOMAIN_MODULES = [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: FeatureGuard },
     { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
   ],
 })

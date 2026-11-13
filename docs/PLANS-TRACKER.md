@@ -32,15 +32,17 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 
 ## Phase 2: enforcement
 
-- [ ] `EntitlementsService.can(locationId, feature)` merging plan features, add-ons and overrides
-- [ ] `@RequiresFeature()` API guard on reservations, waitlist, floor plan, events, experiences, shared kitchen, group orders, meal kits, ads, branded site
-- [ ] Location and team-member limits checked on create
-- [ ] Customer pages hide services the plan doesn't include
-- [ ] Merchant navigation shows locked features with an upgrade prompt
-- [ ] `/me/entitlements` endpoint for web and mobile
-- [ ] Remove or migrate the unused organization feature flags
-- [ ] Marketplace visibility boost for plans with `marketplace_boost`
-- [ ] Smoke tests: features not in the plan return 403; limits enforced
+- [x] `EntitlementsService` merges the location's contract features with admin overrides; contracts that predate the catalog are grandfathered (all features); no contract → default plan (setting `plans.default_plan_code`, DIRECT_FREE). Add-ons join this in Phase 3
+- [x] `@RequiresFeature()` global guard + service checks: ordering & delivery (quotes), reservations (availability, booking, shifts), floor plan (host stand), waitlist, experiences, private events, group orders, POS integration, CSV export (advanced analytics), ads (sponsored campaigns), branded site and booking widget (publications). Shared kitchens and meal kits are platform programs, not plan features, so they stay ungated
+- [x] Location and team-member limits checked on create (errors carry `code: PLAN_LIMIT_REACHED`)
+- [x] Customer pages hide services the plan doesn't include (search, restaurant page, experiences, dining shifts)
+- [x] Merchant navigation shows locked features (🔒) and an upgrade page; current plan shown in the sidebar
+- [x] `GET /locations/:id/entitlements` for web and mobile (features, limits with usage, feature names)
+- [x] Organization feature flags become admin overrides (true/false/number, null removes); old defaults cleared by migration 0003; Admin → Tenants → Overrides
+- [x] Marketplace visibility boost for plans with `marketplace_boost` (ranked after sponsored placements)
+- [x] Smoke tests: features not in the plan return 403; limits enforced; overrides; search masking (11 new checks)
+
+- [~] Deploy Phase 2 to gutad.io and verify
 
 ## Phase 3: merchant self-serve
 

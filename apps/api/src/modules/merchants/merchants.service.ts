@@ -19,12 +19,13 @@ import { shortCode, slugify, token } from '../../common/utils';
 import { loadConfig } from '../../config/config';
 import { RedisService } from '../../core/redis.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 
 type Fleet = 'MERCHANT' | 'PARTNER' | 'PLATFORM';
 
 @Injectable()
 export class MerchantsService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly onboarding: OnboardingService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly onboarding: OnboardingService, private readonly entitlements: EntitlementsService) {}
 
   // ───── organizations & membership (01/02/30) ─────
 
@@ -69,6 +70,8 @@ export class MerchantsService {
     if (['PLATFORM_ADMIN', 'SUPPORT', 'FINANCE'].includes(input.role)) throw new ForbiddenException('Cannot grant platform roles');
     const email = input.email.toLowerCase();
     let [u] = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
+    const alreadyMember = u ? (await this.db.select({ id: orgMemberships.id }).from(orgMemberships).where(and(eq(orgMemberships.userId, u.id), eq(orgMemberships.organizationId, orgId))).limit(1)).length > 0 : false;
+    if (!alreadyMember && !isPlatformStaff(user)) await this.entitlements.assertLimit(orgId, 'team_members');
     if (!u) [u] = await this.db.insert(users).values({ email, isGuest: true }).returning();
     const [m] = await this.db
       .insert(orgMemberships)
@@ -128,6 +131,7 @@ export class MerchantsService {
       // who delivers is set by Gutad; merchants request a change (see requestDeliveryFleet)
       delete input.deliveryFleet;
       delete input.platformOperated;
+      await this.entitlements.assertLimit(orgId, 'locations');
     }
     return this.db.transaction(async (tx) => {
       const [loc] = await tx
@@ -325,6 +329,8 @@ export class MerchantsService {
   async createPublication(user: JwtPayload, locationId: string, input: { kind: string; channel: 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR' | 'PARTNER'; config?: Record<string, unknown>; partnerName?: string; partnerUrl?: string }) {
     const loc = await this.requireLocation(locationId);
     assertOrgAccess(user, loc.organizationId, locationId, MANAGER_ROLES);
+    if (input.kind === 'BRANDED_SITE') await this.entitlements.assertLocation(locationId, 'branded_site');
+    if (input.kind === 'BOOKING_WIDGET') await this.entitlements.assertLocation(locationId, 'booking_widget');
     const [row] = await this.db
       .insert(publications)
       .values({ locationId, kind: input.kind, channel: input.channel, slug: `${input.kind.toLowerCase()}-${loc.slug}-${shortCode(4).toLowerCase()}`, config: input.config || {}, partnerName: input.partnerName ?? null, partnerUrl: input.partnerUrl ?? null })

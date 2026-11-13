@@ -18,11 +18,11 @@ export class AdminService {
   }
 
   /** Provision a tenant (organization + owner invite + feature entitlements) in one step. */
-  async provisionTenant(user: JwtPayload, input: { name: string; kind?: string; ownerEmail: string; featureFlags?: Record<string, boolean>; billingEmail?: string }) {
+  async provisionTenant(user: JwtPayload, input: { name: string; kind?: string; ownerEmail: string; featureFlags?: Record<string, boolean | number | null>; billingEmail?: string }) {
     this.staff(user);
     return this.db.transaction(async (tx) => {
       const slug = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Math.random().toString(36).slice(2, 6)}`;
-      const [org] = await tx.insert(organizations).values({ name: input.name, slug, kind: input.kind || 'MERCHANT', billingEmail: input.billingEmail || input.ownerEmail, status: 'PROSPECT', featureFlags: input.featureFlags || { ordering: true, reservations: false, delivery: false, events: false, sharedKitchen: false, mealKits: false, programs: false } }).returning();
+      const [org] = await tx.insert(organizations).values({ name: input.name, slug, kind: input.kind || 'MERCHANT', billingEmail: input.billingEmail || input.ownerEmail, status: 'PROSPECT', featureFlags: input.featureFlags || {} }).returning();
       let [owner] = await tx.select().from(users).where(eq(users.email, input.ownerEmail.toLowerCase())).limit(1);
       if (!owner) [owner] = await tx.insert(users).values({ email: input.ownerEmail.toLowerCase(), isGuest: true }).returning();
       await tx.insert(orgMemberships).values({ userId: owner.id, organizationId: org.id, role: 'MERCHANT_OWNER' }).onConflictDoNothing();
@@ -31,11 +31,16 @@ export class AdminService {
     });
   }
 
-  async setFeatureFlags(user: JwtPayload, orgId: string, flags: Record<string, boolean>) {
+  /** Per-organization feature overrides on top of the plan: true/false switches a feature, a number sets a limit, null removes the override. */
+  async setFeatureFlags(user: JwtPayload, orgId: string, flags: Record<string, boolean | number | null>) {
     this.staff(user);
     const [org] = await this.db.select().from(organizations).where(eq(organizations.id, orgId)).limit(1);
     if (!org) throw new NotFoundException();
-    const merged = { ...(org.featureFlags as object), ...flags };
+    const merged: Record<string, unknown> = { ...(org.featureFlags as object) };
+    for (const [k, v] of Object.entries(flags)) {
+      if (v === null) delete merged[k];
+      else merged[k] = v;
+    }
     const [u] = await this.db.update(organizations).set({ featureFlags: merged }).where(eq(organizations.id, orgId)).returning();
     await this.audit.configChange({ organizationId: orgId, key: 'featureFlags', before: org.featureFlags, after: merged, actorId: user.sub, approvedById: user.sub });
     return u;

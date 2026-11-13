@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, Param, Post, Req } from '@nestjs/common
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { z } from 'zod';
+import { RequiresFeature } from '../entitlements/requires-feature';
 import { CurrentUser, JwtPayload, Public } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { IntegrationsService } from './integrations.service';
@@ -19,7 +20,7 @@ export class IntegrationsController {
   @Public() @Post('devices/heartbeat') heartbeat(@Headers('x-device-token') tok: string, @Body() body: Record<string, unknown>) { return this.svc.heartbeat(tok || '', body); }
 
   @ApiBearerAuth() @Get('organizations/:id/integrations') list(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.list(u, id); }
-  @ApiBearerAuth() @Post('organizations/:id/integrations') create(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(CreateDto)) b: z.infer<typeof CreateDto>) { return this.svc.create(u, id, b); }
+  @ApiBearerAuth() @RequiresFeature('pos_integration', 'org-param:id') @Post('organizations/:id/integrations') create(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(CreateDto)) b: z.infer<typeof CreateDto>) { return this.svc.create(u, id, b); }
   @ApiBearerAuth() @Post('integrations/:id/mappings') map(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(MapDto)) b: z.infer<typeof MapDto>) { return this.svc.map(u, id, b.mappings); }
   @ApiBearerAuth() @Get('locations/:id/devices') devices(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.devicesFor(u, id); }
   @ApiBearerAuth() @Post('locations/:id/devices') register(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(DeviceDto)) b: z.infer<typeof DeviceDto>) { return this.svc.registerDevice(u, id, b); }

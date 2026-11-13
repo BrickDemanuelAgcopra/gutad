@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, gt, gte, isNull, lte, or, sql } from 'drizzle-orm';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { campaigns, coupons, guestProfiles, locations, loyaltyEntries, memberSubscriptions, membershipPlans, orders, segments, sponsoredPlacements, users } from '../../db/schema';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
@@ -29,6 +30,7 @@ export class GrowthService {
     private readonly notify: NotifyService,
     private readonly outbox: OutboxService,
     private readonly payments: PaymentsService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   // ───── coupons / promotions ─────
@@ -81,6 +83,10 @@ export class GrowthService {
 
   async createCampaign(user: JwtPayload, orgId: string, input: { name: string; kind: 'EMAIL' | 'SMS' | 'COUPON' | 'SPONSORED' | 'REFERRAL'; budgetCents?: number; segmentId?: string; content?: Record<string, unknown>; startsAt?: Date; endsAt?: Date; funder?: 'MERCHANT' | 'PLATFORM'; sponsored?: { locationId: string; bidCents: number; keyword?: string; city?: string } }) {
     assertOrgAccess(user, orgId, null, MANAGER_ROLES);
+    if (input.kind === 'SPONSORED' || input.sponsored) {
+      if (input.sponsored?.locationId) await this.entitlements.assertLocation(input.sponsored.locationId, 'ads');
+      else await this.entitlements.assertOrg(orgId, 'ads');
+    }
     return this.db.transaction(async (tx) => {
       const [camp] = await tx.insert(campaigns).values({ organizationId: orgId, name: input.name, kind: input.kind, budgetCents: input.budgetCents || 0, segmentId: input.segmentId ?? null, content: input.content || {}, startsAt: input.startsAt ?? null, endsAt: input.endsAt ?? null, funder: input.funder || 'MERCHANT', status: 'ACTIVE' }).returning();
       if (input.kind === 'SPONSORED' && input.sponsored) {

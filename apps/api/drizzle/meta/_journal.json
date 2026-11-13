@@ -22,6 +22,13 @@
       "when": 1794601923103,
       "tag": "0002_plan_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794604454576,
+      "tag": "0003_clear_feature_flag_defaults",
+      "breakpoints": true
     }
   ]
 }

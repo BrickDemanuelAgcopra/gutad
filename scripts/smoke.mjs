@@ -348,6 +348,35 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   const newPlan = (await call('POST', '/admin/plans', { code: `SMOKE_${Date.now()}`, name: 'Smoke Enterprise', productLine: 'ORDERING', isPublic: false }, A)).json;
   check('admin creates a plan (hidden draft)', newPlan.id && newPlan.isPublic === false, newPlan);
 
+  // ── Phase 2: plan features are enforced (new org is on Direct (free listing) v1: ordering only, 1 location, 3 team members)
+  const ent = (await call('GET', `/locations/${nLoc.id}/entitlements`, undefined, N)).json;
+  check('entitlements come from the signed plan', ent.source === 'PLAN' && ent.planCode === 'DIRECT_FREE' && ent.features.ordering === true && ent.features.reservations === false && ent.limits.locations.max === 1 && ent.limits.locations.used === 1, ent);
+  const legacyEnt = (await call('GET', `/locations/${locId}/entitlements`, undefined, O)).json;
+  check('contracts from before the catalog keep every feature', legacyEnt.source === 'LEGACY' && legacyEnt.unrestricted && legacyEnt.features.floor_plan === true, legacyEnt);
+  const shiftBlocked = await call('POST', `/locations/${nLoc.id}/shifts`, { name: 'Dinner' }, N);
+  check('merchant blocked from a feature outside the plan', shiftBlocked.status === 403 && shiftBlocked.json.code === 'FEATURE_NOT_IN_PLAN' && shiftBlocked.json.feature === 'reservations', shiftBlocked.json);
+  const availBlocked = await call('GET', `/public/locations/${nLoc.id}/availability?date=${futureIso(1)}&partySize=2`);
+  check('customers get a clear message for a service the plan lacks', availBlocked.status === 403 && /isn't available for this restaurant/.test(availBlocked.json.message), availBlocked.json);
+  const expBlocked = await call('POST', `/locations/${nLoc.id}/experiences`, { name: 'Tasting' }, N);
+  check('experiences gated by plan', expBlocked.status === 403 && expBlocked.json.feature === 'experiences', expBlocked.json);
+  const secondLoc = await call('POST', `/organizations/${nOrg.id}/locations`, { name: `Smoke Diner Two ${Date.now()}`, addressLine1: '2 Test St', city: 'New York', region: 'NY', postalCode: '10002' }, N);
+  check('location limit enforced', secondLoc.status === 403 && secondLoc.json.code === 'PLAN_LIMIT_REACHED' && secondLoc.json.limit === 1, secondLoc.json);
+  const inv1 = await call('POST', `/organizations/${nOrg.id}/members`, { email: `smoke-staff1-${Date.now()}@example.com`, role: 'MERCHANT_STAFF' }, N);
+  const inv2 = await call('POST', `/organizations/${nOrg.id}/members`, { email: `smoke-staff2-${Date.now()}@example.com`, role: 'MERCHANT_STAFF' }, N);
+  const inv3 = await call('POST', `/organizations/${nOrg.id}/members`, { email: `smoke-staff3-${Date.now()}@example.com`, role: 'MERCHANT_STAFF' }, N);
+  check('team member limit enforced (3 on this plan)', inv1.status < 300 && inv2.status < 300 && inv3.status === 403 && inv3.json.code === 'PLAN_LIMIT_REACHED', [inv1.status, inv2.status, inv3.json]);
+  await call('PATCH', `/admin/tenants/${nOrg.id}/features`, { reservations: true, locations: 2 }, A);
+  const shiftAllowed = await call('POST', `/locations/${nLoc.id}/shifts`, { name: 'Dinner' }, N);
+  check('admin override unlocks a feature', shiftAllowed.status !== 403, shiftAllowed.json);
+  const ent2 = (await call('GET', `/locations/${nLoc.id}/entitlements`, undefined, N)).json;
+  check('admin override raises a limit', ent2.features.reservations === true && ent2.limits.locations.max === 2, ent2);
+  await call('PATCH', `/admin/tenants/${owner.user.merchantIds?.[0] || (await call('GET', '/organizations', undefined, O)).json[0].id}/features`, { reservations: false }, A);
+  const resSearch = (await call('GET', '/public/search?city=New%20York&service=reservations')).json;
+  check('search hides a service the plan switched off', !resSearch.items.some((i) => i.slug === 'demo-bistro-new-york'), resSearch.items.map((i) => i.slug));
+  const anyBistro = (await call('GET', '/public/search?city=New%20York')).json.items.find((i) => i.slug === 'demo-bistro-new-york');
+  check('restaurant still listed, reservations masked', anyBistro && anyBistro.acceptsReservations === false && anyBistro.acceptsPickup === true, anyBistro);
+  await call('PATCH', `/admin/tenants/${(await call('GET', '/organizations', undefined, O)).json[0].id}/features`, { reservations: true }, A);
+
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Headers, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
+import { RequiresFeature } from '../entitlements/requires-feature';
 import { CurrentUser, JwtPayload, Public } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { EventsService } from './events.service';
@@ -21,11 +22,11 @@ export class EventsController {
   @Public() @Post('tickets/:id/pay') pay(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(z.object({ paymentMethodId: z.string() }))) b: { paymentMethodId: string }) { return this.svc.payHeldTicket(u ?? null, id, b.paymentMethodId); }
   @Public() @Post('tickets/:id/cancel') cancelTicket(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(z.object({ transferToSessionId: z.string().uuid().optional() }))) b: { transferToSessionId?: string }) { return this.svc.cancelTicket(u ?? null, id, b.transferToSessionId); }
   @ApiBearerAuth() @Get('me/tickets') mine(@CurrentUser() u: JwtPayload) { return this.svc.myTickets(u); }
-  @ApiBearerAuth() @Post('locations/:id/experiences') create(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ExperienceDto)) b: z.infer<typeof ExperienceDto>) { return this.svc.createExperience(u, id, b); }
+  @ApiBearerAuth() @RequiresFeature('experiences', 'param:id') @Post('locations/:id/experiences') create(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ExperienceDto)) b: z.infer<typeof ExperienceDto>) { return this.svc.createExperience(u, id, b); }
   @ApiBearerAuth() @Post('tickets/:id/attend') attend(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ extrasOnsiteCents: z.number().int().min(0).optional() }))) b: { extrasOnsiteCents?: number }) { return this.svc.attend(u, id, b.extrasOnsiteCents); }
   @ApiBearerAuth() @Post('experience-sessions/:id/close') close(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.closeSession(u, id); }
 
-  @Public() @Post('public/locations/:id/event-inquiries') inquire(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(InquiryDto)) b: z.infer<typeof InquiryDto>) { return this.svc.inquire(u ?? null, id, b); }
+  @Public() @RequiresFeature('private_events', 'param:id', 'customer') @Post('public/locations/:id/event-inquiries') inquire(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Body(zod(InquiryDto)) b: z.infer<typeof InquiryDto>) { return this.svc.inquire(u ?? null, id, b); }
   @Public() @Get('event-inquiries/:id') getInquiry(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string) { return this.svc.getInquiry(u ?? null, id); }
   @ApiBearerAuth() @Get('locations/:id/event-inquiries') inquiries(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.listInquiries(u, id); }
   @ApiBearerAuth() @Post('event-inquiries/:id/propose') propose(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ProposeDto)) b: z.infer<typeof ProposeDto>) { return this.svc.propose(u, id, b); }
