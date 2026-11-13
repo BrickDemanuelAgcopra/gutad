@@ -54,7 +54,7 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 - [x] Add-ons: `add_ons` / `org_add_ons`, admin tab, merchant buy (prorated now) / cancel (at renewal); features merge into entitlements, limits add up; three starter add-ons seeded
 - [x] Smoke tests for upgrade, add-ons, downgrade at renewal, undo, pause/resume, renewal run, move-subscribers preview (19 new checks). `POST /admin/billing/run` runs renewals; its `asOf` time travel only works with `ALLOW_BILLING_TIME_TRAVEL=true` (CI only)
 
-- [~] Deploy Phase 3 to gutad.io and verify
+- [x] Deploy Phase 3 to gutad.io and verify (add-ons seeded; existing subscription still active and bills as before; billing pages live)
 
 ## Known issues found along the way
 
@@ -73,3 +73,4 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 - 2026-11-13: tracker created; Phase 1 started.
 - 2026-11-13: Phase 1 shipped (commits 9ded42c, 81d4e75). 111 smoke checks; 110 pass, the 1 failure is the time-of-day waitlist issue listed above. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-214147.dump. Next: Phase 2 (enforcement).
 - 2026-11-13: Phase 2 shipped (commit d416398). 122 smoke checks; 121 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-221940.dump. Next: Phase 3 (merchant self-serve).
+- 2026-11-13: Phase 3 shipped (commit 8e5ea13). 141 smoke checks; 140 pass, the 1 failure is the known time-of-day waitlist issue. Production DB backup before deploy: deploy/backups/gutad-predeploy-20261113-223636.dump. Next: Phase 4 (mobile, promotions, reporting).
