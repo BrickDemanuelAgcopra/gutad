@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { describeFee, type FeeRuleDto, type PublicPlanDto } from '@gutad/shared';
-import { money } from '@/lib/api';
+
+/** Server-safe currency formatter (lib/api is a client module and can't be called from server components). */
+const money = (cents: number, currency = 'USD') => new Intl.NumberFormat('en-US', { style: 'currency', currency }).format((cents || 0) / 100);
 
 /** Fee rules in plain words, skipping zero-value rules (e.g. "0% on your own site" is shown once as a perk). */
 export function FeeList({ fees, className = '' }: { fees: FeeRuleDto[]; className?: string }) {
