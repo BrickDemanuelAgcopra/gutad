@@ -1,7 +1,7 @@
 import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { contractLocations, features, locations, merchantContracts, orgMemberships, organizations, platformSettings } from '../../db/schema';
+import { addOns, contractLocations, features, locations, merchantContracts, orgAddOns, orgMemberships, organizations, platformSettings } from '../../db/schema';
 import { PlansService } from '../contracts/plans.service';
 
 export type FeatureValue = boolean | number;
@@ -12,6 +12,7 @@ export type FeatureValue = boolean | number;
  *   2. the location's active contract, copied from a plan version (`merchant_contracts.features`)
  *   3. contracts that predate the plan catalog are grandfathered: everything allowed, no limits
  *   4. no contract yet: the default plan (platform setting `plans.default_plan_code`, DIRECT_FREE if unset)
+ * Active add-ons are merged into 2 and 4: they switch features on and add to number limits.
  */
 export interface Entitlements {
   source: 'PLAN' | 'LEGACY' | 'DEFAULT';
@@ -21,6 +22,20 @@ export interface Entitlements {
   unrestricted: boolean;
   features: Record<string, FeatureValue>;
   overrides: Record<string, FeatureValue>;
+  addOns: string[];
+}
+
+/** Plan features + add-ons: booleans OR together; numbers add up (a missing plan limit stays unlimited). */
+export function mergeAddOns(base: Record<string, FeatureValue>, extras: { features: Record<string, FeatureValue>; quantity: number }[]) {
+  const out = { ...base };
+  for (const a of extras) {
+    for (const [k, v] of Object.entries(a.features || {})) {
+      if (typeof v === 'number') {
+        if (typeof out[k] === 'number') out[k] = (out[k] as number) + v * a.quantity;
+      } else if (v) out[k] = true;
+    }
+  }
+  return out;
 }
 
 export function can(e: Entitlements, key: string): boolean {
@@ -70,11 +85,21 @@ export class EntitlementsService {
     return this.namesCache.names.get(key) || key.replace(/_/g, ' ');
   }
 
-  private build(contract: typeof merchantContracts.$inferSelect | undefined, overrides: Record<string, FeatureValue>, def: Awaited<ReturnType<EntitlementsService['defaultPlan']>>): Entitlements {
-    if (contract && !contract.planVersionId) return { source: 'LEGACY', planCode: contract.planCode, planName: contract.name, contractId: contract.id, unrestricted: true, features: {}, overrides };
-    if (contract) return { source: 'PLAN', planCode: contract.planCode, planName: contract.name, contractId: contract.id, unrestricted: false, features: (contract.features as Record<string, FeatureValue>) || {}, overrides };
-    if (def) return { source: 'DEFAULT', planCode: def.code, planName: def.name, contractId: null, unrestricted: false, features: def.features, overrides };
-    return { source: 'DEFAULT', planCode: null, planName: null, contractId: null, unrestricted: true, features: {}, overrides };
+  private build(contract: typeof merchantContracts.$inferSelect | undefined, overrides: Record<string, FeatureValue>, def: Awaited<ReturnType<EntitlementsService['defaultPlan']>>, extras: { code: string; features: Record<string, FeatureValue>; quantity: number }[] = []): Entitlements {
+    const addOnCodes = extras.map((x) => x.code);
+    if (contract && !contract.planVersionId) return { source: 'LEGACY', planCode: contract.planCode, planName: contract.name, contractId: contract.id, unrestricted: true, features: {}, overrides, addOns: addOnCodes };
+    if (contract) return { source: 'PLAN', planCode: contract.planCode, planName: contract.name, contractId: contract.id, unrestricted: false, features: mergeAddOns((contract.features as Record<string, FeatureValue>) || {}, extras), overrides, addOns: addOnCodes };
+    if (def) return { source: 'DEFAULT', planCode: def.code, planName: def.name, contractId: null, unrestricted: false, features: mergeAddOns(def.features, extras), overrides, addOns: addOnCodes };
+    return { source: 'DEFAULT', planCode: null, planName: null, contractId: null, unrestricted: true, features: {}, overrides, addOns: addOnCodes };
+  }
+
+  private async addOnsFor(orgIds: string[], at: Date, tx: DbOrTx) {
+    if (!orgIds.length) return [];
+    return tx
+      .select({ orgId: orgAddOns.organizationId, code: addOns.code, features: addOns.features, quantity: orgAddOns.quantity })
+      .from(orgAddOns)
+      .innerJoin(addOns, eq(addOns.id, orgAddOns.addOnId))
+      .where(and(inArray(orgAddOns.organizationId, orgIds), eq(orgAddOns.status, 'ACTIVE'), or(isNull(orgAddOns.cancelAt), gte(orgAddOns.cancelAt, at))));
   }
 
   private cleanOverrides(flags: unknown): Record<string, FeatureValue> {
@@ -95,9 +120,10 @@ export class EntitlementsService {
       .where(and(inArray(contractLocations.locationId, locationIds), lte(merchantContracts.effectiveFrom, at), or(isNull(merchantContracts.effectiveTo), gte(merchantContracts.effectiveTo, at))))
       .orderBy(desc(merchantContracts.version));
     const def = await this.defaultPlan();
+    const extras = await this.addOnsFor([...new Set(locs.map((l) => l.orgId))], at, tx);
     for (const l of locs) {
       const contract = rows.find((r) => r.locationId === l.id)?.c;
-      out.set(l.id, this.build(contract, this.cleanOverrides(l.flags), def));
+      out.set(l.id, this.build(contract, this.cleanOverrides(l.flags), def, extras.filter((x) => x.orgId === l.orgId) as { code: string; features: Record<string, FeatureValue>; quantity: number }[]));
     }
     return out;
   }
@@ -117,7 +143,8 @@ export class EntitlementsService {
       .where(and(eq(merchantContracts.organizationId, orgId), lte(merchantContracts.effectiveFrom, at), or(isNull(merchantContracts.effectiveTo), gte(merchantContracts.effectiveTo, at))))
       .orderBy(desc(merchantContracts.version))
       .limit(1);
-    return this.build(c, this.cleanOverrides(org?.flags), await this.defaultPlan());
+    const extras = (await this.addOnsFor([orgId], at, tx)) as { code: string; features: Record<string, FeatureValue>; quantity: number }[];
+    return this.build(c, this.cleanOverrides(org?.flags), await this.defaultPlan(), extras);
   }
 
   private async deny(e: Entitlements, key: string, audience: 'merchant' | 'customer'): Promise<never> {
@@ -125,7 +152,7 @@ export class EntitlementsService {
     const message =
       audience === 'customer'
         ? `${name} isn't available for this restaurant on Gutad.`
-        : `${name} isn't included in your plan${e.planName ? ` (${e.planName})` : ''}. See plans at /pricing or contact Gutad to upgrade.`;
+        : `${name} isn't included in your plan${e.planName ? ` (${e.planName})` : ''}. Switch plans or add it from Plan & billing in the merchant portal.`;
     throw new ForbiddenException({ statusCode: 403, error: 'Forbidden', message, code: 'FEATURE_NOT_IN_PLAN', feature: key, plan: e.planCode });
   }
 
@@ -149,7 +176,7 @@ export class EntitlementsService {
     const used = await this.usage(orgId, key, tx);
     if (used >= max) {
       const name = await this.featureName(key);
-      const message = `Your plan${e.planName ? ` (${e.planName})` : ''} includes ${max} ${name.toLowerCase()}. Contact Gutad or upgrade at /pricing to add more.`;
+      const message = `Your plan${e.planName ? ` (${e.planName})` : ''} includes ${max} ${name.toLowerCase()}. Upgrade or buy an add-on from Plan & billing in the merchant portal.`;
       throw new ForbiddenException({ statusCode: 403, error: 'Forbidden', message, code: 'PLAN_LIMIT_REACHED', feature: key, plan: e.planCode, limit: max, used });
     }
   }

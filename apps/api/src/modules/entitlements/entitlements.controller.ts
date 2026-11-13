@@ -25,6 +25,7 @@ export class EntitlementsController {
       planCode: e.planCode,
       planName: e.planName,
       unrestricted: e.unrestricted,
+      addOns: e.addOns,
       features: Object.fromEntries(catalog.filter((f) => f.kind === 'BOOLEAN').map((f) => [f.key, can(e, f.key)])),
       limits: {
         locations: { max: limitOf(org, 'locations'), used: await this.svc.usage(loc.orgId, 'locations') },

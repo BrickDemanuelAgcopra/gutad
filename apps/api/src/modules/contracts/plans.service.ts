@@ -2,16 +2,18 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { FeeRuleDto, PublicPlanDto } from '@gutad/shared';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { features, merchantContracts, planFeatures, planFees, plans, planVersions, platformSettings, users } from '../../db/schema';
+import { addOns, features, merchantContracts, planFeatures, planFees, plans, planVersions, platformSettings, users } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
 import { isPlatformStaff, JwtPayload } from '../../common/auth';
-import { DEFAULT_FEATURES, DEFAULT_PLANS } from './plan-defaults';
+import { DEFAULT_ADD_ONS, DEFAULT_FEATURES, DEFAULT_PLANS } from './plan-defaults';
 
 const LINE_ORDER: Record<string, number> = { ORDERING: 0, RESERVATIONS: 1, SUITE: 2 };
 
 /** Inserts the default features and, when the catalog is empty, the default plans. Idempotent. */
 export async function seedPlanCatalog(tx: DbOrTx) {
   await tx.insert(features).values(DEFAULT_FEATURES.map((f, i) => ({ ...f, sortOrder: (i + 1) * 10 }))).onConflictDoNothing();
+  const anyAddOn = await tx.select({ id: addOns.id }).from(addOns).limit(1);
+  if (!anyAddOn.length) await tx.insert(addOns).values(DEFAULT_ADD_ONS);
   const existing = await tx.select({ id: plans.id }).from(plans).limit(1);
   if (existing.length) return false;
   for (const p of DEFAULT_PLANS) {
@@ -119,6 +121,18 @@ export class PlansService {
     if (!p || p.isArchived) throw new NotFoundException('Unknown or archived plan');
     const [v] = await tx.select().from(planVersions).where(and(eq(planVersions.planId, p.id), eq(planVersions.status, 'PUBLISHED'))).limit(1);
     if (!v) throw new BadRequestException(`${p.name} has no published version`);
+    return this.detail(p, v, tx);
+  }
+
+  /** A specific version (any status) with fees and features; used when moving subscribers to a version. */
+  async versionById(versionId: string, tx: DbOrTx = this.db) {
+    const [v] = await tx.select().from(planVersions).where(eq(planVersions.id, versionId)).limit(1);
+    if (!v) throw new NotFoundException('Plan version not found');
+    const [p] = await tx.select().from(plans).where(eq(plans.id, v.planId)).limit(1);
+    return this.detail(p, v, tx);
+  }
+
+  private async detail(p: typeof plans.$inferSelect, v: typeof planVersions.$inferSelect, tx: DbOrTx) {
     const { fees, feats } = await this.versionDetail([v.id], tx);
     return {
       plan: p,

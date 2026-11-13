@@ -46,13 +46,15 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 
 ## Phase 3: merchant self-serve
 
-- [ ] Merchant Plan & billing page: current plan, usage this month, next invoice, invoice history
-- [ ] Compare and switch plans: upgrades now (prorated), downgrades at renewal with a warning about lost features
-- [ ] Switching issues a new Order Form for signature (reuse onboarding signing)
-- [ ] Admin: move subscribers to a new plan version on a chosen date
-- [ ] Subscription lifecycle: trial, active, past due, paused, canceled
-- [ ] Add-ons (`add_ons` table, admin CRUD, merchant purchase/cancel)
-- [ ] Smoke tests for upgrade, downgrade at renewal and proration
+- [x] Merchant Plan & billing page (`/merchant/billing`): current plan, status, usage this month by channel, next invoice, invoice history with Pay
+- [x] Compare and switch plans: upgrades now (old plan billed for days used, new period starts), downgrades and cancellations at renewal, preview lists features gained/lost and limit warnings; owner can keep the current plan (undo a scheduled change)
+- [x] Switching issues a new signed Order Form (owner signature recorded against the current Merchant Agreement)
+- [x] Admin: move merchants on older versions to the published version on a date (preview first; skips negotiated fees and pre-catalog contracts unless included)
+- [x] Subscription lifecycle: one subscription per business that follows the contract in force; trial (one per business), active, past due (follows the latest invoice), paused (admin; period extended on resume), canceled; renewals pick up scheduled changes
+- [x] Add-ons: `add_ons` / `org_add_ons`, admin tab, merchant buy (prorated now) / cancel (at renewal); features merge into entitlements, limits add up; three starter add-ons seeded
+- [x] Smoke tests for upgrade, add-ons, downgrade at renewal, undo, pause/resume, renewal run, move-subscribers preview (19 new checks). `POST /admin/billing/run` runs renewals; its `asOf` time travel only works with `ALLOW_BILLING_TIME_TRAVEL=true` (CI only)
+
+- [~] Deploy Phase 3 to gutad.io and verify
 
 ## Known issues found along the way
 

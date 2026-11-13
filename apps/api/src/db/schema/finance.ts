@@ -136,12 +136,16 @@ export const platformSubscriptions = pgTable('platform_subscriptions', {
   contractId: uuid('contract_id')
     .notNull()
     .references(() => merchantContracts.id),
-  status: text('status').notNull().default('ACTIVE'), // TRIAL | ACTIVE | PAST_DUE | CANCELED
+  status: text('status').notNull().default('ACTIVE'), // TRIAL | ACTIVE | PAST_DUE | PAUSED | CANCELED
   currentPeriodStart: ts('current_period_start').notNull(),
   currentPeriodEnd: ts('current_period_end').notNull(),
   locationCount: integer('location_count').notNull().default(1),
   lastInvoiceId: uuid('last_invoice_id'),
   canceledAt: ts('canceled_at'),
+  /** Set once when the organization starts a free trial; an organization gets one trial. */
+  trialEndsAt: ts('trial_ends_at'),
+  pausedAt: ts('paused_at'),
+  pausedReason: text('paused_reason'),
 });
 
 // ───── 26 Settlement ─────

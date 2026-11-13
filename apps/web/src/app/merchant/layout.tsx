@@ -12,7 +12,7 @@ import { Alert, Spinner } from '@/components/ui';
 const NEEDS: Record<string, string[]> = { '/merchant/host': ['floor_plan'], '/merchant/dispatch': ['delivery'], '/merchant/events': ['experiences', 'private_events'] };
 
 const NAV = [
-  ['/merchant', 'Dashboard'], ['/merchant/onboarding', 'Onboarding'], ['/merchant/orders', 'Orders'], ['/merchant/menu', 'Menu'], ['/merchant/host', 'Host stand'], ['/merchant/dispatch', 'Delivery'], ['/merchant/kitchen', 'Kitchen'], ['/merchant/events', 'Events'], ['/merchant/guests', 'Guests'], ['/merchant/growth', 'Growth'], ['/merchant/finance', 'Finance'], ['/merchant/shift', 'Shift'], ['/merchant/settings', 'Settings'],
+  ['/merchant', 'Dashboard'], ['/merchant/onboarding', 'Onboarding'], ['/merchant/orders', 'Orders'], ['/merchant/menu', 'Menu'], ['/merchant/host', 'Host stand'], ['/merchant/dispatch', 'Delivery'], ['/merchant/kitchen', 'Kitchen'], ['/merchant/events', 'Events'], ['/merchant/guests', 'Guests'], ['/merchant/growth', 'Growth'], ['/merchant/finance', 'Finance'], ['/merchant/billing', 'Plan & billing'], ['/merchant/shift', 'Shift'], ['/merchant/settings', 'Settings'],
 ];
 
 export default function MerchantLayout({ children }: { children: React.ReactNode }) {
@@ -59,8 +59,8 @@ function Locked({ keys, ent }: { keys: string[]; ent: Ent | null }) {
     <div className="mx-auto max-w-lg rounded-2xl border border-ink-100 bg-white p-6 text-center shadow-card">
       <div className="text-3xl">🔒</div>
       <h1 className="mt-2 text-xl font-bold">{names} isn&apos;t in your plan</h1>
-      <p className="mt-1 text-sm text-ink-500">You&apos;re on {ent?.planName || 'the default plan'}. Compare plans to see which ones include {names.toLowerCase()}, then contact Gutad to switch.</p>
-      <Link href="/pricing" className="mt-4 inline-block rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">Compare plans</Link>
+      <p className="mt-1 text-sm text-ink-500">You&apos;re on {ent?.planName || 'the default plan'}. Switch to a plan or add-on that includes {names.toLowerCase()}.</p>
+      <Link href="/merchant/billing" className="mt-4 inline-block rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">See plans & add-ons</Link>
     </div>
   );
 }

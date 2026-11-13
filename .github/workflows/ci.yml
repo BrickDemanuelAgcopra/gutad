@@ -17,6 +17,7 @@ jobs:
       REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-secret-ci-secret-ci-secret-1234
       ADMIN_PASSWORD: admin12345
+      ALLOW_BILLING_TIME_TRAVEL: "true"  # smoke test jumps ahead to a renewal; never set in production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

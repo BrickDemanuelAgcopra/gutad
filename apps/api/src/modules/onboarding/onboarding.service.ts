@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { DB, Db } from '../../db/db.module';
+import { DB, Db, DbOrTx } from '../../db/db.module';
 import { locations, merchantAgreementAcceptances, merchantContracts, merchantDocuments, organizations } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
@@ -118,15 +118,19 @@ export class OnboardingService {
       if (!c) throw new NotFoundException('Order Form not found');
       contractId = c.id;
     }
-    return this.db.transaction(async (tx) => {
-      const [a] = await tx
-        .insert(merchantAgreementAcceptances)
-        .values({ organizationId: orgId, agreementVersion: MERCHANT_AGREEMENT_VERSION, contractId, acceptedById: user.sub, signatureName: input.signatureName.trim(), signatureTitle: input.signatureTitle?.trim() || null, ipAddress: meta.ip ?? null, userAgent: meta.userAgent?.slice(0, 400) ?? null })
-        .returning();
-      if (contractId) await tx.update(merchantContracts).set({ signedAt: new Date() }).where(and(eq(merchantContracts.id, contractId), eq(merchantContracts.organizationId, orgId)));
-      await this.audit.log({ organizationId: orgId, actorId: user.sub, action: 'agreement.accept', entityType: 'organization', entityId: orgId, after: { agreementVersion: MERCHANT_AGREEMENT_VERSION, contractId, signatureName: a.signatureName } }, tx);
-      return a;
-    });
+    return this.db.transaction((tx) => this.recordAcceptance(orgId, user.sub, { signatureName: input.signatureName, signatureTitle: input.signatureTitle, contractId }, meta, tx));
+  }
+
+  /** Record a signature on the current Merchant Agreement (and an Order Form, which becomes signed). */
+  async recordAcceptance(orgId: string, userId: string, input: { signatureName: string; signatureTitle?: string; contractId?: string | null }, meta: { ip?: string; userAgent?: string }, tx: DbOrTx = this.db) {
+    const contractId = input.contractId ?? null;
+    const [a] = await tx
+      .insert(merchantAgreementAcceptances)
+      .values({ organizationId: orgId, agreementVersion: MERCHANT_AGREEMENT_VERSION, contractId, acceptedById: userId, signatureName: input.signatureName.trim(), signatureTitle: input.signatureTitle?.trim() || null, ipAddress: meta.ip ?? null, userAgent: meta.userAgent?.slice(0, 400) ?? null })
+      .returning();
+    if (contractId) await tx.update(merchantContracts).set({ signedAt: new Date() }).where(and(eq(merchantContracts.id, contractId), eq(merchantContracts.organizationId, orgId)));
+    await this.audit.log({ organizationId: orgId, actorId: userId, action: 'agreement.accept', entityType: 'organization', entityId: orgId, after: { agreementVersion: MERCHANT_AGREEMENT_VERSION, contractId, signatureName: a.signatureName } }, tx);
+    return a;
   }
 
   async upload(user: JwtPayload, orgId: string, file: UploadedFile | undefined, docType: string, locationId?: string) {

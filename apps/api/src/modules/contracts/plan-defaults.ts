@@ -50,3 +50,10 @@ export const DEFAULT_PLANS: {
   { code: 'RESERVATIONS_PRO', name: 'Reservations Pro', productLine: 'RESERVATIONS', sortOrder: 20, highlight: true, tagline: 'Full table management', description: 'Everything in Core plus floor plans and table management, private events, analytics and a lower cover fee.', subscriptionCents: 29900, fees: [...reservationFees(100), PROCESSING], features: { ...RES_BASE, floor_plan: true, private_events: true, advanced_analytics: true, pos_integration: true, locations: 3, team_members: 25 } },
   { code: 'FULL_SUITE', name: 'Full suite', productLine: 'SUITE', sortOrder: 10, highlight: true, tagline: 'Ordering and reservations, every feature', description: 'All ordering and reservations features, sponsored placements, analytics and POS integration.', subscriptionCents: 49900, fees: [...orderingCommission(1500), ...reservationFees(100), PROCESSING], features: { ...ORDERING_BASE, ...RES_BASE, branded_site: true, group_orders: true, marketplace_boost: true, floor_plan: true, private_events: true, ads: true, advanced_analytics: true, pos_integration: true, locations: 10, team_members: 50 } },
 ];
+
+/** Starter add-ons (seeded once when the add_ons table is empty; edit in Admin → Plans & pricing → Add-ons). */
+export const DEFAULT_ADD_ONS: { code: string; name: string; description: string; productLine: string; priceCents: number; perLocation: boolean; features: Record<string, boolean | number>; sortOrder: number }[] = [
+  { code: 'EXTRA_LOCATION', name: 'Extra location', description: 'Add one more location to your plan.', productLine: 'ALL', priceCents: 4900, perLocation: false, features: { locations: 1 }, sortOrder: 10 },
+  { code: 'ADVANCED_ANALYTICS', name: 'Advanced analytics', description: 'Guest insights, retention and CSV exports.', productLine: 'ALL', priceCents: 3900, perLocation: false, features: { advanced_analytics: true }, sortOrder: 20 },
+  { code: 'SPONSORED_ADS', name: 'Sponsored placements', description: 'Run pay-per-click ads in Gutad search (ad spend billed separately).', productLine: 'ALL', priceCents: 0, perLocation: false, features: { ads: true }, sortOrder: 30 },
+];

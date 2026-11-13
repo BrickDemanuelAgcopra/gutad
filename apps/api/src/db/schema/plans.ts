@@ -1,7 +1,7 @@
 // 25 Contracts & monetization — configurable plan catalog (product lines, versions, fee rules, features)
-import { boolean, index, integer, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, id, ts, updatedAt } from './_common';
-import { users } from './accounts';
+import { organizations, users } from './accounts';
 
 /** Features a plan can include. BOOLEAN features are on/off; LIMIT features carry a number (e.g. max locations). */
 export const features = pgTable('features', {
@@ -105,3 +105,43 @@ export interface FeeRule {
 export const planFeatureSnapshot = (rows: { featureKey: string; enabled: boolean; limitValue: number | null }[]) =>
   Object.fromEntries(rows.map((r) => [r.featureKey, r.limitValue ?? r.enabled]));
 
+
+/** Extras merchants buy on top of a plan; each adds features (booleans) and/or raises limits (numbers are added). */
+export const addOns = pgTable('add_ons', {
+  id: id(),
+  code: text('code').notNull().unique(),
+  name: text('name').notNull(),
+  description: text('description'),
+  productLine: text('product_line').notNull().default('ALL'), // ORDERING | RESERVATIONS | ALL
+  priceCents: integer('price_cents').notNull().default(0),
+  interval: text('interval').notNull().default('MONTH'),
+  perLocation: boolean('per_location').notNull().default(false),
+  features: jsonb('features').$type<Record<string, boolean | number>>().notNull().default({}),
+  isPublic: boolean('is_public').notNull().default(true),
+  isActive: boolean('is_active').notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const orgAddOns = pgTable(
+  'org_add_ons',
+  {
+    id: id(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    addOnId: uuid('add_on_id')
+      .notNull()
+      .references(() => addOns.id),
+    status: text('status').notNull().default('ACTIVE'), // ACTIVE | CANCELED
+    priceCents: integer('price_cents').notNull(),
+    quantity: integer('quantity').notNull().default(1),
+    startedAt: ts('started_at').defaultNow().notNull(),
+    /** Cancellation takes effect at the end of the billing period; features stay until then. */
+    cancelAt: ts('cancel_at'),
+    canceledAt: ts('canceled_at'),
+    createdById: uuid('created_by_id').references(() => users.id),
+  },
+  (t) => [index('org_add_ons_org_idx').on(t.organizationId, t.status)],
+);

@@ -29,6 +29,13 @@
       "when": 1794604454576,
       "tag": "0003_clear_feature_flag_defaults",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794605193864,
+      "tag": "0004_subscriptions_addons",
+      "breakpoints": true
     }
   ]
 }
