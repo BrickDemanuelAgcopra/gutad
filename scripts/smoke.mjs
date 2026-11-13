@@ -430,6 +430,43 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   const badAddOn = await call('POST', '/admin/add-ons', { code: 'BAD_ADDON', name: 'Bad add-on', priceCents: 0, features: { not_a_feature: true } }, A);
   check('add-ons only unlock known features', badAddOn.status === 400, badAddOn.json);
 
+  // ── Phase 4: promotions and the revenue report
+  const stamp = String(Date.now()).slice(-6);
+  const pFree = (await call('POST', '/admin/promotions', { code: `FREE${stamp}`, name: 'First month free', kind: 'FREE_PERIODS', periods: 1 }, A)).json;
+  const pHol = (await call('POST', '/admin/promotions', { code: `HOL${stamp}`, name: 'Launch commission holiday', kind: 'COMMISSION_HOLIDAY', days: 30 }, A)).json;
+  const pPct = (await call('POST', '/admin/promotions', { code: `PCT${stamp}`, name: '20% off', kind: 'PERCENT_OFF', percentOff: 20, periods: 3 }, A)).json;
+  const pMax = (await call('POST', '/admin/promotions', { code: `MAX${stamp}`, name: 'One only', kind: 'COMMISSION_HOLIDAY', days: 7, maxRedemptions: 1 }, A)).json;
+  check('admin creates promotions of each kind', pFree.id && pHol.id && pPct.id && pMax.id, [pFree, pHol, pPct, pMax].map((x) => x.code || x.message));
+  const badPromo = await call('POST', '/admin/promotions', { code: `BAD${stamp}`, name: 'Broken', kind: 'PERCENT_OFF', percentOff: 0 }, A);
+  check('promotion rules are validated', badPromo.status === 400, badPromo.json);
+  const custRedeem = await call('POST', `/organizations/${nOrg.id}/promotions`, { code: pHol.code }, C);
+  check('only the business can redeem its codes', custRedeem.status === 403, custRedeem.status);
+  const termsBefore = (await call('GET', `/locations/${nLoc.id}/terms`, undefined, N)).json;
+  const hol = (await call('POST', `/organizations/${nOrg.id}/promotions`, { code: pHol.code }, N)).json;
+  const termsAfter = (await call('GET', `/locations/${nLoc.id}/terms`, undefined, N)).json;
+  check('commission holiday sets marketplace commission to 0%', termsBefore.commissionBps > 0 && hol.endsAt && termsAfter.commissionBps === 0, [termsBefore.commissionBps, termsAfter.commissionBps]);
+  const again = await call('POST', `/organizations/${nOrg.id}/promotions`, { code: pHol.code }, N);
+  const unknown = await call('POST', `/organizations/${nOrg.id}/promotions`, { code: 'NOPE-NOT-A-CODE' }, N);
+  check('a code works once per business; unknown codes are rejected', again.status === 400 && unknown.status === 400, [again.json.message, unknown.json.message]);
+  await call('POST', `/organizations/${nOrg.id}/promotions`, { code: pMax.code }, N);
+  const demoOrgId = (await call('GET', '/organizations', undefined, O)).json[0].id;
+  const maxed = await call('POST', `/organizations/${demoOrgId}/promotions`, { code: pMax.code }, O);
+  check('redemption limit enforced', maxed.status === 400 && /fully redeemed/.test(maxed.json.message), maxed.json);
+  await call('POST', `/organizations/${demoOrgId}/promotions`, { code: pFree.code }, O);
+  const demoBill = (await call('GET', `/organizations/${demoOrgId}/billing`, undefined, O)).json;
+  check('free-period promotion shows on the next invoice', demoBill.nextInvoice && demoBill.nextInvoice.lines.some((l) => l.description.startsWith(`Promotion ${pFree.code}`)) && demoBill.nextInvoice.totalCents === 0, demoBill.nextInvoice);
+  const twoDiscounts = await call('POST', `/organizations/${demoOrgId}/promotions`, { code: pPct.code }, O);
+  check('one subscription discount at a time', twoDiscounts.status === 400, twoDiscounts.json);
+  const demoSub = (await call('GET', '/admin/subscriptions', undefined, A)).json.find((x) => x.organizationId === demoOrgId && x.status !== 'CANCELED');
+  await call('POST', '/admin/billing/run', { asOf: new Date(new Date(demoSub.currentPeriodEnd).getTime() + 3_600_000).toISOString() }, A);
+  const demoBill2 = (await call('GET', `/organizations/${demoOrgId}/billing`, undefined, O)).json;
+  const usedFree = demoBill2.promotions.find((x) => x.code === pFree.code);
+  check('free renewal used up and the subscription renews', usedFree && !usedFree.active && usedFree.periodsUsed === 1 && demoBill2.subscription?.status === 'ACTIVE' && new Date(demoBill2.subscription.currentPeriodStart) >= new Date(demoSub.currentPeriodEnd), { usedFree, sub: demoBill2.subscription });
+  const rev = (await call('GET', '/admin/reports/plans', undefined, A)).json;
+  check('revenue report: MRR by plan, trials, plan changes, ledger revenue', typeof rev.mrrCents === 'number' && Array.isArray(rev.byPlan) && rev.statusCounts && rev.changes90d['plan.upgrade'] >= 1 && rev.revenueByMonth.some((x) => x.account === 'PLATFORM_REVENUE_SUBSCRIPTION' && x.cents > 0), { mrr: rev.mrrCents, changes: rev.changes90d });
+  const custRev = await call('GET', '/admin/reports/plans', undefined, C);
+  check('revenue report is staff-only', custRev.status === 403, custRev.status);
+
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

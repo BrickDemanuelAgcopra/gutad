@@ -28,7 +28,7 @@ Each row of the master blueprint's capability list, where it lives, and the main
 | 22 | Growth & loyalty | `growth` | coupons (percent/fixed/free delivery, funder, limits), campaigns (email/SMS consented, sponsored placements, budget stop), loyalty earn/redeem/expire/reverse, referrals, membership plans & renewals | `/merchant/growth`, `/account` → Rewards | `(tabs)/account` |
 | 23 | Notifications | `notifications` + `core/notify` | outbox → templates → email/SMS/push/in-app with dedupe keys; transactional vs marketing consent; merchant alerts incl. fallback phone | `/me/notifications` | push registration |
 | 24 | Payments & adjustments | `payments` | tokenized intents (manual/auto capture), guarantees, deposits, partial capture, refunds with funder, disputes, credits ledger, Connect onboarding, transfers, webhook inbox & replay | `/merchant/finance` | — |
-| 25 | Contracts & monetization | `contracts` | plan catalog, versioned contracts per org/location (commission by channel, cover fees by origin, prepaid fee, subsidies, logistics, rules, effective dates), subscription billing | admin → assign contract, merchant finance | — |
+| 25 | Contracts & monetization | `contracts`, `entitlements` | plan catalog in the database (product lines → plans → versioned prices, fee rules by channel + fulfillment, features), Order Forms copied from a published version (pre-catalog contracts keep their terms), plan-feature enforcement (`@RequiresFeature`, limits, admin overrides), self-serve plan changes (upgrade now / downgrade at renewal, re-signed Order Form), one subscription per business (trial, active, past due, paused, canceled), add-ons, promotion codes (percent off, free renewals, commission holiday), revenue report; `/public/plans`, `/admin/plans`, `/organizations/:id/billing`, `/organizations/:id/plan-change`, `/locations/:id/entitlements`, `/admin/subscriptions`, `/admin/promotions`, `/admin/reports/plans` | `/pricing`, `/merchant/billing`, admin → Plans & pricing (plans, add-ons, subscriptions, promotions, revenue, features), Order Form in onboarding & finance | merchant tab: plan summary; host stand lock → web billing |
 | 26 | Settlement & reconciliation | `settlement` | balances, weekly statements from ledger, payouts (retry/backoff/hold), driver payouts, bank & processor reconciliation, provider invoices, unmatched queue, integrity checks, invoices | `/merchant/finance`, `/admin/finance` | — |
 | 27 | Integrations & devices | `integrations` | integration accounts (encrypted creds), id mappings with orphan check, HMAC webhook inbox (POS check/86/ack), devices & heartbeat/offline sweep, health & replay | settings → Devices & POS, `/admin/integrations` | tablet heartbeat |
 | 28 | Support & trust | `support` | incidents w/ default owner, timeline, role-based remedies (refund/credit/remake/redelivery/reassign), evidence, appeals, chargeback evidence packet, policy strikes → auto-suspend, data access/erasure | `/admin/support` | report a problem |
@@ -49,3 +49,15 @@ Direct/marketplace pickup · food delivery · shared-kitchen multi-brand meal ·
 | 4 Marketplace | direct vs marketplace fees distinct; campaigns stop at budget; refunds traceable after payout | contract terms by channel (smoke "direct has no commission"), `consumeCoupon` budget stop, refund journal with funder |
 | 5 Shared kitchens | missing item stops bag release; sold-out ingredient affects all brands; contribution by site | `releaseBag` 409 (smoke), `consumeIngredients` marks all recipes, `/kitchens/:id/contribution` |
 | 6 Programs | each has owner, inventory rules, payer, fulfillment path, failure policy, statement | `programs` module + group orders + meal kit cases |
+
+## Plans & billing (docs/PLANS-TRACKER.md)
+
+| Piece | Where |
+|---|---|
+| Catalog tables | `features`, `plans`, `plan_versions`, `plan_fees`, `plan_features`, `add_ons`, `org_add_ons`, `promotions`, `promotion_redemptions` (`apps/api/src/db/schema/plans.ts`) |
+| Fee resolution (shared by API, admin preview, pricing page) | `resolveFee`, `feeAmount`, `describeFee` in `packages/shared/src/plans.ts` |
+| Charging | `ContractsService.termsFor` (per channel + fulfillment; commission holiday), `issue`, `switchSubscription`, `billDueSubscriptions` (daily renewals) |
+| Enforcement | `EntitlementsService` (contract features + add-ons + admin overrides; pre-catalog contracts grandfathered; default plan setting `plans.default_plan_code`), `FeatureGuard` |
+| Self-serve | `BillingService` (overview, preview/change/cancel, add-ons, promotions), `/merchant/billing` |
+| Admin | `/admin/plans` tabs; `POST /admin/plan-versions/:id/migrate`; `POST /admin/billing/run` (`asOf` only with `ALLOW_BILLING_TIME_TRAVEL=true`, CI only) |
+| Settings | `fees.free_delivery`, `approvals.plan_publish`, `plans.default_plan_code` |

@@ -4,7 +4,7 @@ import { describeFee, feeAmount, FEE_CHANNELS, FEE_FULFILLMENTS, FEE_TYPES, PROD
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Tabs, Textarea } from '@/components/ui';
-import { AddOnsTab, MoveSubscribers, SubscriptionsTab } from './billing-admin';
+import { AddOnsTab, MoveSubscribers, PromotionsTab, RevenueTab, SubscriptionsTab } from './billing-admin';
 
 interface Feature { key: string; name: string; description: string | null; kind: 'BOOLEAN' | 'LIMIT'; productLine: string; sortOrder: number; isActive: boolean }
 interface Version { id: string; version: number; status: 'DRAFT' | 'PUBLISHED' | 'RETIRED'; subscriptionCents: number; interval: 'MONTH' | 'YEAR'; perLocation: boolean; setupFeeCents: number; trialDays: number; notes: string | null; publishedAt: string | null; contracts: number; fees: (FeeRuleDto & { id?: string })[]; features: { key: string; enabled: boolean; limitValue: number | null }[] }
@@ -28,11 +28,13 @@ export default function PlansAdmin() {
         <div><h1 className="text-2xl font-bold">Plans & pricing</h1><p className="text-sm text-ink-500">Changes apply to new Order Forms once a version is published. Merchants keep the version they signed.</p></div>
         <a className="text-sm text-brand-600 underline" href="/pricing" target="_blank" rel="noreferrer">View public pricing</a>
       </div>
-      <Tabs tabs={[{ id: 'plans', label: 'Plans' }, { id: 'addons', label: 'Add-ons' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'features', label: 'Features' }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ id: 'plans', label: 'Plans' }, { id: 'addons', label: 'Add-ons' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'promotions', label: 'Promotions' }, { id: 'revenue', label: 'Revenue' }, { id: 'features', label: 'Features' }]} active={tab} onChange={setTab} />
       {error && <Alert>{error}</Alert>}
       {tab === 'features' && data && <FeaturesTab features={data.features} reload={reload} />}
       {tab === 'addons' && data && <AddOnsTab features={data.features} />}
       {tab === 'subscriptions' && <SubscriptionsTab />}
+      {tab === 'promotions' && data && <PromotionsTab planCodes={data.plans.filter((p) => !p.isArchived).map((p) => ({ code: p.code, name: p.name }))} />}
+      {tab === 'revenue' && <RevenueTab />}
       {tab === 'plans' && data && (
         <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
           <div className="space-y-4">

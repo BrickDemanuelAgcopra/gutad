@@ -21,6 +21,21 @@ const AddOnDto = z.object({
   isActive: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
 });
+const PromotionDto = z.object({
+  id: z.string().uuid().optional(),
+  code: z.string().min(3).max(40),
+  name: z.string().min(2).max(80),
+  kind: z.enum(['PERCENT_OFF', 'FREE_PERIODS', 'COMMISSION_HOLIDAY']),
+  percentOff: z.number().int().min(0).max(100).optional(),
+  periods: z.number().int().min(1).max(36).optional(),
+  days: z.number().int().min(0).max(730).optional(),
+  planCodes: z.array(z.string()).optional(),
+  maxRedemptions: z.number().int().min(1).nullable().optional(),
+  newMerchantsOnly: z.boolean().optional(),
+  startsAt: z.coerce.date().nullable().optional(),
+  expiresAt: z.coerce.date().nullable().optional(),
+  isActive: z.boolean().optional(),
+});
 const MigrateDto = z.object({ effectiveFrom: z.coerce.date(), includeLegacy: z.boolean().optional(), includeOverridden: z.boolean().optional(), dryRun: z.boolean().optional() });
 
 @ApiTags('25 Contracts & monetization')
@@ -36,12 +51,16 @@ export class BillingController {
     return this.svc.change(u, id, b, { ip: req.ip, userAgent: req.headers['user-agent'] });
   }
   @Delete('organizations/:id/plan-change') cancelChange(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.cancelScheduled(u, id); }
+  @Post('organizations/:id/promotions') redeem(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ code: z.string().min(2).max(40) }))) b: { code: string }) { return this.svc.redeem(u, id, b.code); }
   @Post('organizations/:id/add-ons') buy(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ addOnId: z.string().uuid(), quantity: z.number().int().min(1).max(50).optional() }))) b: { addOnId: string; quantity?: number }) { return this.svc.buyAddOn(u, id, b.addOnId, b.quantity); }
   @Delete('organizations/:id/add-ons/:aid') cancelAddOn(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Param('aid') aid: string) { return this.svc.cancelAddOn(u, id, aid); }
 
   // admin
   @Get('admin/add-ons') addOns(@CurrentUser() u: JwtPayload) { return this.svc.adminAddOns(u); }
   @Post('admin/add-ons') upsertAddOn(@CurrentUser() u: JwtPayload, @Body(zod(AddOnDto)) b: z.infer<typeof AddOnDto>) { return this.svc.upsertAddOn(u, b); }
+  @Get('admin/promotions') promotions(@CurrentUser() u: JwtPayload) { return this.svc.adminPromotions(u); }
+  @Post('admin/promotions') upsertPromotion(@CurrentUser() u: JwtPayload, @Body(zod(PromotionDto)) b: z.infer<typeof PromotionDto>) { return this.svc.upsertPromotion(u, b); }
+  @Get('admin/reports/plans') revenue(@CurrentUser() u: JwtPayload) { return this.svc.revenueReport(u); }
   @Get('admin/subscriptions') subscriptions(@CurrentUser() u: JwtPayload) { return this.svc.adminSubscriptions(u); }
   @Post('admin/subscriptions/:id/pause') pause(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ reason: z.string().max(300).optional() }))) b: { reason?: string }) { return this.svc.pause(u, id, true, b.reason); }
   @Post('admin/subscriptions/:id/resume') resume(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.pause(u, id, false); }

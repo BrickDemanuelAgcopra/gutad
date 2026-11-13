@@ -5,6 +5,7 @@ import { api, money, when } from '@/api';
 import { useAction, useApi } from '@/hooks';
 import { useMerchantLocation } from '@/merchant';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
+import { PlanSummary } from '@/plan';
 
 interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; createdAt: string; pickupCode: string | null; lines: { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null }[]; delivery: { status: string } | null }
 
@@ -24,7 +25,7 @@ export default function MerchantInbox() {
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-end' }}><View style={{ flex: 1 }}><Input label="Device token (from Settings → Devices)" value={deviceToken} onChangeText={setDeviceToken} autoCapitalize="none" /></View><View style={{ width: 90 }}><Input label="Prep min" keyboardType="number-pad" value={prep} onChangeText={setPrep} /></View></View>
         <ErrorText msg={error} />
       </View>
-      <FlatList contentContainerStyle={s.pad} data={data || []} keyExtractor={(o) => o.id} ListEmptyComponent={<Muted>No active orders.</Muted>} renderItem={({ item: o }) => (
+      <FlatList contentContainerStyle={s.pad} ListHeaderComponent={<PlanSummary orgId={loc.organizationId} />} data={data || []} keyExtractor={(o) => o.id} ListEmptyComponent={<Muted>No active orders.</Muted>} renderItem={({ item: o }) => (
         <Card style={o.status === 'SUBMITTED' ? { borderColor: C.brand, borderWidth: 2 } : undefined}>
           <View style={s.row}><Text style={{ fontWeight: '700', fontSize: 16 }}>{o.number}</Text><Badge text={o.status} tone={tone(o.status)} /></View>
           <Muted>{o.guestName || 'Customer'} · {o.channel} · {o.fulfillmentType} · {o.promiseAt ? `due ${when(o.promiseAt)}` : when(o.createdAt)}{o.delivery ? ` · courier ${o.delivery.status}` : ''}</Muted>

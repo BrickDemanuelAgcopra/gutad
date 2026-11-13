@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, API_URL } from './api';
 import { useSession, useStored } from './hooks';
 
-export interface Loc { id: string; name: string; kitchenId: string | null; isPaused: boolean; acceptsReservations: boolean }
+export interface Loc { id: string; name: string; organizationId: string; kitchenId: string | null; isPaused: boolean; acceptsReservations: boolean }
 
 /** Resolves the staff member's locations and keeps the selected one; sends device heartbeats when a tablet token is set. */
 export function useMerchantLocation() {

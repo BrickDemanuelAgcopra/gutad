@@ -2,7 +2,7 @@ import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { feeAmount, resolveFee, type FeeRuleDto } from '@gutad/shared';
 import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { addOns, contractLocations, invoices, locations, merchantAgreementAcceptances, merchantContracts, orgAddOns, planVersions, platformSubscriptions } from '../../db/schema';
+import { addOns, contractLocations, invoices, locations, merchantAgreementAcceptances, merchantContracts, orgAddOns, planVersions, platformSubscriptions, promotionRedemptions, promotions } from '../../db/schema';
 import { assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
 import { LedgerService } from '../../core/ledger.service';
@@ -117,13 +117,14 @@ export class ContractsService {
     }
     const rules = contractFeeRules(c);
     const ful = fulfillment ?? (channel === 'WIDGET' ? 'DINE_IN' : undefined);
+    const holiday = isNetwork && (await this.commissionHoliday(c.organizationId, at, tx));
     const pick = (t: FeeRuleDto['type']) => resolveFee(rules, t, channel, ful);
     const commission = pick('COMMISSION');
     const processing = pick('PROCESSING');
     return {
       contractId: c.id,
       planCode: c.planCode,
-      commissionBps: commission ? commission.bps : isNetwork ? cfg.DEFAULT_MARKETPLACE_COMMISSION_BPS : 0,
+      commissionBps: holiday ? 0 : commission ? commission.bps : isNetwork ? cfg.DEFAULT_MARKETPLACE_COMMISSION_BPS : 0,
       processingBps: processing ? processing.bps : cfg.DEFAULT_DIRECT_PROCESSING_BPS,
       processingFixedCents: processing ? processing.cents : cfg.DEFAULT_DIRECT_PROCESSING_FIXED_CENTS,
       coverFeeCents: pick('COVER_FEE')?.cents ?? 0,
@@ -134,6 +135,38 @@ export class ContractsService {
       features: (c.features as Record<string, unknown>) || {},
       fees: rules,
     };
+  }
+
+  /** True while the organization has a redeemed COMMISSION_HOLIDAY promotion running. */
+  async commissionHoliday(orgId: string, at = new Date(), tx: DbOrTx = this.db) {
+    const [r] = await tx
+      .select({ id: promotionRedemptions.id })
+      .from(promotionRedemptions)
+      .innerJoin(promotions, eq(promotions.id, promotionRedemptions.promotionId))
+      .where(and(eq(promotionRedemptions.organizationId, orgId), eq(promotions.kind, 'COMMISSION_HOLIDAY'), gt(promotionRedemptions.endsAt, at), lte(promotionRedemptions.redeemedAt, at)))
+      .limit(1);
+    return !!r;
+  }
+
+  /**
+   * The subscription discount that applies to the next renewal invoice for this contract (PERCENT_OFF or
+   * FREE_PERIODS with periods left and, when the promotion is limited to plans, matching the plan).
+   */
+  async promotionLine(orgId: string, contract: typeof merchantContracts.$inferSelect, planLineCents: number, start: Date, end: Date, tx: DbOrTx = this.db) {
+    if (planLineCents <= 0) return null;
+    const rows = await tx
+      .select({ r: promotionRedemptions, p: promotions })
+      .from(promotionRedemptions)
+      .innerJoin(promotions, eq(promotions.id, promotionRedemptions.promotionId))
+      .where(and(eq(promotionRedemptions.organizationId, orgId), inArray(promotions.kind, ['PERCENT_OFF', 'FREE_PERIODS']), sql`${promotionRedemptions.periodsUsed} < ${promotions.periods}`))
+      .orderBy(promotionRedemptions.redeemedAt);
+    const hit = rows.find(({ p }) => !p.planCodes.length || p.planCodes.includes(contract.planCode));
+    if (!hit) return null;
+    const pct = hit.p.kind === 'FREE_PERIODS' ? 100 : Math.min(100, Math.max(0, hit.p.percentOff));
+    const cents = -Math.round((planLineCents * pct) / 100);
+    if (!cents) return null;
+    const left = hit.p.periods - hit.r.periodsUsed;
+    return { redemptionId: hit.r.id, line: { description: `Promotion ${hit.p.code}: ${hit.p.kind === 'FREE_PERIODS' ? 'free' : `${pct}% off`} (${left} of ${hit.p.periods} left)`, cents, periodStart: start, periodEnd: end } };
   }
 
   /** Fee in cents for one event under a location's contract (e.g. commission on an order subtotal). */
@@ -318,7 +351,14 @@ export class ContractsService {
         const [c] = await tx.select().from(merchantContracts).where(eq(merchantContracts.id, s.contractId)).limit(1);
         let lastInvoiceId = s.lastInvoiceId;
         if (c && s.status !== 'TRIAL') {
-          const inv = await this.invoiceLines(s.organizationId, await this.periodLines(s.organizationId, c, s.locationCount, s.currentPeriodStart, s.currentPeriodEnd, 1, tx), 'Subscription invoice', now, tx);
+          const lines = await this.periodLines(s.organizationId, c, s.locationCount, s.currentPeriodStart, s.currentPeriodEnd, 1, tx);
+          const planLine = lines.find((l) => l.description.startsWith(c.name))?.cents ?? 0;
+          const promo = await this.promotionLine(s.organizationId, c, planLine, s.currentPeriodStart, s.currentPeriodEnd, tx);
+          if (promo) {
+            lines.push(promo.line);
+            await tx.update(promotionRedemptions).set({ periodsUsed: sql`${promotionRedemptions.periodsUsed} + 1` }).where(eq(promotionRedemptions.id, promo.redemptionId));
+          }
+          const inv = await this.invoiceLines(s.organizationId, lines, 'Subscription invoice', now, tx);
           if (inv) {
             lastInvoiceId = inv.id;
             out.push(inv.id);

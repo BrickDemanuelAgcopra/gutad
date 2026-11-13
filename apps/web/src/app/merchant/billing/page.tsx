@@ -19,6 +19,7 @@ interface Billing {
   addOns: { id: string; addOnId: string; code: string; name: string; priceCents: number; interval: string; quantity: number; cancelAt: string | null }[];
   availableAddOns: { id: string; code: string; name: string; description: string | null; priceCents: number; interval: string; perLocation: boolean }[];
   invoices: { id: string; number: string; kind: string; status: string; totalCents: number; dueAt: string; createdAt: string }[];
+  promotions: { code: string; name: string; kind: string; percentOff: number; periods: number; periodsUsed: number; endsAt: string | null; active: boolean }[];
 }
 interface Preview { plan: { code: string; name: string; subscriptionCents: number; interval: string; perLocation: boolean; trialDays: number; fees: FeeRuleDto[] }; current: { name: string } | null; direction: 'UPGRADE' | 'DOWNGRADE' | 'SAME'; effectiveFrom: string; usedChargeCents: number; gained: string[]; lost: string[]; limits: { name: string; from: number | null; to: number | null }[]; warnings: string[]; agreementVersion: string }
 
@@ -33,6 +34,8 @@ export default function BillingPage() {
   const { data: plans } = useApi<PublicPlanDto[]>('/public/plans');
   const [line, setLine] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [promo, setPromo] = useState('');
+  const [promoMsg, setPromoMsg] = useState<string | null>(null);
   const { run, error, busy } = useAction();
   if (!org) return null;
   if (!b) return <Spinner />;
@@ -121,6 +124,15 @@ export default function BillingPage() {
           {!b.availableAddOns.length && <p className="text-sm text-ink-500">No other add-ons available.</p>}
         </div>
         <p className="mt-2 text-xs text-ink-500">Adding mid-period charges the rest of the current period now. Canceling keeps the add-on until your renewal date.</p>
+      </Card>
+
+      <Card title="Promotion code">
+        <div className="flex flex-wrap items-end gap-2">
+          <Input label="Code" value={promo} onChange={(e) => setPromo(e.target.value.toUpperCase())} placeholder="e.g. WELCOME3" />
+          <Button variant="secondary" disabled={promo.trim().length < 2 || busy} onClick={() => run(async () => { const r = await api.post<{ name: string; kind: string; endsAt: string | null }>(`/organizations/${org.id}/promotions`, { code: promo }); setPromoMsg(`${r.name} applied${r.endsAt ? ` until ${when(r.endsAt)}` : ' to your next renewal invoices'}.`); setPromo(''); await done(); })}>Apply</Button>
+        </div>
+        {promoMsg && <p className="mt-2 text-sm text-emerald-700">{promoMsg}</p>}
+        {b.promotions.length > 0 && <ul className="mt-3 space-y-1 text-sm">{b.promotions.map((p) => <li key={p.code} className="flex flex-wrap items-center gap-2"><Badge tone={p.active ? 'good' : 'neutral'}>{p.active ? 'active' : 'used'}</Badge><b>{p.code}</b> {p.name} · {p.kind === 'COMMISSION_HOLIDAY' ? `no marketplace commission until ${when(p.endsAt)}` : p.kind === 'FREE_PERIODS' ? `free subscription, ${p.periods - p.periodsUsed} of ${p.periods} renewals left` : `${p.percentOff}% off, ${p.periods - p.periodsUsed} of ${p.periods} renewals left`}</li>)}</ul>}
       </Card>
 
       <Card title="Invoices">

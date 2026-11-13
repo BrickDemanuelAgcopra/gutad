@@ -3,14 +3,18 @@ import { api, when } from '@/api';
 import { useAction, useApi } from '@/hooks';
 import { useMerchantLocation } from '@/merchant';
 import { Badge, Button, Card, ErrorText, Loading, Muted, s, tone } from '@/ui';
+import { allowed, Locked, useEntitlements } from '@/plan';
 
 interface R { id: string; status: string; partySize: number; actualPartySize: number | null; startAt: string; guestName: string; confirmationCode: string; channel: string; tableIds: string[] }
 interface Board { reservations: R[]; waitlist: { id: string; guestName: string; partySize: number; status: string; position: number }[]; floor: { tables: { id: string; name: string; occupied: boolean }[] } }
 
 export default function Host() {
   const { loc } = useMerchantLocation();
-  const { data: b, reload } = useApi<Board>(loc ? `/locations/${loc.id}/host` : null, { poll: 6000, deps: [loc?.id] });
+  const { data: ent } = useEntitlements(loc?.id);
+  const canHost = allowed(ent, 'floor_plan');
+  const { data: b, reload } = useApi<Board>(loc && ent && canHost ? `/locations/${loc.id}/host` : null, { poll: 6000, deps: [loc?.id, canHost, !!ent] });
   const { run, error } = useAction();
+  if (ent && !canHost) return <Locked name={ent.names.floor_plan || 'Host stand'} planName={ent.planName} />;
   if (!loc || !b) return <Loading />;
   const act = (fn: () => Promise<unknown>) => run(async () => { await fn(); await reload(); });
   const tname = (id: string) => b.floor.tables.find((t) => t.id === id)?.name || '?';

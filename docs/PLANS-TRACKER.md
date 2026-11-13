@@ -62,11 +62,13 @@ Started 2026-11-13. Update this file as each item lands (`[x]` done, `[~]` in pr
 
 ## Phase 4: mobile, promotions, reporting
 
-- [ ] Mobile: plan summary and usage on the merchant dashboard
-- [ ] Mobile: locked features show an upgrade prompt that opens web billing
-- [ ] Promotions and trials (`promotions` table, codes, free months, commission holiday)
-- [ ] Admin revenue view: MRR by plan, trial conversion, upgrades/downgrades, cover and commission revenue
-- [ ] Update `docs/CAPABILITY-MAP.md`
+- [x] Mobile: plan summary and usage on the merchant tab (plan, status, renewal, orders/commission/covers this month, next invoice, scheduled change, overdue warning)
+- [x] Mobile: host stand shows a lock screen when the plan lacks floor plans; "See plans & add-ons" opens web billing (no in-app purchase)
+- [x] Promotions: `promotions` / `promotion_redemptions`; percent off and free renewals (applied on renewal invoices, one discount at a time), commission holiday (0% marketplace commission for N days); plan limits, redemption caps, expiry, new-merchants-only; admin tab; merchant redeems on Plan & billing. Trials come from plan versions (Phase 3)
+- [x] Admin revenue view (Plans & pricing → Revenue): MRR by plan and add-ons, subscription statuses, trial conversion, plan changes in 90 days, revenue by month from the ledger
+- [x] Update `docs/CAPABILITY-MAP.md`
+- [x] Smoke tests for promotions and the revenue report (11 new checks)
+- [~] Deploy Phase 4 to gutad.io and verify (mobile needs a new EAS build to reach phones)
 
 ## Log
 

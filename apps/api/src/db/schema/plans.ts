@@ -145,3 +145,46 @@ export const orgAddOns = pgTable(
   },
   (t) => [index('org_add_ons_org_idx').on(t.organizationId, t.status)],
 );
+
+/**
+ * Promotion codes merchants redeem from Plan & billing:
+ *   PERCENT_OFF        — `percentOff` off the plan subscription on the next `periods` renewal invoices
+ *   FREE_PERIODS       — the plan subscription is free for the next `periods` renewals
+ *   COMMISSION_HOLIDAY — 0% marketplace commission for `days` days from redemption
+ */
+export const promotions = pgTable('promotions', {
+  id: id(),
+  code: text('code').notNull().unique(),
+  name: text('name').notNull(),
+  kind: text('kind').notNull(), // PERCENT_OFF | FREE_PERIODS | COMMISSION_HOLIDAY
+  percentOff: integer('percent_off').notNull().default(0),
+  periods: integer('periods').notNull().default(1),
+  days: integer('days').notNull().default(0),
+  /** Empty = any plan. */
+  planCodes: text('plan_codes').array().notNull().default([]),
+  maxRedemptions: integer('max_redemptions'),
+  newMerchantsOnly: boolean('new_merchants_only').notNull().default(false),
+  startsAt: ts('starts_at'),
+  expiresAt: ts('expires_at'),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: createdAt(),
+});
+
+export const promotionRedemptions = pgTable(
+  'promotion_redemptions',
+  {
+    id: id(),
+    promotionId: uuid('promotion_id')
+      .notNull()
+      .references(() => promotions.id),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    redeemedById: uuid('redeemed_by_id').references(() => users.id),
+    periodsUsed: integer('periods_used').notNull().default(0),
+    /** Commission holidays end here; subscription discounts end when periods_used reaches the promotion's periods. */
+    endsAt: ts('ends_at'),
+    redeemedAt: createdAt(),
+  },
+  (t) => [uniqueIndex('promotion_redemptions_org_uq').on(t.promotionId, t.organizationId), index('promotion_redemptions_org_idx').on(t.organizationId)],
+);
