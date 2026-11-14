@@ -426,7 +426,7 @@ Verification:
 ### 18. Payments & transaction operations
 - **18.1** Payments console: search by order, intent, charge or id; status and purpose filters; 30-day totals; detail with split, refunds, dispute and ledger lines. Failed attempts (declines) are recorded even though the order rolls back. **W** Payments. **M** Ops → Finance.
 - **18.2** Enabled payment methods per region and channel (setting `payments.methods`); public endpoint for checkout; credits and points are refused where disabled (`METHOD_DISABLED`). **API W**
-- **18.3** Each order payment records its split (card, credits, points; gift balance with 25.9). **API W**
+- **18.3** Each order payment records its split (card, credits, points; gift balance since Phase J, see 18.3-G). **API W**
 - **18.4** Capture retry for open authorizations on accepted orders, capped (`finance.controls.maxCaptureRetries`); duplicate-charge report (same customer and amount within 5 minutes). **API W**
 - **18.5** Partial refunds are allocated back to the card and to credits in proportion to how the order was paid. **API W**
 - **18.6** Processor settlement file upload (CSV) and an unresolved-payments view (captured but unsettled, stale authorizations, unmatched lines). **W M**
@@ -449,7 +449,7 @@ Verification:
 - **20.1** Chart-of-accounts mapping (ledger account → GL code and name per legal entity, with defaults) and a journal export in a general-journal CSV layout. **W**
 - **20.2** P&L by location, legal entity, channel or brand (brand splits order-level lines by the brand's share of the order). **W**
 - **20.3** Cost report: food cost (COGS posted from recipes when Gutad-operated kitchens fire an order), labor, delivery and processing. **W**
-- **20.4** Credit liability report (outstanding, expiring, by funder, ledger balance) and breakage: expired credits post to breakage revenue (daily job, or on demand). Gift-card liability lands with 25.9. **W**
+- **20.4** Credit liability report (outstanding, expiring, by funder, ledger balance) and breakage: expired credits post to breakage revenue (daily job, or on demand). Gift-card liability added in Phase J (20.4-G). **W**
 - **20.5** Straight-line deferred-revenue schedule for subscriptions and memberships, net of refunds, with an idempotent true-up posting. **W**
 - **20.6** Supplier bills from received purchase orders at Gutad-operated kitchens (inventory and accounts payable), bill payment, and receivables / payables aging. **W**
 - **20.7** 14-day cash forecast, bank reconciliation view, and a month-end close checklist with automatic checks that blocks closing until everything is done. **W**
@@ -499,4 +499,40 @@ Verification:
 - **23.6** Equipment down or in maintenance takes the dishes that need it off the menu and closes its station (or halves capacity when other equipment works there); back in service restores exactly what changed. **W M**
 - **23.7** Device health: heartbeats record firmware, app version and errors; devices silent for 10 minutes go offline with one alert, which closes when they return. **W M**
 - **23.8** Automated equipment: approved software versions (`equipment.approvedVersions`), a fault feed from the kitchen's device token, alerts to an operator. Record and escalate only; Gutad never sends commands to the machine. **API W M**
+
+## Phase J: growth (shipped 2026-11-14)
+
+Verification:
+- Typecheck is clean for shared, API, web and mobile; `next build`: OK.
+- `npm run smoke` on a fresh database: **406/406 checks pass**, including 38 new Phase J checks in `scripts/smoke-admin-j.mjs`. Phase H's payment-methods check now restores the default list with GIFT_CARD.
+- Migration `0015_growth_offers_rewards_giftcards.sql`:
+  - new ledger account GIFT_CARD_LIABILITY
+  - new tables `offer_redemptions`, `referrals`, `challenges`, `challenge_progress`, `gift_cards`, `gift_card_txns`, `campaign_assignments`
+  - new columns on coupons (name, owner, automatic, segment, first order, items, categories, days, daypart, cap, stacking, priority), campaigns (holdout share; organization now optional for Gutad-wide campaigns), membership plans (trial days) and member subscriptions (trial end, cancel at period end, card, next retry, grace, last failure)
+- `GrowthModule` now has `GrowthService` (offers engine, campaigns and holdouts, loyalty, memberships), `RewardsService` (referrals, challenges) and `GiftCardsService`; gift balance as a tender lives in `modules/growth/gift-tender.ts` so checkout, cancellations and refunds share it. Shared `packages/shared/src/growth.ts`.
+- Seed: the Gutad+ monthly plan has a 7-day trial; a paused weekday-lunch offer and a paused "3 orders in 14 days" challenge as examples; settings `giftcards.limits`, `membership.dunning`, `growth.referrals`, `growth.contributionMarginBps`.
+- Jobs: the daily job also expires challenge windows and now retries past-due memberships on schedule; manual trigger `POST /admin/jobs/growth` (`at` only with `ALLOW_BILLING_TIME_TRAVEL=true`).
+- **Fixed:**
+  - Failed membership renewals were never retried: a past-due membership was not picked up by the renewal run again. It now retries on a schedule (1, 3, 5 days by default) and is suspended after the last try (25.8).
+  - Referral rewards were paid as soon as a code was entered (25.5).
+  - Delivered orders never earned loyalty points; delivery completion now runs the same completion steps as pickup (points, referral, challenges).
+  - An order paid entirely by credits, points or gift balance could not be canceled before acceptance (the void refused the placeholder payment), and when accepted it posted no settlement journal, so the merchant was never credited. Both fixed.
+- Also done here: 11.6 (payment mix), 18.3-G (gift split and refund allocation), 20.4-G (gift-card liability in the liability reports).
+
+### 25. Promotions, rewards, referrals & memberships
+- **25.1** Automatic (codeless) offers alongside codes, Gutad-wide or per merchant, shown on the restaurant page and applied at checkout; the checkout lists each promotion by name. **API W M**
+- **25.2** Eligibility: customer segment (saved platform segments), first order, merchant and locations, items or whole categories, days of the week and a daypart in the restaurant's local time, minimum subtotal, cap, uses per customer and in total. A code that doesn't apply says why. **API W**
+- **25.3** Stacking: exclusive offers stand alone, stackable ones combine in priority order and never exceed the subtotal. Without a code the customer gets the better of the best exclusive offer and all stackable ones; a typed code always applies, and an exclusive code replaces automatic offers with a note. **API W**
+- **25.4** Each promotion carries its funding (Gutad, merchant or a split share, 9.6); accepted orders record one redemption per promotion with Gutad- and merchant-funded amounts. Promotion cost report for Gutad and for each merchant: orders, customers, discount, funding split, sales, cost as a share of sales, plus the ledger promotion expense. Canceled orders drop out and free the use. **API W M** (read)
+- **25.5** Referrals: the code is recorded, and both sides get points only after the new customer's first completed order. A shared phone, card or delivery address between the two accounts holds the reward for review (approve or reject with a note, on web or phone). Codes only work before a first order, once per customer. **API W M**
+- **25.6** Reward challenges (e.g. 3 orders in 14 days) by Gutad or a merchant: qualifying orders (location, minimum), a window that starts with the first qualifying order, progress for the customer, completion limit, and an expiring credit (merchant- or Gutad-funded) when the goal is reached. **API W M**
+- **25.7** Membership trials for first-time members (card required, charged when the trial ends), cancel at the end of the period with benefits until then, undo the cancellation, change card. **API W M**
+- **25.8** Failed renewals: past due with retries after 1, 3 and 5 days (`membership.dunning`), benefits for a 7-day grace period, a message on each failure, suspension after the last retry. Updating the card retries at once; staff can retry from the console or phone; recoveries are counted. **API W M**
+- **25.9** Gift cards: buy for yourself or someone (email delivery), promotional cards issued by Gutad, add a code to the wallet, spend the balance at checkout, activity history. Balances are a liability until the order is captured. Fraud controls: per-buyer purchase limits per day, large cards wait for a second person, a customer is locked out for an hour after repeated wrong codes, staff can lock, unlock and void cards, and a fraud watch lists buyers with several cards and blocked attempts. **API W M**
+- **25.10** Campaign holdouts: a share of customers (up to 50%) is assigned to a holdout group the first time they meet the campaign, never sees its offers or messages, and is compared with the campaign group over the same window: incremental orders and sales, promotion cost, profit at the contribution margin (`growth.contributionMarginBps`), ROI. **API W M** (read)
+
+### Follow-ups completed with Phase J
+- **11.6** Payment mix at checkout: credits, then points, then gift balance, then the card; the summary shows the order total, each tender and what the card pays. Gift-only orders need no card. **API W M**
+- **18.3-G** The order's payment split records the gift share; allocated refunds return money to the card, credits and gift cards in proportion, and cancellations return gift money to the cards it came from (after capture, charged to whoever bears the refund). **API W**
+- **20.4-G** Gift-card liability (outstanding, ledger balance, not yet in a wallet, spent in 30 days) in Accounting → Balances and in the liabilities report. **API W**
 

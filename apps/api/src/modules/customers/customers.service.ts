@@ -66,6 +66,15 @@ export class CustomersService {
     return { total: n(cnt?.n), items: list.map((x) => ({ id: x.id, name: x.name, email: show ? x.email : mask(x.email as string), phone: show ? x.phone : x.phone ? '•••' + String(x.phone).slice(-2) : null, status: x.status, isGuest: x.is_guest, marketingConsent: x.marketing_consent, orders: n(x.orders), spendCents: n(x.spend), lastOrderAt: x.last_order, createdAt: x.created_at })) };
   }
 
+  /** 25.2 is this customer in a saved platform segment (offer eligibility)? */
+  async inSegment(segmentId: string, userId: string): Promise<boolean> {
+    const [seg] = await this.db.select().from(platformSegments).where(eq(platformSegments.id, segmentId)).limit(1);
+    if (!seg) return false;
+    const f = this.filterSql(seg.rules as SegmentRules);
+    const r = rows<{ id: string }>(await this.db.execute(sql`select u.id from users u left join orders o on o.user_id = u.id where ${f.where} and u.id = ${userId} group by u.id ${f.having}`));
+    return r.length > 0;
+  }
+
   async segments(user: JwtPayload) {
     assertCan(user, 'customers.read');
     const list = await this.db.select().from(platformSegments).orderBy(platformSegments.name);

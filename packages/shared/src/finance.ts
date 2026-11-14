@@ -6,7 +6,7 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethodType, string> = { CARD: 
 
 /** Setting `payments.methods` (18.2): enabled methods by default, per channel and per region (region id). */
 export interface PaymentMethodsConfig { default: PaymentMethodType[]; byChannel: Record<string, PaymentMethodType[]>; byRegion: Record<string, PaymentMethodType[]> }
-export const DEFAULT_PAYMENT_METHODS: PaymentMethodsConfig = { default: ['CARD', 'APPLE_PAY', 'GOOGLE_PAY', 'CREDITS', 'LOYALTY'], byChannel: { PHONE: ['CARD'], WALK_IN: ['CARD'] }, byRegion: {} };
+export const DEFAULT_PAYMENT_METHODS: PaymentMethodsConfig = { default: ['CARD', 'APPLE_PAY', 'GOOGLE_PAY', 'CREDITS', 'LOYALTY', 'GIFT_CARD'], byChannel: { PHONE: ['CARD'], WALK_IN: ['CARD'] }, byRegion: {} };
 export function enabledMethods(cfg: PaymentMethodsConfig, channel?: string | null, regionId?: string | null): PaymentMethodType[] {
   const base = (regionId && cfg.byRegion[regionId]) || cfg.default;
   const ch = channel ? cfg.byChannel[channel] : undefined;

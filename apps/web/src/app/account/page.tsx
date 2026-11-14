@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import type { AuthResponse, MfaChallenge } from '@gutad/shared';
 import { AccountSecurity } from '@/components/account-security';
+import { Rewards } from '@/components/rewards';
 import { CardField, type CardToken } from '@/components/card-field';
 import { api, money, session, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
@@ -121,24 +122,6 @@ function Kits() {
   if (!data) return <Spinner />;
   if (!data.length) return <p className="text-ink-500">No meal kit shipments. <Link className="underline" href="/meal-kits">Browse kits</Link>.</p>;
   return <div className="space-y-2">{data.map((s) => <div key={s.id} className="rounded-xl border border-ink-100 bg-white p-4"><div className="flex justify-between"><span className="font-medium">{s.orderNumber}</span><Badge tone={statusTone(s.status)}>{s.status}</Badge></div><div className="text-xs text-ink-500">Delivery {s.deliveryDate.slice(0, 10)} · {s.lines.map((l) => `${l.quantity}× ${l.name}`).join(', ')} · {money(s.totalCents)}{s.trackingNumber ? ` · tracking ${s.trackingNumber}` : ''}</div><Button size="sm" variant="ghost" className="mt-1" onClick={() => api.post(`/shipments/${s.id}/cases`, { kind: 'DAMAGED' }).then(() => alert('Case opened; support will issue a replacement or credit.'))}>Report a problem</Button></div>)}</div>;
-}
-
-function Rewards() {
-  const { data, reload } = useApi<{ points: number; valueCents: number; credits: { availableCents: number }; membership: { plan: { name: string }; currentPeriodEnd: string } | null; entries: { id: string; kind: string; points: number; createdAt: string }[] }>('/me/loyalty');
-  const { data: plans } = useApi<{ id: string; name: string; priceCents: number; interval: string; benefits: Record<string, unknown> }[]>('/public/membership/plans');
-  const [code, setCode] = useState('');
-  if (!data) return <Spinner />;
-  return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <Card title="Points & credits"><p className="text-3xl font-bold">{data.points} <span className="text-base font-normal text-ink-500">points ≈ {money(data.valueCents)}</span></p><p className="text-sm text-ink-500">Credits available: {money(data.credits.availableCents)}</p><ul className="mt-2 max-h-40 overflow-y-auto text-xs text-ink-500">{data.entries.map((e) => <li key={e.id}>{e.kind} {e.points > 0 ? '+' : ''}{e.points} · {when(e.createdAt)}</li>)}</ul>
-        <div className="mt-3 flex gap-2"><Input placeholder="Referral code" value={code} onChange={(e) => setCode(e.target.value)} /><Button variant="secondary" onClick={() => api.post('/me/referral', { code }).then(reload).catch((e) => alert(e.message))}>Apply</Button></div></Card>
-      <Card title="Membership">
-        {data.membership ? <p className="text-sm">You are a <b>{data.membership.plan.name}</b> member until {when(data.membership.currentPeriodEnd)}. <Button size="sm" variant="ghost" onClick={() => api.post('/me/membership/cancel', {}).then(reload)}>Cancel</Button></p> : (
-          <div className="space-y-2">{plans?.map((p) => <div key={p.id} className="flex items-center justify-between rounded-lg border border-ink-100 p-3 text-sm"><div><b>{p.name}</b> · {money(p.priceCents)}/{p.interval.toLowerCase()}<div className="text-xs text-ink-500">{Object.entries(p.benefits).filter(([, v]) => v).map(([k, v]) => `${k}${typeof v === 'number' ? ' ' + money(v) : ''}`).join(' · ')}</div></div><Button size="sm" onClick={() => api.post('/me/membership', { planId: p.id, paymentMethodId: 'mock_pm_4242' }).then(reload).catch((e) => alert(e.message))}>Join</Button></div>)}</div>
-        )}
-      </Card>
-    </div>
-  );
 }
 
 function Profile() {

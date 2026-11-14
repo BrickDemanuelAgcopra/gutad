@@ -14,7 +14,7 @@ export async function adminPhaseH({ call, check, A, O, C, locId, demoOrgId, API 
   await set('payments.methods', { default: ['CARD', 'APPLE_PAY'], byChannel: {}, byRegion: {} });
   await call('POST', '/payments/credits', { userId: me.id, cents: 300, reason: 'Smoke H credit' }, A);
   const noCredits = await quote({ useCreditsCents: 300 });
-  await set('payments.methods', { default: ['CARD', 'APPLE_PAY', 'GOOGLE_PAY', 'CREDITS', 'LOYALTY'], byChannel: { PHONE: ['CARD'], WALK_IN: ['CARD'] }, byRegion: {} });
+  await set('payments.methods', { default: ['CARD', 'APPLE_PAY', 'GOOGLE_PAY', 'CREDITS', 'LOYALTY', 'GIFT_CARD'], byChannel: { PHONE: ['CARD'], WALK_IN: ['CARD'] }, byRegion: {} });
   check('enabled payment methods are configurable and enforced at checkout', pm.methods.includes('CARD') && noCredits.status === 400 && noCredits.json.code === 'METHOD_DISABLED', { pm, noCredits: noCredits.json });
 
   // 18.1 failures are recorded even though the order rolls back

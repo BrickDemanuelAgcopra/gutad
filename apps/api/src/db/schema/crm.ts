@@ -78,9 +78,8 @@ export const reviews = pgTable('reviews', {
 
 export const campaigns = pgTable('campaigns', {
   id: id(),
-  organizationId: uuid('organization_id')
-    .notNull()
-    .references(() => organizations.id, { onDelete: 'cascade' }),
+  /** null = a Gutad-wide (platform) campaign */
+  organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   kind: text('kind').notNull(), // EMAIL | SMS | COUPON | SPONSORED | REFERRAL
   funder: text('funder').notNull().default('MERCHANT'), // MERCHANT | PLATFORM
@@ -94,6 +93,8 @@ export const campaigns = pgTable('campaigns', {
   sentCount: integer('sent_count').notNull().default(0),
   conversions: integer('conversions').notNull().default(0),
   attributedRevenueCents: integer('attributed_revenue_cents').notNull().default(0),
+  /** 25.10 share of the audience held out (0–50%) to measure incremental orders */
+  holdoutPct: integer('holdout_pct').notNull().default(0),
   createdAt: createdAt(),
 });
 
@@ -115,6 +116,28 @@ export const coupons = pgTable('coupons', {
   startsAt: ts('starts_at'),
   expiresAt: ts('expires_at'),
   isActive: boolean('is_active').notNull().default(true),
+  // ── 25.1–25.3 promotions engine
+  name: text('name'),
+  /** owner; null = Gutad-wide */
+  organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
+  /** codeless offer applied automatically when eligible */
+  automatic: boolean('automatic').notNull().default(false),
+  /** platform segment the customer must be in */
+  segmentId: uuid('segment_id'),
+  firstOrderOnly: boolean('first_order_only').notNull().default(false),
+  /** discount applies only to these items / categories (empty = whole cart) */
+  itemIds: uuid('item_ids').array().notNull().default([]),
+  categoryIds: uuid('category_ids').array().notNull().default([]),
+  /** 0 = Sunday … 6 = Saturday, location-local; empty = every day */
+  daysOfWeek: integer('days_of_week').array().notNull().default([]),
+  /** daypart HH:MM–HH:MM, location-local */
+  startTime: text('start_time'),
+  endTime: text('end_time'),
+  maxDiscountCents: integer('max_discount_cents'),
+  /** EXCLUSIVE (alone) | STACKABLE (combines with other stackable offers) */
+  stacking: text('stacking').notNull().default('EXCLUSIVE'),
+  priority: integer('priority').notNull().default(0),
+  createdAt: ts('created_at').defaultNow(),
 });
 
 export const loyaltyEntries = pgTable(
@@ -142,6 +165,8 @@ export const membershipPlans = pgTable('membership_plans', {
   interval: text('interval').notNull(), // MONTH | YEAR
   benefits: jsonb('benefits').notNull(), // {freeDeliveryAboveCents, priorityWaitlist, creditCentsPerMonth}
   isActive: boolean('is_active').notNull().default(true),
+  /** 25.7 free trial for first-time members (card on file, charged when the trial ends) */
+  trialDays: integer('trial_days').notNull().default(0),
 });
 
 export const memberSubscriptions = pgTable('member_subscriptions', {
@@ -152,11 +177,19 @@ export const memberSubscriptions = pgTable('member_subscriptions', {
   planId: uuid('plan_id')
     .notNull()
     .references(() => membershipPlans.id),
-  status: text('status').notNull().default('ACTIVE'), // ACTIVE | PAST_DUE | SUSPENDED | CANCELED
+  status: text('status').notNull().default('ACTIVE'), // TRIALING | ACTIVE | PAST_DUE | SUSPENDED | CANCELED
   currentPeriodEnd: ts('current_period_end').notNull(),
   renewalFailures: integer('renewal_failures').notNull().default(0),
   canceledAt: ts('canceled_at'),
   createdAt: createdAt(),
+  // ── 25.7 / 25.8
+  trialEndsAt: ts('trial_ends_at'),
+  cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+  paymentMethodId: text('payment_method_id'),
+  /** PAST_DUE: when the next retry runs; benefits continue until `graceUntil` */
+  nextRetryAt: ts('next_retry_at'),
+  graceUntil: ts('grace_until'),
+  lastFailureReason: text('last_failure_reason'),
 });
 
 // ───── 23 Notifications ─────

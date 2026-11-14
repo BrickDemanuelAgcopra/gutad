@@ -20,9 +20,11 @@ export default function Checkout() {
   const [fulfillment, setFulfillment] = useState<'PICKUP' | 'DELIVERY'>('PICKUP');
   const [tip, setTip] = useState(15);
   const [promo, setPromo] = useState('');
+  const [useGift, setUseGift] = useState(false);
   const [addr, setAddr] = useState({ line1: '', city: '', region: '', postalCode: '', lat: 0, lng: 0 });
   const [guest, setGuest] = useState({ name: '', email: '', phone: '' });
   const [card, setCard] = useState<CardToken | null>(null);
+  const { data: gifts } = useApi<{ balanceCents: number }>(user ? '/me/gift-cards' : null, { deps: [user?.id] });
   const { data: cards } = useApi<{ id: string; brand: string | null; last4: string | null; isDefault: boolean }[]>(user ? '/me/payment-methods' : null, { deps: [user?.id] });
   const [savedId, setSavedId] = useState<string>('');
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedId) setSavedId(d.id); }, [cards]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -37,12 +39,12 @@ export default function Checkout() {
   useEffect(() => {
     if (!cart.locationId || !cart.lines.length) return;
     const t = setTimeout(() => {
-      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, promoCode: promo || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
+      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, promoCode: promo || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
         .then((q) => { setQuote(q); setError(null); })
         .catch((e) => { setQuote(null); const b = codeOf(e); setError(b?.code && BLOCKED[b.code] ? `${BLOCKED[b.code]}${b.nextOpenAt ? ` Opens ${when(b.nextOpenAt)}.` : ''}` : (e as Error).message); });
     }, 350);
     return () => clearTimeout(t);
-  }, [cart, fulfillment, tipCents, promo, addr]);
+  }, [cart, fulfillment, tipCents, promo, addr, useGift]);
   const useMyLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
@@ -56,7 +58,7 @@ export default function Checkout() {
     try {
       const useSaved = !!user && !!savedId && savedId !== 'new';
       if (user && saveCard && !useSaved && card) await api.post('/me/payment-methods', { paymentMethodId: card.token, last4: card.last4, brand: card.brand }).catch(() => undefined);
-      const o = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, ...(useSaved ? { savedPaymentMethodId: savedId } : { paymentMethodId: card?.token }), guest: user ? undefined : guest }, idem.current);
+      const o = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, ...(quote.totalCents === 0 ? {} : useSaved ? { savedPaymentMethodId: savedId } : { paymentMethodId: card?.token }), guest: user ? undefined : guest }, idem.current);
       setDeclined(false);
       clear();
       router.replace({ pathname: '/order/[id]', params: { id: o.id, email: user ? '' : guest.email } });
@@ -77,6 +79,7 @@ export default function Checkout() {
       <Card title="Tip & promo">
         <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>{[0, 10, 15, 20].map((p) => <Button key={p} title={p ? `${p}%` : 'None'} variant={tip === p ? 'primary' : 'secondary'} onPress={() => setTip(p)} />)}</View>
         <Input label="Promo code" autoCapitalize="characters" value={promo} onChangeText={(v) => setPromo(v.toUpperCase())} />
+        {!!gifts?.balanceCents && <Button title={useGift ? `Using gift balance (${money(gifts.balanceCents)}) ✓` : `Use gift balance (${money(gifts.balanceCents)})`} variant={useGift ? 'primary' : 'secondary'} onPress={() => setUseGift(!useGift)} />}
       </Card>
       <Card title="Payment">
         {!user && (<><Input label="Name" value={guest.name} onChangeText={(v) => setGuest({ ...guest, name: v })} /><Input label="Email" autoCapitalize="none" value={guest.email} onChangeText={(v) => setGuest({ ...guest, email: v })} /><Input label="Phone" value={guest.phone} onChangeText={(v) => setGuest({ ...guest, phone: v })} /></>)}
@@ -88,7 +91,7 @@ export default function Checkout() {
       </Card>
       <Card title="Summary">
         <ErrorText msg={error} />
-        {quote && (<View>{[['Subtotal', quote.subtotalCents], ['Promo', -quote.discountCents], ['Tax', quote.taxCents], ['Service fee', quote.serviceFeeCents], ['Delivery', quote.deliveryFeeCents], ['Tip', quote.tipCents]].filter(([, v]) => v !== 0).map(([l, v]) => <View key={String(l)} style={s.row}><Muted>{String(l)}</Muted><Text>{money(Number(v))}</Text></View>)}<View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>Total</Text><Text style={{ fontWeight: '700' }}>{money(quote.totalCents)}</Text></View><Muted>{quote.promiseAt ? `Estimated: ${when(quote.promiseAt)}` : ''}</Muted>{quote.warnings.map((w) => <Text key={w} style={{ color: C.warn }}>{w}</Text>)}<Button title={busy ? 'Placing…' : `Place order · ${money(quote.totalCents)}`} disabled={busy || (!user && (!guest.email || !guest.name))} onPress={place} /></View>)}
+        {quote && (<View>{[['Subtotal', quote.subtotalCents], ...(quote.promotions?.length ? quote.promotions.map((p) => [p.name, -p.discountCents] as [string, number]) : [['Promo', -quote.discountCents] as [string, number]]), ['Tax', quote.taxCents], ['Service fee', quote.serviceFeeCents], ['Delivery', quote.deliveryFeeCents], ['Tip', quote.tipCents]].filter(([, v]) => v !== 0).map(([l, v]) => <View key={String(l)} style={s.row}><Muted>{String(l)}</Muted><Text>{money(Number(v))}</Text></View>)}{quote.paymentMix && quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents > 0 && (<View style={{ marginTop: 6 }}><View style={s.row}><Text>Order total</Text><Text>{money(quote.totalCents + quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents)}</Text></View>{quote.paymentMix.creditsCents > 0 && <View style={s.row}><Muted>Gutad credits</Muted><Text>{money(-quote.paymentMix.creditsCents)}</Text></View>}{quote.paymentMix.loyaltyCents > 0 && <View style={s.row}><Muted>Points</Muted><Text>{money(-quote.paymentMix.loyaltyCents)}</Text></View>}{quote.paymentMix.giftCents > 0 && <View style={s.row}><Muted>Gift card</Muted><Text>{money(-quote.paymentMix.giftCents)}</Text></View>}</View>)}<View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>{quote.paymentMix && quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents > 0 ? 'Card pays' : 'Total'}</Text><Text style={{ fontWeight: '700' }}>{money(quote.totalCents)}</Text></View><Muted>{quote.promiseAt ? `Estimated: ${when(quote.promiseAt)}` : ''}</Muted>{quote.warnings.map((w) => <Text key={w} style={{ color: C.warn }}>{w}</Text>)}<Button title={busy ? 'Placing…' : `Place order · ${money(quote.totalCents)}`} disabled={busy || (!user && (!guest.email || !guest.name))} onPress={place} /></View>)}
         {!quote && !error && <Muted>{fulfillment === 'DELIVERY' && !addr.lat ? 'Set your location for a delivery quote.' : 'Calculating…'}</Muted>}
       </Card>
     </ScrollView>

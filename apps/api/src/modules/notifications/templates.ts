@@ -78,7 +78,17 @@ export function render(template: string, p: Record<string, unknown>): Rendered {
     case 'payout.failed':
       return sub('Payout failed', `Your payout failed: ${p.reason}. Please check your payout details.`);
     case 'membership.renewal_failed':
-      return sub('Membership payment failed', `We couldn't renew your membership (attempt ${p.failures}). Update your card to keep benefits.`);
+      return p.suspended
+        ? sub('Membership paused', `We couldn't collect your membership payment after ${p.failures} tries, so benefits are paused. Update your card in Account → Rewards to restart.`)
+        : sub('Membership payment failed', `We couldn't renew your membership (attempt ${p.failures}). We'll try again ${when(p.nextRetryAt)}; update your card in Account → Rewards to keep benefits.`);
+    case 'giftcard.delivered':
+      return sub(`You've received a ${money(p.amountCents as number)} Gutad gift card`, `${p.from ? `${p.from} sent you` : 'You have'} a ${money(p.amountCents as number)} Gutad gift card${p.message ? `: "${p.message}"` : '.'}
+Code: ${p.code}
+Add it in Account → Rewards → Gift cards and use it at checkout.`);
+    case 'referral.rewarded':
+      return sub('Referral reward added', `${p.points} points were added to your account for a successful referral. Thanks for spreading the word!`);
+    case 'challenge.completed':
+      return sub(`Challenge complete: ${p.name}`, `Nice work! ${money(p.rewardCents as number)} in credit is in your account. Use it within ${p.expiresInDays} days.`);
     case 'incident.resolved':
       return sub('Your support case is resolved', `Case resolved: ${p.remedy}${p.cents ? ` (${money(p.cents as number)})` : ''}${p.orderNumber ? ` for order ${p.orderNumber}` : ''}.`);
     case 'merchant.new_order':

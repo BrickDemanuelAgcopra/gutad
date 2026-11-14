@@ -3,7 +3,8 @@ import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { brands, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
 import { brandSellable } from '../../common/brand-rules';
-import { DEFAULT_PAYMENT_METHODS, enabledMethods, type PaymentMethodsConfig } from '@gutad/shared';
+import { DEFAULT_PAYMENT_METHODS, enabledMethods, type AppliedPromotion, type PaymentMethodsConfig } from '@gutad/shared';
+import { giftBalance } from '../growth/gift-tender';
 import { cartCompatibility, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
@@ -30,6 +31,8 @@ export interface QuoteInput {
   deliveryAddress?: Address;
   useCreditsCents?: number;
   useLoyaltyPoints?: number;
+  /** 25.9 / 11.6 pay part of the order from the gift balance in the customer's wallet */
+  useGiftBalance?: boolean;
   userId?: string | null;
 }
 
@@ -48,7 +51,7 @@ export interface QuoteSnapshotLine {
 }
 
 /** Simulation inputs (9.8): draft fee rules, tax rates and item prices; nothing is stored. */
-export interface SimulationResult { subtotalCents: number; discountCents: number; taxCents: number; serviceFeeCents: number; smallOrderFeeCents: number; packagingFeeCents: number; deliveryFeeCents: number; tipCents: number; creditsCents: number; loyaltyCents: number; totalCents: number; commissionCents: number; promotionFunder: string | null; promotionPlatformShareCents: number; taxLines: { category: string; rateBps: number; taxableCents: number; taxCents: number }[]; lines: QuoteSnapshotLine[]; warnings: string[] }
+export interface SimulationResult { promotions: AppliedPromotion[]; giftCents: number; subtotalCents: number; discountCents: number; taxCents: number; serviceFeeCents: number; smallOrderFeeCents: number; packagingFeeCents: number; deliveryFeeCents: number; tipCents: number; creditsCents: number; loyaltyCents: number; totalCents: number; commissionCents: number; promotionFunder: string | null; promotionPlatformShareCents: number; taxLines: { category: string; rateBps: number; taxableCents: number; taxCents: number }[]; lines: QuoteSnapshotLine[]; warnings: string[] }
 export interface QuoteSimulation { feeRules?: CustomerFeeRules; taxRates?: Record<string, number>; priceOverrides?: Record<string, number>; ignoreHours?: boolean }
 
 const QUOTE_TTL_MINUTES = 10;
@@ -91,10 +94,11 @@ export class QuoteService {
     if (restr.some((r) => r.kind === 'ORDERING_BLOCKED')) throw new ForbiddenException({ message: 'Ordering is paused on this account. See Account → Help to appeal.', code: 'ACCOUNT_RESTRICTED' });
     if (input.promoCode && restr.some((r) => r.kind === 'PROMOTIONS_BLOCKED')) throw new BadRequestException({ message: 'Promotions are not available on this account', code: 'PROMOTIONS_BLOCKED' });
     // 18.2 payment methods enabled for this region and channel
-    if (!sim && (input.useCreditsCents || input.useLoyaltyPoints)) {
+    if (!sim && (input.useCreditsCents || input.useLoyaltyPoints || input.useGiftBalance)) {
       const methods = enabledMethods(await this.settings.getObject<PaymentMethodsConfig>('payments.methods', DEFAULT_PAYMENT_METHODS), input.channel, loc.regionId);
       if (input.useCreditsCents && !methods.includes('CREDITS')) throw new BadRequestException({ message: 'Credits can’t be used for this order', code: 'METHOD_DISABLED' });
       if (input.useLoyaltyPoints && !methods.includes('LOYALTY')) throw new BadRequestException({ message: 'Points can’t be used for this order', code: 'METHOD_DISABLED' });
+      if (input.useGiftBalance && !methods.includes('GIFT_CARD')) throw new BadRequestException({ message: 'Gift cards can’t be used for this order', code: 'METHOD_DISABLED' });
     }
     if (input.channel === 'KIOSK' && !loc.acceptsKiosk) throw new BadRequestException({ message: 'Kiosk ordering is not enabled here', code: 'CHANNEL_UNAVAILABLE' });
     if (input.fulfillmentType === 'PICKUP' && !loc.acceptsPickup) throw new BadRequestException('Pickup not offered');
@@ -158,21 +162,16 @@ export class QuoteService {
     const subtotalCents = snapLines.reduce((a, l) => a + l.lineTotalCents, 0);
     if (subtotalCents < loc.minOrderCents) throw new BadRequestException(`Minimum order is ${loc.minOrderCents} cents`);
 
-    // promotions
-    let discountCents = 0;
-    let promotionFunder: 'MERCHANT' | 'PLATFORM' | 'SPLIT' | null = null;
-    let promotionPlatformShareCents = 0;
-    let couponId: string | null = null;
-    let freeDelivery = false;
-    if (input.promoCode) {
-      const promo = await this.growth.validateCoupon(input.promoCode, { locationId: loc.id, channel: input.channel, subtotalCents, userId: input.userId }, tx);
-      discountCents = promo.discountCents;
-      promotionFunder = promo.platformSharePct !== null && promo.platformSharePct !== undefined && promo.platformSharePct > 0 && promo.platformSharePct < 100 ? 'SPLIT' : promo.funder;
-      // 9.6 — who pays for the discount: all platform, all merchant, or a split
-      promotionPlatformShareCents = promotionFunder === 'SPLIT' ? Math.round((discountCents * promo.platformSharePct!) / 100) : promotionFunder === 'PLATFORM' ? discountCents : 0;
-      couponId = promo.couponId;
-      freeDelivery = promo.freeDelivery;
-    }
+    // 25.1–25.3 promotions: automatic offers and the typed code, with eligibility and stacking rules
+    // 9.6 / 25.4 — each promotion carries its funding: all platform, all merchant, or a split share
+    const promo = await this.growth.evaluatePromotions({ loc, channel: input.channel, lines: snapLines, subtotalCents, userId: input.userId, code: input.promoCode, blocked: restr.some((r) => r.kind === 'PROMOTIONS_BLOCKED'), simulate: !!sim }, tx);
+    const discountCents = promo.discountCents;
+    const promotionFunder = promo.funder;
+    const promotionPlatformShareCents = promo.platformShareCents;
+    const couponId = promo.applied[0]?.promotionId ?? null;
+    const freeDelivery = promo.freeDelivery;
+    for (const p of promo.applied) if (p.automatic) warnings.push(`${p.name} applied`);
+    warnings.push(...promo.warnings);
 
     // membership benefits
     const membership = input.userId ? await this.growth.activeMembership(input.userId, tx) : null;
@@ -223,15 +222,17 @@ export class QuoteService {
     const tipCents = Math.max(0, input.tipCents || 0);
     const commissionCents = bps(taxableCents, terms.commissionBps);
 
-    // credits & loyalty (reduce what the card pays; recorded as platform-funded discount lines)
+    // 11.6 payment mix: credits, then points, then gift balance; the card pays what is left
     let creditsCents = 0;
     let loyaltyCents = 0;
-    if (input.userId) {
-      if (input.useCreditsCents) creditsCents = Math.min(input.useCreditsCents, await this.payments.availableCredit(input.userId, tx));
-      if (input.useLoyaltyPoints) loyaltyCents = Math.min(input.useLoyaltyPoints, await this.growth.loyaltyBalance(input.userId, tx)); // 1 point = 1 cent
-    }
+    let giftCents = 0;
     const grossTotal = taxableCents + taxCents + serviceFeeCents + smallOrderFeeCents + packagingFeeCents + deliveryFeeCents + tipCents;
-    const totalCents = Math.max(0, grossTotal - creditsCents - loyaltyCents);
+    if (input.userId) {
+      if (input.useCreditsCents) creditsCents = Math.min(input.useCreditsCents, await this.payments.availableCredit(input.userId, tx), grossTotal);
+      if (input.useLoyaltyPoints) loyaltyCents = Math.min(input.useLoyaltyPoints, await this.growth.loyaltyBalance(input.userId, tx), grossTotal - creditsCents); // 1 point = 1 cent
+      if (input.useGiftBalance) giftCents = Math.min(await giftBalance(tx, input.userId), grossTotal - creditsCents - loyaltyCents);
+    }
+    const totalCents = Math.max(0, grossTotal - creditsCents - loyaltyCents - giftCents);
 
     const promiseAt = scheduledFor ? scheduledFor : addMinutes(now, etaMinutes);
     const expiresAt = deliveryExpiresAt && deliveryExpiresAt < addMinutes(now, QUOTE_TTL_MINUTES) ? deliveryExpiresAt : addMinutes(now, QUOTE_TTL_MINUTES);
@@ -243,8 +244,12 @@ export class QuoteService {
       terms: { contractId: terms.contractId, planCode: terms.planCode, commissionBps: terms.commissionBps, processingBps: terms.processingBps, processingFixedCents: terms.processingFixedCents },
       commissionCents,
       couponId,
+      promotions: promo.applied,
+      promotionIds: promo.applied.map((p) => p.promotionId),
       promotionFunder,
       promotionPlatformShareCents,
+      grossTotalCents: grossTotal,
+      giftCents,
       taxLines: tax.lines,
       fees: { serviceFeeCents, smallOrderFeeCents, packagingFeeCents, rules: feeRules },
       menuVersions: [...new Set(snapLines.map((l) => l.menuItemId))].length ? await this.catalog.menuVersionsFor([...items.values()].map((i) => i.id)) : {},
@@ -259,7 +264,7 @@ export class QuoteService {
       // 11.8 — the policies the customer accepted with this order
       policies: await this.settings.getObject('policies.versions', { cancellation: '2026-11-01', refund: '2026-11-01', terms: '2026-11-01' }),
     };
-    if (sim) return { subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, creditsCents, loyaltyCents, totalCents, commissionCents, promotionFunder, promotionPlatformShareCents, taxLines: tax.lines, lines: snapLines, warnings };
+    if (sim) return { promotions: promo.applied, giftCents, subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, creditsCents, loyaltyCents, totalCents, commissionCents, promotionFunder, promotionPlatformShareCents, taxLines: tax.lines, lines: snapLines, warnings };
     const [q] = await tx
       .insert(quotes)
       .values({ locationId: loc.id, userId: input.userId ?? null, channel: input.channel, fulfillmentType: input.fulfillmentType, currency: loc.currency, snapshot, subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, totalCents, promoCode: input.promoCode?.toUpperCase() ?? null, promotionFunder, deliveryQuoteId, deliveryProviderCostCents, scheduledFor, promiseAt, expiresAt })
@@ -268,7 +273,7 @@ export class QuoteService {
   }
 
   present(q: typeof quotes.$inferSelect, warnings: string[] = []) {
-    const s = q.snapshot as { lines: QuoteSnapshotLine[]; creditsCents: number; loyaltyCents: number; commissionCents: number };
+    const s = q.snapshot as { lines: QuoteSnapshotLine[]; creditsCents: number; loyaltyCents: number; giftCents?: number; commissionCents: number; promotions?: AppliedPromotion[] };
     return {
       id: q.id,
       locationId: q.locationId,
@@ -286,7 +291,11 @@ export class QuoteService {
       tipCents: q.tipCents,
       creditsCents: s.creditsCents,
       loyaltyCents: s.loyaltyCents,
+      giftCents: s.giftCents || 0,
       totalCents: q.totalCents,
+      // customers see the name, code and amount of each promotion (not the funding split)
+      promotions: (s.promotions || []).map(({ platformShareCents: _p, funder: _f, ...p }) => p),
+      paymentMix: { creditsCents: s.creditsCents || 0, loyaltyCents: s.loyaltyCents || 0, giftCents: s.giftCents || 0, cardCents: q.totalCents },
       promiseAt: q.promiseAt?.toISOString() ?? null,
       scheduledFor: q.scheduledFor?.toISOString() ?? null,
       expiresAt: q.expiresAt.toISOString(),
@@ -299,7 +308,7 @@ export class QuoteService {
   async revalidate(quoteId: string, userId?: string | null) {
     const [q] = await this.db.select().from(quotes).where(eq(quotes.id, quoteId)).limit(1);
     if (!q) throw new NotFoundException('Quote not found');
-    const s = q.snapshot as { lines: QuoteSnapshotLine[]; deliveryAddress: Address | null; creditsCents: number; loyaltyCents: number };
+    const s = q.snapshot as { lines: QuoteSnapshotLine[]; deliveryAddress: Address | null; creditsCents: number; loyaltyCents: number; giftCents?: number };
     return this.quote({
       locationId: q.locationId,
       channel: q.channel as Channel,
@@ -311,6 +320,7 @@ export class QuoteService {
       deliveryAddress: s.deliveryAddress ?? undefined,
       useCreditsCents: s.creditsCents,
       useLoyaltyPoints: s.loyaltyCents,
+      useGiftBalance: (s.giftCents || 0) > 0,
       userId: userId ?? q.userId,
     });
   }

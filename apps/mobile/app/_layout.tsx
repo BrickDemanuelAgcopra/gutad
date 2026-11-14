@@ -42,6 +42,8 @@ export default function RootLayout() {
         <Stack.Screen name="ops/couriers" options={{ title: 'Couriers' }} />
         <Stack.Screen name="ops/finance" options={{ title: 'Finance' }} />
         <Stack.Screen name="ops/supply" options={{ title: 'Supply & inventory' }} />
+        <Stack.Screen name="ops/growth" options={{ title: 'Growth' }} />
+        <Stack.Screen name="rewards" options={{ title: 'Rewards & gift cards' }} />
         <Stack.Screen name="ops/safety" options={{ title: 'Food safety' }} />
         <Stack.Screen name="ops/workforce" options={{ title: 'Workforce & equipment' }} />
         <Stack.Screen name="merchant/ops" options={{ title: 'Shift tools' }} />

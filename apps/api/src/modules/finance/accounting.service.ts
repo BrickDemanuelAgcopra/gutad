@@ -1,3 +1,4 @@
+import { GiftCardsService } from '../growth/gift-cards.service';
 import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import { agingBucket, AGING_BUCKETS, CLOSE_CHECKLIST, DEFAULT_GL_MAP, PNL_LINES } from '@gutad/shared';
@@ -16,7 +17,7 @@ const monthRange = (period: string) => { const [y, m] = period.split('-').map(Nu
 /** Phase H, section 20: accounting, treasury and financial control. */
 @Injectable()
 export class AccountingService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly ledger: LedgerService, private readonly audit: AuditService, private readonly approvals: ApprovalsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly ledger: LedgerService, private readonly audit: AuditService, private readonly approvals: ApprovalsService, private readonly gifts: GiftCardsService) {}
 
   // ───── 20.1 chart of accounts & journal export ─────
 
@@ -96,7 +97,7 @@ export class AccountingService {
     const ledgerBal = await this.ledger.accountTotals('CUSTOMER_CREDIT_LIABILITY');
     const breakage = await this.ledger.accountTotals('PLATFORM_REVENUE_BREAKAGE');
     const byFunder = rows<{ funder: string; cents: string }>(await this.db.execute(sql`select funder, coalesce(sum(cents - redeemed_cents),0)::bigint as cents from customer_credits where cents > redeemed_cents and (expires_at is null or expires_at > now()) group by 1`));
-    return { outstandingCents: n(open.cents), credits: open.n, expiringIn30dCents: n(soon.cents), ledgerLiabilityCents: ledgerBal.credits - ledgerBal.debits, breakageToDateCents: breakage.credits - breakage.debits, byFunder: byFunder.map((x) => ({ funder: x.funder, cents: n(x.cents) })), giftCards: { note: 'Gift-card liability arrives with gift cards (Phase J, 25.9).' } };
+    return { outstandingCents: n(open.cents), credits: open.n, expiringIn30dCents: n(soon.cents), ledgerLiabilityCents: ledgerBal.credits - ledgerBal.debits, breakageToDateCents: breakage.credits - breakage.debits, byFunder: byFunder.map((x) => ({ funder: x.funder, cents: n(x.cents) })), giftCards: await this.gifts.liability() };
   }
 
   // ───── 20.5 revenue recognition ─────

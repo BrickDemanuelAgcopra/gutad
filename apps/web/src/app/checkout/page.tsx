@@ -27,6 +27,7 @@ export default function CheckoutPage() {
   const [declined, setDeclined] = useState(false);
   const [blocked, setBlocked] = useState<{ code: string; message: string; nextOpenAt?: string } | null>(null);
   const [useCredits, setUseCredits] = useState(0);
+  const [useGift, setUseGift] = useState(false);
   const [utensils, setUtensils] = useState(false);
   const [table, setTable] = useState(() => (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('table') || '' : ''));
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -35,6 +36,10 @@ export default function CheckoutPage() {
   const idem = useRef(newIdempotencyKey());
   const { data: loc } = useApi<{ id: string; name: string; acceptsDelivery: boolean; acceptsPickup: boolean; acceptsDineIn?: boolean; pickupTimes: { date: string; slots: string[] }[]; timezone: string }>(cart.locationId ? `/public/locations/${cart.locationId}` : null);
   const { data: credits } = useApi<{ availableCents: number }>(user ? '/me/credits' : null);
+  const { data: gifts, reload: reloadGifts } = useApi<{ balanceCents: number }>(user ? '/me/gift-cards' : null);
+  const [giftCode, setGiftCode] = useState('');
+  const [giftMsg, setGiftMsg] = useState<string | null>(null);
+  const addGift = async () => { try { const r = await api.post<{ walletCents: number }>('/me/gift-cards/claim', { code: giftCode }); setGiftCode(''); setGiftMsg(`Gift balance ${money(r.walletCents)} ready to use.`); setUseGift(true); reloadGifts(); } catch (e) { setGiftMsg((e as Error).message); } };
   const { data: cards } = useApi<{ id: string; brand: string | null; last4: string | null; isDefault: boolean }[]>(user ? '/me/payment-methods' : null);
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedCardId) setSavedCardId(d.id); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [cards]);
   const { data: me } = useApi<{ addresses: { line1: string; city: string; region: string; postalCode: string; lat: number | null; lng: number | null; isDefault: boolean }[] }>(user ? '/auth/me' : null);
@@ -55,7 +60,7 @@ export default function CheckoutPage() {
       try {
         let scheduledFor: string | null = null;
         if (schedule?.date && schedule.time) scheduledFor = (await api.get<{ iso: string }>(`/public/locations/${cart.locationId}/local-time?date=${schedule.date}&time=${schedule.time}`)).iso;
-        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), scheduledFor, tipCents, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined });
+        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), scheduledFor, tipCents, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined });
         if (!cancelled) { setQuote(q); setBlocked(null); }
       } catch (e) {
         if (!cancelled) {
@@ -69,7 +74,7 @@ export default function CheckoutPage() {
     const t = setTimeout(run, 350);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart, fulfillment, schedule, tipCents, promo, address.lat, address.lng, address.line1, useCredits, ready]);
+  }, [cart, fulfillment, schedule, tipCents, promo, address.lat, address.lng, address.line1, useCredits, useGift, ready]);
 
   const geocode = async () => {
     // Pilot geocoder: a demo pin in lower Manhattan. Replace with Google/Mapbox when GEOCODER_PROVIDER=google.
@@ -84,10 +89,11 @@ export default function CheckoutPage() {
       if (!user) {
         if (!guest.email || !guest.name) throw new Error('Name and email are required for guest checkout');
       }
-      if (!(user && savedCardId && savedCardId !== 'new') && !card) throw new Error('Choose a card');
+      const cardNeeded = quote.totalCents > 0;
+      if (cardNeeded && !(user && savedCardId && savedCardId !== 'new') && !card) throw new Error('Choose a card');
       const useSaved = !!user && !!savedCardId && savedCardId !== 'new';
       if (user && saveCard && !useSaved && card) await api.post('/me/payment-methods', { paymentMethodId: card.token, last4: card.last4, brand: card.brand }).catch(() => undefined);
-      const order = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, tableNumber: fulfillment === 'DINE_IN' ? table || undefined : undefined, ...(useSaved ? { savedPaymentMethodId: savedCardId } : { paymentMethodId: card!.token }), guest: user ? undefined : guest }, idem.current);
+      const order = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, tableNumber: fulfillment === 'DINE_IN' ? table || undefined : undefined, ...(!cardNeeded ? {} : useSaved ? { savedPaymentMethodId: savedCardId } : { paymentMethodId: card!.token }), guest: user ? undefined : guest }, idem.current);
       setDeclined(false);
       clear();
       router.push(`/orders/${order.id}${user ? '' : `?email=${encodeURIComponent(guest.email)}`}`);
@@ -151,6 +157,13 @@ export default function CheckoutPage() {
           <div className="flex flex-wrap gap-2">{[0, 10, 15, 20, 25].map((p) => <Button key={p} size="sm" variant={tip === p ? 'primary' : 'secondary'} onClick={() => setTip(p)}>{p === 0 ? 'No tip' : `${p}%`}</Button>)}</div>
           <div className="mt-3 flex gap-2"><Input placeholder="Promo code" value={promo} onChange={(e) => setPromo(e.target.value.toUpperCase())} /></div>
           {!!credits?.availableCents && <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={useCredits > 0} onChange={(e) => setUseCredits(e.target.checked ? credits.availableCents : 0)} /> Apply {money(credits.availableCents)} in credits</label>}
+          {user && (
+            <div className="mt-3 border-t border-ink-100 pt-3">
+              {!!gifts?.balanceCents && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={useGift} onChange={(e) => setUseGift(e.target.checked)} /> Use my gift card balance ({money(gifts.balanceCents)})</label>}
+              <div className="mt-2 flex gap-2"><Input placeholder="Gift card code" value={giftCode} onChange={(e) => setGiftCode(e.target.value.toUpperCase())} /><Button variant="secondary" disabled={giftCode.length < 4} onClick={addGift}>Add</Button></div>
+              {giftMsg && <p className="mt-1 text-xs text-ink-500">{giftMsg}</p>}
+            </div>
+          )}
         </Card>
         <Card title={user ? `Paying as ${user.email}` : 'Your details'}>
           {!user && (
@@ -179,13 +192,21 @@ export default function CheckoutPage() {
           {quote ? (
             <div className="space-y-1 text-sm">
               <Row l="Subtotal" v={money(quote.subtotalCents)} />
-              {quote.discountCents > 0 && <Row l="Promo" v={`−${money(quote.discountCents)}`} />}
+              {quote.promotions?.length ? quote.promotions.map((p) => <Row key={p.promotionId} l={p.automatic ? p.name : `${p.name}${p.code ? ` (${p.code})` : ''}`} v={p.discountCents ? `−${money(p.discountCents)}` : 'Free delivery'} />) : quote.discountCents > 0 ? <Row l="Promo" v={`−${money(quote.discountCents)}`} /> : null}
               <Row l="Tax" v={money(quote.taxCents)} />
               {quote.serviceFeeCents > 0 && <Row l="Service fee (delivery)" v={money(quote.serviceFeeCents)} />}
               {fulfillment === 'DELIVERY' && <Row l="Delivery" v={quote.deliveryFeeCents ? money(quote.deliveryFeeCents) : 'Free'} />}
               <Row l="Tip" v={money(quote.tipCents)} />
-              {(quote as Quote & { creditsCents?: number }).creditsCents ? <Row l="Credits" v={`−${money((quote as Quote & { creditsCents: number }).creditsCents)}`} /> : null}
-              <div className="flex justify-between border-t border-ink-100 pt-2 text-base font-semibold"><span>Total</span><span>{money(quote.totalCents)}</span></div>
+              {quote.paymentMix && (quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents) > 0 ? (
+                <>
+                  <div className="flex justify-between border-t border-ink-100 pt-2 font-medium"><span>Order total</span><span>{money(quote.totalCents + quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents)}</span></div>
+                  <p className="pt-1 text-xs font-semibold uppercase text-ink-500">Paid with</p>
+                  {quote.paymentMix.creditsCents > 0 && <Row l="Gutad credits" v={`−${money(quote.paymentMix.creditsCents)}`} />}
+                  {quote.paymentMix.loyaltyCents > 0 && <Row l="Points" v={`−${money(quote.paymentMix.loyaltyCents)}`} />}
+                  {quote.paymentMix.giftCents > 0 && <Row l="Gift card" v={`−${money(quote.paymentMix.giftCents)}`} />}
+                  <div className="flex justify-between border-t border-ink-100 pt-2 text-base font-semibold"><span>{quote.totalCents ? 'Card pays' : 'Nothing to pay by card'}</span><span>{money(quote.totalCents)}</span></div>
+                </>
+              ) : <div className="flex justify-between border-t border-ink-100 pt-2 text-base font-semibold"><span>Total</span><span>{money(quote.totalCents)}</span></div>}
               <p className="pt-1 text-xs text-ink-500">{quote.promiseAt ? `Estimated ${fulfillment === 'DELIVERY' ? 'delivery' : 'ready'}: ${when(quote.promiseAt)}` : ''}</p>
               {fulfillment === 'DELIVERY' && quote.serviceFeeCents > 0 && <p className="text-xs text-ink-500">Delivery is free. Delivery orders carry a service fee, waived for Gutad+ members. Pickup has no service fee.</p>}
               {quote.warnings.map((w) => <p key={w} className="text-xs text-amber-700">{w}</p>)}

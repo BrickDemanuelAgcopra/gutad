@@ -60,7 +60,7 @@ function Costs() {
 function Balances() {
   const { can } = useSession();
   const { run, error } = useAction();
-  const { data: cl, reload: rc } = useApi<{ outstandingCents: number; credits: number; expiringIn30dCents: number; ledgerLiabilityCents: number; breakageToDateCents: number; byFunder: { funder: string; cents: number }[]; giftCards: { note: string } }>('/accounting/credit-liability');
+  const { data: cl, reload: rc } = useApi<{ outstandingCents: number; credits: number; expiringIn30dCents: number; ledgerLiabilityCents: number; breakageToDateCents: number; byFunder: { funder: string; cents: number }[]; giftCards: { outstandingCents: number; cards: number; ledgerLiabilityCents: number; redeemedLast30dCents: number; unclaimedCents: number } }>('/accounting/credit-liability');
   const { data: dr, reload: rd } = useApi<{ requiredDeferredCents: number; bookedDeferredCents: number; trueUpCents: number; byKind: { kind: string; deferredCents: number }[]; lines: { id: string; kind: string; netCents: number; recognizedCents: number; deferredCents: number; periodEnd: string }[] }>('/accounting/deferred-revenue');
   const [ok, setOk] = useState<string | null>(null);
   return (
@@ -68,8 +68,12 @@ function Balances() {
       {error && <Alert>{error}</Alert>}{ok && <Alert tone="good">{ok}</Alert>}
       <Card title="Customer credit liability">
         {cl && <div className="grid gap-3 sm:grid-cols-4"><Stat label="Outstanding" value={money(cl.outstandingCents)} hint={`${cl.credits} credits`} /><Stat label="Expiring in 30 days" value={money(cl.expiringIn30dCents)} /><Stat label="Ledger liability" value={money(cl.ledgerLiabilityCents)} /><Stat label="Breakage to date" value={money(cl.breakageToDateCents)} /></div>}
-        <p className="mt-2 text-xs text-ink-500">{cl?.byFunder.map((f) => `${f.funder.toLowerCase()}-funded ${money(f.cents)}`).join(' · ')} · {cl?.giftCards.note}</p>
+        <p className="mt-2 text-xs text-ink-500">{cl?.byFunder.map((f) => `${f.funder.toLowerCase()}-funded ${money(f.cents)}`).join(' · ')}</p>
         {can('finance.manage') && <Button className="mt-2" size="sm" variant="secondary" onClick={() => run(async () => { const r = await api.post<{ credits: number; cents: number }>('/accounting/breakage', {}); setOk(`Breakage posted: ${r.credits} expired credits, ${money(r.cents)}.`); await rc(); })}>Post expired credits as breakage</Button>}
+      </Card>
+      <Card title="Gift-card liability">
+        {cl && <div className="grid gap-3 sm:grid-cols-4"><Stat label="Outstanding balances" value={money(cl.giftCards.outstandingCents)} hint={`${cl.giftCards.cards} cards`} /><Stat label="Ledger liability" value={money(cl.giftCards.ledgerLiabilityCents)} hint={cl.giftCards.ledgerLiabilityCents === cl.giftCards.outstandingCents ? 'matches balances' : 'difference = spent on orders not yet accepted'} /><Stat label="Not yet in a wallet" value={money(cl.giftCards.unclaimedCents)} /><Stat label="Spent in 30 days" value={money(cl.giftCards.redeemedLast30dCents)} /></div>}
+        <p className="mt-2 text-xs text-ink-500">Gift cards don’t expire unless issued with an end date; the balance stays a liability until it is spent. Look up and manage cards in Growth → Gift cards.</p>
       </Card>
       <Card title="Deferred revenue (subscriptions & memberships, straight-line)">
         {dr && <div className="grid gap-3 sm:grid-cols-3"><Stat label="Should be deferred" value={money(dr.requiredDeferredCents)} /><Stat label="Booked in the ledger" value={money(dr.bookedDeferredCents)} /><Stat label="True-up needed" value={money(dr.trueUpCents)} /></div>}

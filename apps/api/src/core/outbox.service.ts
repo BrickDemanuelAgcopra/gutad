@@ -39,6 +39,9 @@ export type DomainTopic =
   | 'payout.paid'
   | 'payout.failed'
   | 'membership.renewal_failed'
+  | 'giftcard.delivered'
+  | 'referral.rewarded'
+  | 'challenge.completed'
   | 'integration.failed'
   | 'incident.resolved';
 

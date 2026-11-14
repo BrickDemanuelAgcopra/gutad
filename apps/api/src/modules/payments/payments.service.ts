@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { customerCredits, disputes, inboxEvents, legalSellers, locations, orders, payments, payouts, refunds } from '../../db/schema';
+import { customerCredits, disputes, journalEntries, inboxEvents, legalSellers, locations, orders, payments, payouts, refunds } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
 import { LedgerService } from '../../core/ledger.service';
 import { OutboxService } from '../../core/outbox.service';
@@ -144,7 +144,14 @@ export class PaymentsService {
   async captureForOrder(orderId: string, amountCents: number | null, tx: DbOrTx = this.db) {
     const [p] = await tx.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
     if (!p) throw new NotFoundException('Payment not found');
-    if (p.status === 'CAPTURED' || p.status === 'SETTLED') return p; // idempotent
+    if (p.status === 'CAPTURED' || p.status === 'SETTLED') {
+      // an order paid entirely by credits / points / gift balance has no card capture: post its settlement journal once
+      if (p.provider === 'none' && p.orderId) {
+        const [posted] = await tx.select({ id: journalEntries.id }).from(journalEntries).where(eq(journalEntries.paymentId, p.id)).limit(1);
+        if (!posted) await this.postOrderCapture(p, tx);
+      }
+      return p; // idempotent
+    }
     if (p.status !== 'AUTHORIZED') throw new BadRequestException(`Payment is ${p.status}, cannot capture`);
     const amount = amountCents ?? p.authorizedCents;
     const res = await this.provider.capture(p.providerIntentId!, amount);
@@ -162,7 +169,7 @@ export class PaymentsService {
   private async postOrderCapture(p: typeof payments.$inferSelect, tx: DbOrTx) {
     const [o] = await tx.select().from(orders).where(eq(orders.id, p.orderId!)).limit(1);
     if (!o) return;
-    const snap = o.priceSnapshot as { deliveryProviderCostCents?: number; platformDeliverySubsidyCents?: number; promotionFunder?: string | null; promotionPlatformShareCents?: number; taxRemitter?: string };
+    const snap = o.priceSnapshot as { deliveryProviderCostCents?: number; platformDeliverySubsidyCents?: number; promotionFunder?: string | null; promotionPlatformShareCents?: number; taxRemitter?: string; giftCents?: number };
     const captured = p.capturedCents;
     // scale all components proportionally if a partial capture happened
     const ratio = o.totalCents > 0 ? captured / o.totalCents : 1;
@@ -184,6 +191,8 @@ export class PaymentsService {
     const platformDeliveryRevenue = isDelivery ? deliveryFee : 0;
     const lines: Parameters<LedgerService['post']>[1] = [
       { account: 'PROCESSOR_CLEARING', debitCents: captured, memo: `Capture ${o.number}` },
+      // 25.9 the gift-card share of the order leaves the gift liability when the order is captured
+      { account: 'GIFT_CARD_LIABILITY', partyId: 'gift-cards', debitCents: snap.giftCents || 0, memo: `Gift card used on ${o.number}` },
       { account: 'MERCHANT_PAYABLE', partyId: o.organizationId, organizationId: o.organizationId, locationId: o.locationId, creditCents: merchantPayable, memo: 'Food + tax − commission' },
       { account: 'PLATFORM_REVENUE_COMMISSION', creditCents: commission, organizationId: o.organizationId },
       { account: 'PLATFORM_REVENUE_SERVICE_FEE', creditCents: serviceFee, organizationId: o.organizationId },
@@ -207,6 +216,11 @@ export class PaymentsService {
     const [p] = await tx.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
     if (!p) return null;
     if (p.status === 'VOIDED') return p;
+    // nothing was charged to a card (credits / points / gift balance paid it all): release the placeholder
+    if (p.provider === 'none' && p.capturedCents === 0) {
+      const [row] = await tx.update(payments).set({ status: 'VOIDED' }).where(eq(payments.id, p.id)).returning();
+      return row;
+    }
     if (p.status !== 'AUTHORIZED' && p.status !== 'REQUIRES_ACTION') throw new BadRequestException('Payment already captured; use refund');
     if (p.providerIntentId) await this.provider.cancel(p.providerIntentId);
     const [row] = await tx.update(payments).set({ status: 'VOIDED' }).where(eq(payments.id, p.id)).returning();

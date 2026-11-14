@@ -28,7 +28,7 @@ async function main() {
   const [plan] = await db.select().from(s.membershipPlans).limit(1);
   if (!plan) {
     await db.insert(s.membershipPlans).values([
-      { name: 'Gutad+', priceCents: 799, interval: 'MONTH', benefits: { freeDeliveryAboveCents: 1500, priorityWaitlist: true, serviceFeeWaived: true, creditCentsPerMonth: 0 } },
+      { name: 'Gutad+', priceCents: 799, interval: 'MONTH', trialDays: 7, benefits: { freeDeliveryAboveCents: 1500, priorityWaitlist: true, serviceFeeWaived: true, creditCentsPerMonth: 0 } },
       { name: 'Gutad+ Annual', priceCents: 7900, interval: 'YEAR', benefits: { freeDeliveryAboveCents: 1500, priorityWaitlist: true, serviceFeeWaived: true, creditCentsPerMonth: 200 } },
     ]);
     log('created membership plans');
@@ -173,6 +173,15 @@ async function main() {
 
   // promo + campaign + meal kit
   await db.insert(s.coupons).values({ code: 'WELCOME10', kind: 'PERCENT', value: 1000, funder: 'PLATFORM', minSubtotalCents: 1500, perUserLimit: 1, locationIds: [], channels: [] });
+  // 25 growth examples (paused so they don't change other prices until someone switches them on)
+  await db.insert(s.coupons).values({ code: `AUTO-LUNCH-${loc.id.slice(0, 4).toUpperCase()}`, name: 'Weekday lunch: 10% off', automatic: true, organizationId: org.id, kind: 'PERCENT', value: 1000, funder: 'MERCHANT', minSubtotalCents: 1500, perUserLimit: 0, locationIds: [loc.id], channels: [], daysOfWeek: [1, 2, 3, 4, 5], startTime: '11:00', endTime: '14:00', stacking: 'STACKABLE', priority: 10, isActive: false });
+  await db.insert(s.challenges).values({ name: '3 orders in 14 days', description: 'Complete three orders within 14 days and get $5 in Gutad credit.', goalOrders: 3, windowDays: 14, minSubtotalCents: 1000, rewardCents: 500, rewardExpiresDays: 30, maxCompletions: 1, isActive: false });
+  await db.insert(s.platformSettings).values([
+    { key: 'giftcards.limits', value: { minCardCents: 500, maxCardCents: 50000, maxPurchasesPerDay: 3, maxCentsPerDay: 50000, reviewAboveCents: 25000, maxFailedRedeemsPerHour: 5 } },
+    { key: 'membership.dunning', value: { retryDays: [1, 3, 5], graceDays: 7 } },
+    { key: 'growth.referrals', value: { rewardPoints: 500, reviewOnSignals: true } },
+    { key: 'growth.contributionMarginBps', value: 3000 },
+  ]).onConflictDoNothing();
   await db.insert(s.mealKitProducts).values([{ sku: 'KIT-BISTRO-DATE', name: 'Bistro date night kit', description: 'Two-course dinner for two, 30 minutes.', priceCents: 5900, weightGrams: 2400, shipRegions: ['NY', 'NJ', 'CT'], leadDays: 2, stockOnHand: 50, locationId: loc.id }, { sku: 'KIT-BRUNCH', name: 'Sunday brunch box', priceCents: 4500, shipRegions: ['NY', 'NJ'], leadDays: 3, stockOnHand: 30, locationId: loc.id }]);
   await db.insert(s.guestProfiles).values({ organizationId: org.id, locationId: loc.id, userId: customer.id, name: customer.name!, email: customer.email, phone: customer.phone, tags: ['regular'], visitCount: 3, orderCount: 5, lifetimeSpendCents: 24_000, lastVisitAt: new Date(Date.now() - 5 * 86_400_000) });
   await db.insert(s.addresses).values({ userId: customer.id, label: 'Home', line1: '55 W 9th St', city: 'New York', region: 'NY', postalCode: '10011', lat: 40.7346, lng: -73.9975, isDefault: true });

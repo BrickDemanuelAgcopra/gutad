@@ -16,3 +16,4 @@ export * from './kitchen';
 export * from './delivery';
 export * from './finance';
 export * from './operations';
+export * from './growth';

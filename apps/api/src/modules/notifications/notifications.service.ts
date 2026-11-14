@@ -79,6 +79,9 @@ export class NotificationsService {
       case 'event.proposal_sent':
       case 'shipment.shipped':
       case 'membership.renewal_failed':
+      case 'giftcard.delivered':
+      case 'referral.rewarded':
+      case 'challenge.completed':
       case 'incident.resolved': {
         const target = await this.resolveTarget(topic, aggregateId, userId, email, phone, p);
         if (target.userId || target.email || target.phone) await this.notify.queue({ ...target, template: topic, payload: p, dedupeKey: dedupe });

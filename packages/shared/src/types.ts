@@ -170,6 +170,13 @@ export interface Quote {
   expiresAt: string;
   deliveryQuoteId?: string | null;
   warnings: string[];
+  /** 25.1 promotions applied (automatic offers and codes) */
+  promotions?: import('./growth').AppliedPromotion[];
+  creditsCents?: number;
+  loyaltyCents?: number;
+  giftCents?: number;
+  /** 11.6 payment mix: credits, points and gift balance first, the card pays the rest */
+  paymentMix?: import('./growth').PaymentMix;
 }
 
 export interface OrderDto {

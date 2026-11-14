@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { giftOutstanding, restoreGift } from '../growth/gift-tender';
 import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { DEFAULT_FINANCE_CONTROLS, DEFAULT_PAYMENT_METHODS, enabledMethods, type FinanceControls, type PaymentMethodsConfig } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
@@ -95,33 +96,44 @@ export class FinanceService {
   }
 
   /**
-   * 18.5 partial refund allocated back to how the order was paid: the card share goes back to the card,
-   * the credits share is restored as credits (same expiry rules), in proportion to the original split.
+   * 18.5 / 18.3-G partial refund allocated back to how the order was paid: the card share goes back to the card,
+   * the credits share is restored as credits (same expiry rules) and the gift share goes back to the gift card(s)
+   * it came from, in proportion to the original split. What one tender can't take moves to the next.
    */
   async refundAllocated(user: JwtPayload, paymentId: string, input: { amountCents: number; reason: string; funder: 'MERCHANT' | 'PLATFORM' }) {
     assertCan(user, 'finance.manage', 'support.manage');
     const [p] = await this.db.select().from(payments).where(eq(payments.id, paymentId)).limit(1);
     if (!p) throw new NotFoundException();
     const [o] = p.orderId ? await this.db.select().from(orders).where(eq(orders.id, p.orderId)).limit(1) : [null];
-    const split = (p.split as { cardCents?: number; creditsCents?: number } | null) || { cardCents: p.capturedCents, creditsCents: 0 };
-    const card = split.cardCents ?? p.capturedCents, credits = split.creditsCents ?? 0;
+    const split = (p.split as { cardCents?: number; creditsCents?: number; giftCents?: number } | null) || { cardCents: p.capturedCents, creditsCents: 0, giftCents: 0 };
+    const card = split.cardCents ?? p.capturedCents, credits = split.creditsCents ?? 0, gift = split.giftCents ?? 0;
     const prior = await this.db.select({ a: refunds.allocation }).from(refunds).where(eq(refunds.paymentId, p.id));
     const creditsBack = prior.reduce((a, r) => a + ((r.a as { creditsCents?: number } | null)?.creditsCents || 0), 0);
     const cardLeft = p.capturedCents - p.refundedCents;
-    const creditsLeft = credits - creditsBack;
-    if (input.amountCents <= 0 || input.amountCents > cardLeft + creditsLeft) throw new BadRequestException(`Refund must be between 1 and ${cardLeft + creditsLeft} cents`);
-    let toCredits = card + credits > 0 ? Math.round((input.amountCents * credits) / (card + credits)) : 0;
-    toCredits = Math.min(toCredits, creditsLeft);
-    let toCard = input.amountCents - toCredits;
-    if (toCard > cardLeft) { toCredits += toCard - cardLeft; toCard = cardLeft; }
+    const creditsLeft = Math.max(0, credits - creditsBack);
+    const giftLeft = p.orderId && gift ? (await giftOutstanding(this.db, p.orderId)).total : 0;
+    const max = cardLeft + creditsLeft + giftLeft;
+    if (input.amountCents <= 0 || input.amountCents > max) throw new BadRequestException(`Refund must be between 1 and ${max} cents`);
+    const whole = card + credits + gift;
+    let toCredits = whole > 0 ? Math.min(Math.round((input.amountCents * credits) / whole), creditsLeft) : 0;
+    let toGift = whole > 0 ? Math.min(Math.round((input.amountCents * gift) / whole), giftLeft) : 0;
+    let toCard = input.amountCents - toCredits - toGift;
+    if (toCard > cardLeft) {
+      let over = toCard - cardLeft;
+      toCard = cardLeft;
+      const g = Math.min(over, giftLeft - toGift); toGift += g; over -= g;
+      const c = Math.min(over, creditsLeft - toCredits); toCredits += c; over -= c;
+    }
     return this.db.transaction(async (tx) => {
       let refundId: string | null = null;
       if (toCard > 0) refundId = (await this.payments.refund({ paymentId: p.id, amountCents: toCard, reason: input.reason, funder: input.funder, approvedById: user.sub }, tx)).id;
       if (toCredits > 0 && p.userId) await this.payments.issueCredit({ userId: p.userId, cents: toCredits, reason: `Refund to credits: ${input.reason}`, funder: input.funder, orderId: p.orderId, organizationId: o?.organizationId ?? null }, tx);
-      if (refundId) await tx.update(refunds).set({ allocation: { cardCents: toCard, creditsCents: toCredits } }).where(eq(refunds.id, refundId));
-      else if (toCredits > 0) await tx.insert(refunds).values({ paymentId: p.id, orderId: p.orderId, amountCents: 0, reason: input.reason, funder: input.funder, status: 'SUCCEEDED', approvedById: user.sub, allocation: { cardCents: 0, creditsCents: toCredits } });
-      await this.audit.log({ actorId: user.sub, action: 'payment.refund_allocated', entityType: 'payment', entityId: p.id, after: { toCard, toCredits }, reason: input.reason }, tx);
-      return { toCardCents: toCard, toCreditsCents: toCredits };
+      if (toGift > 0 && p.orderId) await restoreGift(tx, this.ledger, { orderId: p.orderId, cents: toGift, kind: 'REFUND', actorId: user.sub, note: input.reason, funder: { account: input.funder === 'MERCHANT' ? 'MERCHANT_PAYABLE' : 'PLATFORM_EXPENSE_REFUND', organizationId: o?.organizationId ?? null }, currency: p.currency });
+      const allocation = { cardCents: toCard, creditsCents: toCredits, giftCents: toGift };
+      if (refundId) await tx.update(refunds).set({ allocation }).where(eq(refunds.id, refundId));
+      else if (toCredits + toGift > 0) await tx.insert(refunds).values({ paymentId: p.id, orderId: p.orderId, amountCents: 0, reason: input.reason, funder: input.funder, status: 'SUCCEEDED', approvedById: user.sub, allocation });
+      await this.audit.log({ actorId: user.sub, action: 'payment.refund_allocated', entityType: 'payment', entityId: p.id, after: allocation, reason: input.reason }, tx);
+      return { toCardCents: toCard, toCreditsCents: toCredits, toGiftCents: toGift };
     });
   }
 

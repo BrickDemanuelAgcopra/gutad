@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { bearing, bearingDiff, DEFAULT_BATCHING, DEFAULT_DISPATCH, HARD_REQUIREMENTS, REQUIRED_COURIER_DOCS, type BatchingConfig, type DispatchConfig } from '@gutad/shared';
+import { ModuleRef } from '@nestjs/core';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { courierDocuments, courierRecords, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, users } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
@@ -25,6 +26,7 @@ export class DeliveryService {
     private readonly outbox: OutboxService,
     private readonly audit: AuditService,
     private readonly settings: SettingsService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   // ───── zones ─────
@@ -298,7 +300,14 @@ export class DeliveryService {
     if (topic) await this.outbox.publish(topic, jobId, { orderId: job.orderId, status, ...data }, tx);
     if (status === 'DELIVERED') {
       await this.settleJob(u, tx);
-      if (job.orderId) await tx.update(orders).set({ status: 'COMPLETED', completedAt: now }).where(and(eq(orders.id, job.orderId), inArray(orders.status, ['READY', 'COLLECTED'])));
+      if (job.orderId) {
+        const [done] = await tx.update(orders).set({ status: 'COMPLETED', completedAt: now }).where(and(eq(orders.id, job.orderId), inArray(orders.status, ['READY', 'COLLECTED']))).returning();
+        // points, referral qualification and challenge progress for delivered orders (25.5 / 25.6)
+        if (done) {
+          const { GrowthService } = await import('../growth/growth.service');
+          await this.moduleRef.get(GrowthService, { strict: false }).onOrderCompleted(done, tx);
+        }
+      }
     }
     return u;
   }

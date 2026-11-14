@@ -1,13 +1,15 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
+import { journalEntries, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
 import { DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
+import { LedgerService } from '../../core/ledger.service';
+import { redeemGift, restoreGift } from '../growth/gift-tender';
 import { PaymentsService } from '../payments/payments.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { KitchenService } from '../kitchen/kitchen.service';
@@ -54,6 +56,7 @@ export class OrdersService {
     private readonly audit: AuditService,
     private readonly redis: RedisService,
     private readonly settings: SettingsService,
+    private readonly ledger: LedgerService,
   ) {}
 
   // ───── 07 checkout ─────
@@ -93,7 +96,7 @@ export class OrdersService {
       const n = await this.redis.incrWindow(`throttle:${loc.id}:${Math.floor(Date.now() / 900_000)}`, 900);
       if (n > throttle) throw new ConflictException(ramp ? 'Restaurant is reopening gradually; try scheduling for later' : 'Restaurant is at capacity; try scheduling for later');
     }
-    const snap = q.snapshot as { lines: QuoteSnapshotLine[]; commissionCents: number; terms: { contractId: string | null; commissionBps: number }; couponId: string | null; creditsCents: number; loyaltyCents: number; deliveryFleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM'; deliveryProviderCostCents: number; platformDeliverySubsidyCents: number; deliveryAddress: Address | null };
+    const snap = q.snapshot as { lines: QuoteSnapshotLine[]; commissionCents: number; terms: { contractId: string | null; commissionBps: number }; couponId: string | null; creditsCents: number; loyaltyCents: number; giftCents?: number; deliveryFleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM'; deliveryProviderCostCents: number; platformDeliverySubsidyCents: number; deliveryAddress: Address | null };
     const userId = user?.sub ?? null;
 
     const orderId = await this.db.transaction(async (tx) => {
@@ -147,6 +150,12 @@ export class OrdersService {
       // credits / loyalty applied before the card
       if (userId && snap.creditsCents) await this.payments.redeemCredit(userId, snap.creditsCents, o.id, tx);
       if (userId && snap.loyaltyCents) await this.growth.redeemPoints(userId, snap.loyaltyCents, o.id, tx);
+      // 25.9 gift balance (re-checked under a row lock: a card spent elsewhere since the quote is caught here)
+      if (userId && snap.giftCents) {
+        const used = await redeemGift(tx, userId, snap.giftCents, o.id);
+        if (used < snap.giftCents) throw new BadRequestException({ message: 'Your gift card balance changed since this price was calculated. Review the total and try again.', code: 'GIFT_BALANCE_CHANGED', quoteId: q.id });
+      }
+      const split = { cardCents: o.totalCents, creditsCents: snap.creditsCents || 0, loyaltyCents: snap.loyaltyCents || 0, giftCents: snap.giftCents || 0 };
 
       // card authorization (manual capture)
       if (o.totalCents > 0) {
@@ -154,14 +163,14 @@ export class OrdersService {
         try {
           await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
           // 18.3 record how the order was paid
-          await tx.update(payments).set({ split: { cardCents: o.totalCents, creditsCents: snap.creditsCents || 0, loyaltyCents: snap.loyaltyCents || 0, giftCents: 0 } }).where(eq(payments.orderId, o.id));
+          await tx.update(payments).set({ split }).where(eq(payments.orderId, o.id));
         } catch (e) {
           // 18.1 the failed attempt is kept even though the order rolls back
           await this.db.insert(paymentFailures).values({ purpose: 'ORDER', quoteId: q.id, userId, locationId: loc.id, amountCents: o.totalCents, currency: o.currency, provider: this.payments.providerName, reason: (e as Error).message }).catch(() => undefined);
           throw new BadRequestException({ message: `Payment failed: ${(e as Error).message}. Try another card.`, code: 'PAYMENT_DECLINED', quoteId: q.id });
         }
       } else {
-        await tx.insert(payments).values({ orderId: o.id, userId, purpose: 'ORDER', provider: 'none', status: 'CAPTURED', currency: o.currency, amountCents: 0, idempotencyKey: `pay:${o.id}` });
+        await tx.insert(payments).values({ orderId: o.id, userId, purpose: 'ORDER', provider: 'none', status: 'CAPTURED', currency: o.currency, amountCents: 0, split, idempotencyKey: `pay:${o.id}` });
       }
 
       if (q.fulfillmentType === 'DELIVERY' && snap.deliveryAddress) {
@@ -203,8 +212,7 @@ export class OrdersService {
       const promiseAt = prepMinutes ? addMinutes(new Date(), prepMinutes) : o.promiseAt;
       await tx.update(orders).set({ status: 'ACCEPTED', acceptedAt: new Date(), promiseAt }).where(eq(orders.id, orderId));
       await this.payments.captureForOrder(orderId, null, tx);
-      const snap = o.priceSnapshot as { couponId?: string | null };
-      if (snap.couponId) await this.growth.consumeCoupon(snap.couponId, o.discountCents, o.totalCents, tx);
+      await this.growth.consumePromotions(o, tx);
       await this.kitchen.fanOut(orderId, tx);
       if (o.fulfillmentType === 'DELIVERY') {
         const [job] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
@@ -299,7 +307,7 @@ export class OrdersService {
 
   async onCompleted(o: typeof orders.$inferSelect, tx: DbOrTx) {
     await this.crm.recordOrder(o.organizationId, { locationId: o.locationId, userId: o.userId, name: o.guestName || 'Customer', email: o.guestEmail, phone: o.guestPhone, spendCents: o.subtotalCents - o.discountCents }, tx);
-    if (o.userId) await this.growth.earnForOrder(o.userId, o.id, o.subtotalCents - o.discountCents, tx);
+    await this.growth.onOrderCompleted(o, tx);
     await this.outbox.publish('order.completed', o.id, { number: o.number, userId: o.userId, locationId: o.locationId }, tx);
   }
 
@@ -344,7 +352,8 @@ export class OrdersService {
       const [p] = await tx.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
       if (p && (p.status === 'AUTHORIZED' || p.status === 'REQUIRES_ACTION')) await this.payments.voidForOrder(orderId, tx);
       else if (p && p.capturedCents - p.refundedCents > 0) await this.payments.refund({ paymentId: p.id, amountCents: p.capturedCents - p.refundedCents, reason, funder, approvedById: user.sub, idempotencyKey: `cancel:${orderId}` }, tx);
-      await this.restoreCreditsAndPoints(o, tx);
+      await this.restoreCreditsAndPoints(o, tx, funder);
+      await this.growth.reverseRedemptions(orderId, tx);
       await this.growth.reverseForOrder(orderId, tx);
       const [job] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
       if (job && !['DELIVERED', 'CANCELED', 'FAILED'].includes(job.status)) await this.delivery.transition(job.id, 'CANCELED', { reason, costOwner: funder }, tx);
@@ -444,9 +453,15 @@ export class OrdersService {
     return { order: await this.present(orderId), events, tickets, ...pay, delivery: tracking };
   }
 
-  private async restoreCreditsAndPoints(o: typeof orders.$inferSelect, tx: DbOrTx) {
-    const snap = o.priceSnapshot as { creditsCents?: number; loyaltyCents?: number };
+  private async restoreCreditsAndPoints(o: typeof orders.$inferSelect, tx: DbOrTx, funder?: string) {
+    const snap = o.priceSnapshot as { creditsCents?: number; loyaltyCents?: number; giftCents?: number };
     if (!o.userId) return;
+    if (snap.giftCents) {
+      // before capture nothing was posted; after capture the redemption sits in the capture journal, so the give-back is charged to the funder
+      const [p] = await tx.select({ status: payments.status, provider: payments.provider, id: payments.id }).from(payments).where(eq(payments.orderId, o.id)).limit(1);
+      const [posted] = p ? await tx.select({ id: journalEntries.id }).from(journalEntries).where(and(eq(journalEntries.paymentId, p.id), eq(journalEntries.account, 'GIFT_CARD_LIABILITY'))).limit(1) : [];
+      await restoreGift(tx, this.ledger, { orderId: o.id, cents: null, kind: posted ? 'REFUND' : 'RESTORE', note: `Order ${o.number} canceled`, funder: posted ? { account: funder === 'MERCHANT' ? 'MERCHANT_PAYABLE' : 'PLATFORM_EXPENSE_REFUND', organizationId: o.organizationId } : null, currency: o.currency });
+    }
     if (snap.creditsCents) await this.payments.issueCredit({ userId: o.userId, cents: snap.creditsCents, reason: `Credit restored (order ${o.number} canceled)`, orderId: o.id }, tx);
     if (snap.loyaltyCents) await this.growth.redeemPoints(o.userId, -snap.loyaltyCents, o.id, tx).catch(() => undefined);
   }

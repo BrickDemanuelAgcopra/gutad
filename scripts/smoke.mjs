@@ -15,6 +15,7 @@ import { adminPhaseF } from './smoke-admin-f.mjs';
 import { adminPhaseG } from './smoke-admin-g.mjs';
 import { adminPhaseH } from './smoke-admin-h.mjs';
 import { adminPhaseI } from './smoke-admin-i.mjs';
+import { adminPhaseJ } from './smoke-admin-j.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -490,6 +491,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await adminPhaseG({ call, check, A, O, C });
   await adminPhaseH({ call, check, A, O, C, locId, demoOrgId, API: process.env.API_URL || 'http://localhost:4000' });
   await adminPhaseI({ call, check, A, O, C, owner });
+  await adminPhaseJ({ call, check, A, O, C, locId, demoOrgId });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

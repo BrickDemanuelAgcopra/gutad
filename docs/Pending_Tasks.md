@@ -46,7 +46,6 @@ Phase D shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 ## Phase E: customers, checkout, support
 
 Phase E shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
-- [ ] 11.6 [improve] Gift balance in the payment mix with a calculation breakdown (ships with 25.9 gift cards) · API W M
 - [ ] 10.8-L [new] Cash and credit limits per customer (restriction kinds today: ordering block, promotions block, refund review) · API W
 - [ ] 10.4-D [improve] Device fingerprint as a duplicate-account signal (today: normalized email, phone and address) · API W
 - [ ] 10.3-P [improve] Real processor SetupIntent/tokenization for saved cards on web and mobile (test mode builds a mock token client-side; the API already rejects raw card numbers) · API W M
@@ -76,8 +75,6 @@ Phase G shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 ## Phase H: payments, settlement, accounting
 
 Phase H shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
-- [ ] 18.3-G [improve] Gift balance in the recorded payment split and in refund allocation (ships with 25.9 gift cards) · API W
-- [ ] 20.4-G [improve] Gift-card liability in the liability report (with 25.9) · API W
 - [ ] 18.9-S [new] Mount the processor's hosted card field / payment sheet (Stripe Elements on web, PaymentSheet on mobile) when the live processor is configured; test mode uses the test-card picker · W M
 - [ ] 20.1-L [new] Live push of journals to the general ledger once accounting-software credentials exist (today: CSV export in a general-journal layout) · API
 - [ ] 20.7-L [improve] Lock ledger postings dated in a closed month (today: the close is recorded and checked, postings are never back-dated) · API
@@ -97,17 +94,13 @@ Phase I shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase J: growth
 
-### 25. Promotions, rewards, referrals & memberships
-- [ ] 25.1 [improve] Automatic (codeless) offers as well as coupons · API W M
-- [ ] 25.2 [improve] Eligibility: customer segment, first order, merchant, item/category, daypart/day-of-week · API W
-- [ ] 25.3 [improve] Stacking rules (exclusive vs stackable, priority) · API W
-- [ ] 25.4 [improve] Funding accounting split (with 9.6) and a promotion cost report · API W
-- [ ] 25.5 [fix+improve] Referrals: reward after the referee's first completed order; abuse review (same device, payment or address) · API W M
-- [ ] 25.6 [new] Reward challenges (e.g., 3 orders in 14 days), qualifying orders, progress, credit expiry · API W M
-- [ ] 25.7 [improve] Membership trials, renewals, cancel at period end · API W M
-- [ ] 25.8 [fix+improve] Failed recurring-payment recovery: PAST_DUE retries with backoff and a card update · API W M
-- [ ] 25.9 [new] Gift cards: issuance, redemption at checkout, balances, liability, fraud controls (velocity, lock) · API W M
-- [ ] 25.10 [new] Campaign profitability and incremental orders (holdout group) · API W M
+Phase J shipped on 2026-11-14; see Completed_Tasks. These follow-ups remain:
+- [ ] 25.1-B [new] Buy-one-get-one and free-item offers (today: percent off, amount off, free delivery) · API W
+- [ ] 25.7-P [improve] Switch membership plans mid-period with proration (today: cancel, then join the other plan) · API W M
+- [ ] 25.9-M [improve] Buy gift cards in the mobile app (today: buy on the web; the app adds codes and spends the balance) · M
+- [ ] 25.9-E [new] Unclaimed-property (escheat) reporting for old gift balances by state · API W
+- [ ] 25.10-P [improve] Gutad-wide email/SMS campaigns to platform customer segments with a holdout (today: Gutad-wide campaigns run offers; merchants send messages) · API W
+- [ ] 25.10-S [improve] Confidence interval on incremental orders and revenue (today: point estimates, with a note when the holdout is small) · API W
 
 ---
 

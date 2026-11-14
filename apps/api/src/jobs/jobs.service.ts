@@ -12,6 +12,7 @@ import { DeliveryService } from '../modules/delivery/delivery.service';
 import { ReservationsService } from '../modules/reservations/reservations.service';
 import { EventsService } from '../modules/events/events.service';
 import { GrowthService } from '../modules/growth/growth.service';
+import { RewardsService } from '../modules/growth/rewards.service';
 import { ContractsService } from '../modules/contracts/contracts.service';
 import { SettlementService } from '../modules/settlement/settlement.service';
 import { IntegrationsService } from '../modules/integrations/integrations.service';
@@ -49,6 +50,7 @@ export class JobsService {
     private readonly reservations: ReservationsService,
     private readonly events: EventsService,
     private readonly growth: GrowthService,
+    private readonly rewards: RewardsService,
     private readonly contracts: ContractsService,
     private readonly settlement: SettlementService,
     private readonly integrations: IntegrationsService,
@@ -118,6 +120,7 @@ export class JobsService {
       campaigns: await this.growth.stopExhaustedOrEnded(),
       subscriptions: (await this.contracts.billDueSubscriptions()).length,
       memberships: await this.growth.renewDue(),
+      challengeWindows: await this.rewards.expireWindows(),
       pastDue: await this.settlement.markPastDueInvoices(),
     }));
   }

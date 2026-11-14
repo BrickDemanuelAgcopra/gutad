@@ -75,6 +75,7 @@ type NewLine = Parameters<ReturnType<typeof useCart>['add']>[1];
 
 function OrderTab({ loc, channel, src, initialBrand }: { loc: LocationPage; channel: Channel; src: string | null; initialBrand?: string }) {
   const { data: menus, loading } = useApi<PublicMenu[]>(`/public/locations/${loc.id}/menus?channel=${channel}`);
+  const { data: offers } = useApi<{ id: string; name: string | null; kind: string; value: number; minSubtotalCents: number; maxDiscountCents: number | null; firstOrderOnly: boolean; daysOfWeek: number[]; startTime: string | null; endTime: string | null; itemIds: string[]; categoryIds: string[] }[]>(`/public/locations/${loc.id}/offers`);
   const { cart, add, count, subtotal } = useCart();
   const [picked, setPicked] = useState<{ item: MenuItemDto; brand?: string | null } | null>(null);
   const [pending, setPending] = useState<NewLine | null>(null);
@@ -103,6 +104,13 @@ function OrderTab({ loc, channel, src, initialBrand }: { loc: LocationPage; chan
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
       <div className="space-y-8">
+        {!!offers?.length && (
+          <div className="rounded-2xl border border-brand-200 bg-brand-50 p-4">
+            <div className="font-semibold text-brand-900">Offers here</div>
+            <ul className="mt-1 space-y-0.5 text-sm text-brand-900/90">{offers.map((o) => <li key={o.id}>{o.name || (o.kind === 'PERCENT' ? `${o.value / 100}% off` : o.kind === 'FIXED' ? `${money(o.value)} off` : 'Free delivery')}<span className="text-xs text-brand-900/70">{[o.minSubtotalCents ? ` on orders over ${money(o.minSubtotalCents)}` : '', o.firstOrderOnly ? ' · your first order' : '', o.daysOfWeek.length ? ` · ${o.daysOfWeek.map((d) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}` : '', o.startTime ? ` · ${o.startTime}–${o.endTime}` : '', o.itemIds.length || o.categoryIds.length ? ' · selected items' : ''].join('')}</span></li>)}</ul>
+            <p className="mt-1 text-xs text-brand-900/70">Applied automatically at checkout when your order qualifies.</p>
+          </div>
+        )}
         {hall && (
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="flex items-center gap-2 font-semibold text-emerald-900"><GBadge className="h-6 w-6" /> Mix menus in one order</div>

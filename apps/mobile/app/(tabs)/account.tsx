@@ -20,6 +20,7 @@ export default function Account() {
       <Card title={user.name || user.email}>
         <Muted>{user.email}</Muted>
         {loyalty && <Text style={{ marginTop: 8 }}>{loyalty.points} points (≈{money(loyalty.valueCents)}) · credits {money(loyalty.credits.availableCents)}{loyalty.membership ? ` · ${loyalty.membership.plan.name} member` : ''}</Text>}
+        <Link href="/rewards" asChild><Button title="Rewards, membership & gift cards" onPress={() => undefined} /></Link>
         <Link href="/me" asChild><Button title="Payments, notifications & privacy" variant="secondary" onPress={() => undefined} /></Link>
         <Link href="/security" asChild><Button title="Security (2FA & devices)" variant="secondary" onPress={() => undefined} /></Link>
         <Button title="Sign out" variant="secondary" onPress={logout} />
