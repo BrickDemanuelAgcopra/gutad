@@ -35,6 +35,9 @@ export default function RootLayout() {
         <Stack.Screen name="merchant/recipes" options={{ title: 'Recipes' }} />
         <Stack.Screen name="ops/approvals" options={{ title: 'Approvals' }} />
         <Stack.Screen name="ops/security" options={{ title: 'Staff & access' }} />
+        <Stack.Screen name="ops/iam" options={{ title: 'Users & access' }} />
+        <Stack.Screen name="ops/iam-user" options={{ title: 'Staff member' }} />
+        <Stack.Screen name="ops/my-access" options={{ title: 'My access' }} />
         <Stack.Screen name="ops/audit" options={{ title: 'Audit history' }} />
         <Stack.Screen name="ops/structure" options={{ title: 'Organization structure' }} />
         <Stack.Screen name="ops/customers" options={{ title: 'Customers' }} />

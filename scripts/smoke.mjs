@@ -20,6 +20,7 @@ import { followupsA } from './smoke-followups-a.mjs';
 import { followupsB } from './smoke-followups-b.mjs';
 import { followupsC } from './smoke-followups-c.mjs';
 import { followupsD } from './smoke-followups-d.mjs';
+import { iamChecks } from './smoke-iam.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -55,6 +56,8 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   check('owner login', owner.accessToken, owner);
   check('admin login', admin.accessToken, admin);
   const C = cust.accessToken, O = owner.accessToken, A = admin.accessToken;
+  // repeated runs leave several superadmins behind; the IAM section switches dual control back on to test it
+  await call('PATCH', '/admin/iam/policy', { requireSecondApprover: false, reason: 'Smoke run setup', stepUp: { password: process.env.ADMIN_PASSWORD || 'admin12345' } }, A);
   const guest = (await call('POST', '/auth/guest', { email: `guest-${Date.now()}@example.com`, name: 'Guest One' })).json;
   check('guest checkout identity', guest.accessToken, guest);
 
@@ -501,6 +504,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await followupsB({ call, check, A, O, C, locId, demoOrgId, owner, API: FAPI });
   await followupsC({ call, check, A, O, C, locId, demoOrgId, owner, API: FAPI });
   await followupsD({ call, check, A, O, C, locId, demoOrgId, API: FAPI });
+  await iamChecks({ call, check, A, O, C, demoOrgId, o1 });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

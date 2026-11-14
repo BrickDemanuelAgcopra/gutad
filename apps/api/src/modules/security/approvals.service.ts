@@ -6,7 +6,8 @@ import { approvalRequests, users } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
 import { NotifyService } from '../../core/notify.service';
 import { SettingsService } from '../../core/settings.service';
-import { can, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
+import { can, effectiveRoles, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
+import { AclService } from '../../core/acl.service';
 
 type Row = typeof approvalRequests.$inferSelect;
 
@@ -41,7 +42,7 @@ export class ApprovalsService {
   private readonly log = new Logger(ApprovalsService.name);
   private readonly handlers = new Map<string, ApprovalHandler>();
 
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly notify: NotifyService, private readonly settings: SettingsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly notify: NotifyService, private readonly settings: SettingsService, private readonly acl: AclService) {}
 
   register(kind: ApprovalKind, handler: ApprovalHandler) {
     this.handlers.set(kind, handler);
@@ -53,7 +54,9 @@ export class ApprovalsService {
 
   /** Staff refund limit for this person (highest of their roles); platform admins are unlimited. */
   async staffRefundLimit(user: JwtPayload): Promise<number> {
-    if (user.roles.includes('PLATFORM_ADMIN')) return Number.MAX_SAFE_INTEGER;
+    if (user.roles.includes('PLATFORM_ADMIN') || user.acl?.superadmin) return Number.MAX_SAFE_INTEGER;
+    const own = user.acl?.limits.SELF_REFUND;
+    if (own !== undefined) return own;
     const t = await this.thresholds();
     return Math.max(0, ...user.roles.map((r) => t.refundByRole[r] ?? 0));
   }
@@ -88,17 +91,38 @@ export class ApprovalsService {
 
   private async notifyApprovers(row: Row, requester: string) {
     const perm = APPROVAL_KINDS[row.kind as ApprovalKind]?.permission;
-    const staff = await this.db.select({ id: users.id, roles: users.roles }).from(users).where(sql`${users.roles} && array['PLATFORM_ADMIN','EXECUTIVE','FINANCE','OPERATIONS','SUPPORT','IT','CULINARY']::role[]`).limit(50);
-    for (const s of staff) {
-      if (s.id === row.requestedById) continue;
-      const fake: JwtPayload = { sub: s.id, email: '', roles: s.roles as JwtPayload['roles'], orgs: {} };
-      if (!can(fake, 'approvals.decide') || (perm && !can(fake, perm))) continue;
+    const staff = await this.db.execute(sql`select distinct u.id from users u where u.status = 'ACTIVE' and (u.roles && array['PLATFORM_ADMIN','EXECUTIVE','FINANCE','OPERATIONS','SUPPORT','IT','CULINARY']::role[] or u.id in (select user_id from role_assignments where revoked_at is null and (ends_at is null or ends_at > now()))) limit 200`);
+    const ids = (((staff as unknown as { rows?: { id: string }[] }).rows ?? (staff as unknown as { id: string }[])) || []).map((r) => r.id);
+    for (const id of ids) {
+      if (id === row.requestedById) continue;
+      const acl = await this.acl.get(id);
+      if (row.kind === 'ACCESS_CHANGE' ? !acl.superadmin : !acl.coarse.includes('approvals.decide') || (perm && !acl.coarse.includes(perm))) continue;
+      if (!this.withinLimit(acl, row)) continue;
+      const s = { id };
       await this.notify.queue({ userId: s.id, template: 'approval.requested', payload: { summary: row.summary, amountCents: row.amountCents, reason: row.reason, requester }, channels: ['IN_APP', 'PUSH'], dedupeKey: `approval:${row.id}` });
     }
   }
 
-  canDecide(user: JwtPayload, row: Row): boolean {
+  /** Approval authority: the kind's limit (cents) across the approver's roles; no limit set = no cap. */
+  private limitKind(row: Row) {
+    if (row.kind === 'REFUND') {
+      const p = (row.payload || {}) as { remedy?: string; kind?: string; input?: { remedy?: string } };
+      return [p.remedy, p.kind, p.input?.remedy].includes('CREDIT') ? 'DISCOUNT' : 'REFUND';
+    }
+    return row.kind;
+  }
+
+  private withinLimit(acl: { superadmin: boolean; limits: Record<string, number> } | undefined, row: Row) {
+    if (!acl || acl.superadmin || !row.amountCents) return true;
+    const lim = acl.limits[this.limitKind(row)];
+    return lim === undefined || row.amountCents <= lim;
+  }
+
+  /** `ignoreLimit` lets an approver above their limit still reject. */
+  canDecide(user: JwtPayload, row: Row, ignoreLimit = false): boolean {
     if (row.requestedById === user.sub) return false;
+    if (row.kind === 'ACCESS_CHANGE') return !!user.acl?.superadmin || (!user.acl && effectiveRoles(user).includes('PLATFORM_ADMIN'));
+    if (!ignoreLimit && !this.withinLimit(user.acl, row)) return false;
     const perm = APPROVAL_KINDS[row.kind as ApprovalKind]?.permission;
     if (can(user, 'approvals.decide') && (!perm || can(user, perm)) && (!row.organizationId || staffCovers(user, row.organizationId))) return true;
     return !!this.handlers.get(row.kind)?.canDecide?.(user, row);
@@ -109,7 +133,8 @@ export class ApprovalsService {
     if (!row) throw new NotFoundException();
     if (row.status !== 'PENDING') throw new ConflictException(`Request is already ${row.status.toLowerCase()}`);
     if (row.requestedById === user.sub) throw new ForbiddenException({ message: 'You cannot decide your own request', code: 'SELF_APPROVAL' });
-    if (!this.canDecide(user, row)) throw new ForbiddenException('You are not allowed to decide this request');
+    if (approve && !this.withinLimit(user.acl, row)) throw new ForbiddenException({ message: `This is above your approval limit for ${this.limitKind(row).toLowerCase().replace('_', ' ')}s`, code: 'APPROVAL_LIMIT' });
+    if (!this.canDecide(user, row, !approve)) throw new ForbiddenException('You are not allowed to decide this request');
     if (row.expiresAt && row.expiresAt < new Date()) {
       await this.db.update(approvalRequests).set({ status: 'EXPIRED' }).where(eq(approvalRequests.id, id));
       throw new ConflictException('Request expired');

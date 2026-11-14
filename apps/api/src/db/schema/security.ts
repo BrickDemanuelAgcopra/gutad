@@ -26,6 +26,14 @@ export const staffScopes = pgTable('staff_scopes', {
   regionIds: uuid('region_ids').array().notNull().default([]),
   organizationIds: uuid('organization_ids').array().notNull().default([]),
   locationIds: uuid('location_ids').array().notNull().default([]),
+  /** parent companies: every child organization is in scope */
+  companyIds: uuid('company_ids').array().notNull().default([]),
+  /** kitchens: every location served by the kitchen is in scope */
+  kitchenIds: uuid('kitchen_ids').array().notNull().default([]),
+  /** brands: the brand's organization is in scope */
+  brandIds: uuid('brand_ids').array().notNull().default([]),
+  /** support queues / teams this person works (SUPPORT, OPERATIONS, FINANCE, FOOD_SAFETY, DELIVERY) */
+  teams: text('teams').array().notNull().default([]),
   /** highest data sensitivity this person may see: PUBLIC | INTERNAL | CONFIDENTIAL | RESTRICTED */
   maxSensitivity: text('max_sensitivity').notNull().default('RESTRICTED'),
   note: text('note'),

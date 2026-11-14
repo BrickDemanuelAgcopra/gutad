@@ -29,7 +29,7 @@ export async function adminPhaseA({ call, check, A, O, C, o1, demoOrgId }) {
   const noReason = await call('POST', '/admin/security/staff/roles', { email: supEmail, roles: ['SUPPORT'] }, A);
   check('staff role change requires a reason', noReason.status === 400 || noReason.status === 403, noReason.json);
   for (const [email, roles] of [[supEmail, ['SUPPORT']], [opsEmail, ['OPERATIONS']], [admin2Email, ['PLATFORM_ADMIN']], [finEmail, ['FINANCE']]]) {
-    await call('POST', '/admin/security/staff/roles', { email, roles, reason: 'Smoke test staffing' }, A);
+    await call('POST', '/admin/security/staff/roles', { email, roles, reason: 'Smoke test staffing', stepUp: { password: process.env.ADMIN_PASSWORD || 'admin12345' } }, A);
   }
   const sup = await login(supEmail);
   check('support login carries admin-console permissions', sup.user?.permissions?.includes('support.manage') && !sup.user.permissions.includes('security.manage'), sup.user?.permissions);
@@ -165,11 +165,11 @@ export async function adminPhaseA({ call, check, A, O, C, o1, demoOrgId }) {
   await call('POST', `/admin/locations/${loc.id}/region`, { regionId: null }, A);
 
   // audit trail with reasons and grant tags
-  const aud = (await call('GET', `/admin/audit/search?entityType=user&action=staff.&withReason=true`, undefined, A)).json;
+  const aud = (await call('GET', `/admin/audit/search?entityType=user&action=iam.assignment&withReason=true`, undefined, A)).json;
   check('audit search returns who, what and why', aud.some((x) => x.reason === 'Smoke test staffing' && x.actorEmail), aud.slice(0, 2));
   const tagged = (await call('GET', `/admin/audit/search?action=access.emergency`, undefined, A)).json;
   check('emergency activity is in the audit trail', tagged.some((x) => x.entityId === em.grant.id), tagged.length);
-  const csvRes = await fetch(`${process.env.API_URL || 'http://localhost:4000'}/admin/audit/export.csv?action=staff.`, { headers: { Authorization: `Bearer ${A}` } });
+  const csvRes = await fetch(`${process.env.API_URL || 'http://localhost:4000'}/admin/audit/export.csv?action=iam.assignment`, { headers: { Authorization: `Bearer ${A}` } });
   const csv = await csvRes.text();
   check('audit export is a CSV with reasons', csvRes.status === 200 && csv.startsWith('createdAt,actorEmail,action') && csv.includes('Smoke test staffing'), csv.slice(0, 120));
 

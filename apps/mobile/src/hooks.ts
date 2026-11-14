@@ -40,7 +40,7 @@ export function useSession() {
     return session.subscribe(() => void sync());
   }, []);
   const perms = user?.permissions || [];
-  const isStaff = !!user && (user.roles.some((r) => (STAFF_ROLES as readonly string[]).includes(r)) || !!user.elevated);
+  const isStaff = !!user && (user.staff === true || user.roles.some((r) => (STAFF_ROLES as readonly string[]).includes(r)) || !!user.elevated);
   const memberRoles = Object.values(user?.memberRoles || {}).flat();
   return {
     user,

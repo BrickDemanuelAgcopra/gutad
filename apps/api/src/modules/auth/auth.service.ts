@@ -3,17 +3,19 @@ import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { createPublicKey, verify as cryptoVerify, type JsonWebKey } from 'node:crypto';
 import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
-import { isStaffRole, type Sensitivity } from '@gutad/shared';
+import { BLOCKED_STATUSES, DEFAULT_ACCESS_POLICY, isStaffRole, type AccessPolicy } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
-import { accessGrants, accountRecoveryTokens, addresses, consents, locations, orgMemberships, refreshTokens, staffScopes, userDevices, userSessions, users } from '../../db/schema';
+import { accessGrants, accountRecoveryTokens, addresses, consents, orgMemberships, refreshTokens, staffProfiles, userDevices, userSessions, users } from '../../db/schema';
 import { CryptoService } from '../../core/crypto.service';
 import { NotifyService } from '../../core/notify.service';
 import { RedisService } from '../../core/redis.service';
 import { SettingsService } from '../../core/settings.service';
 import { AuditService } from '../../core/audit.service';
+import { AclService } from '../../core/acl.service';
+import { SecurityEventsService } from '../../core/security-events.service';
 import { loadConfig } from '../../config/config';
 import { addDays, token } from '../../common/utils';
-import { permissionsOf, type JwtPayload, type RoleName } from '../../common/auth';
+import { finePermissionsOf, permissionsOf, type JwtPayload, type RoleName } from '../../common/auth';
 import { newTotpSecret, otpauthUrl, verifyTotp } from '../../common/totp';
 
 export interface SessionMeta { client?: string | null; ip?: string | null; userAgent?: string | null; /** 10.4-D client-generated device id (X-Device-Id) */ deviceId?: string | null }
@@ -36,7 +38,85 @@ export class AuthService {
     private readonly redis: RedisService,
     private readonly settings: SettingsService,
     private readonly audit: AuditService,
+    private readonly acl: AclService,
+    private readonly events: SecurityEventsService,
   ) {}
+
+  private blockedMessage(status: string) {
+    if (status === 'SUSPENDED') return { message: 'This account is suspended', code: 'ACCOUNT_SUSPENDED' };
+    if (status === 'ARCHIVED') return { message: 'This account has been archived', code: 'ACCOUNT_ARCHIVED' };
+    return { message: 'This account has been disabled', code: 'ACCOUNT_DISABLED' };
+  }
+
+  policy() {
+    return this.settings.getObject<AccessPolicy>('security.access_policy', DEFAULT_ACCESS_POLICY);
+  }
+
+  /** Failed-attempt counters per account and per IP; locks the account after `maxLoginAttempts`. */
+  private async loginFailed(email: string, meta: SessionMeta, userId: string | null, reason: string, method = 'pwd') {
+    const p = await this.policy();
+    const k = `login:fail:${email}`;
+    const n = await this.redis.client.incr(k).catch(() => 0);
+    if (n === 1) await this.redis.client.expire(k, p.lockMinutes * 60).catch(() => undefined);
+    if (meta.ip) {
+      const ik = `login:fail:ip:${meta.ip}`;
+      const m = await this.redis.client.incr(ik).catch(() => 0);
+      if (m === 1) await this.redis.client.expire(ik, p.lockMinutes * 60).catch(() => undefined);
+    }
+    const locked = n >= p.maxLoginAttempts;
+    await this.events.recordLogin({ userId, email, outcome: locked ? 'LOCKED' : method === 'mfa' ? 'MFA_FAILURE' : 'FAILURE', method, reason, ip: meta.ip, userAgent: meta.userAgent, suspicious: locked });
+    if (locked && n === p.maxLoginAttempts) {
+      await this.redis.client.set(`login:lock:${email}`, '1', 'EX', p.lockMinutes * 60).catch(() => undefined);
+      if (userId) await this.events.raise({ type: 'ACCOUNT_LOCKED', severity: 'HIGH', title: `Account locked after ${n} failed sign-ins: ${email}`, detail: `Last attempt from ${meta.ip || 'unknown IP'}. It unlocks in ${p.lockMinutes} minutes, or unlock it in Users, roles & permissions.`, subjectUserId: userId, data: { ip: meta.ip }, dedupeKey: `lock:${email}:${Math.floor(Date.now() / (p.lockMinutes * 60_000))}` });
+    }
+  }
+
+  private async assertNotLocked(email: string, meta: SessionMeta) {
+    const p = await this.policy();
+    const locked = await this.redis.client.exists(`login:lock:${email}`).catch(() => 0);
+    if (locked) {
+      await this.events.recordLogin({ email, outcome: 'BLOCKED', reason: 'account locked', ip: meta.ip, userAgent: meta.userAgent });
+      throw new ForbiddenException({ message: `Too many failed sign-ins. Try again in ${p.lockMinutes} minutes or ask an administrator to unlock the account.`, code: 'ACCOUNT_LOCKED' });
+    }
+    if (meta.ip) {
+      const n = Number(await this.redis.client.get(`login:fail:ip:${meta.ip}`).catch(() => 0)) || 0;
+      if (n >= p.ipMaxAttempts) {
+        await this.events.recordLogin({ email, outcome: 'BLOCKED', reason: 'ip throttled', ip: meta.ip, userAgent: meta.userAgent, suspicious: true });
+        throw new ForbiddenException({ message: 'Too many failed sign-ins from this network. Try again later.', code: 'IP_THROTTLED' });
+      }
+    }
+  }
+
+  async unlock(email: string) {
+    await this.redis.del(`login:lock:${email}`, `login:fail:${email}`).catch(() => undefined);
+  }
+
+  /** Successful sign-in bookkeeping: counters reset, event logged, staff last-login updated, new-IP alert for staff. */
+  private async loginSucceeded(userId: string, email: string, meta: SessionMeta, method: string) {
+    await this.redis.del(`login:fail:${email}`).catch(() => undefined);
+    const acl = await this.acl.get(userId).catch(() => null);
+    let suspicious = false;
+    if (acl?.staff) {
+      suspicious = await this.events.isNewIp(userId, meta.ip).catch(() => false);
+      await this.db.insert(staffProfiles).values({ userId, lastLoginAt: new Date(), lastLoginIp: meta.ip ?? null }).onConflictDoUpdate({ target: staffProfiles.userId, set: { lastLoginAt: new Date(), lastLoginIp: meta.ip ?? null, inactiveFlaggedAt: null } });
+    }
+    await this.events.recordLogin({ userId, email, outcome: 'SUCCESS', method, ip: meta.ip, userAgent: meta.userAgent, suspicious });
+    if (suspicious) await this.events.raise({ type: 'SUSPICIOUS_LOGIN', severity: acl?.superadmin ? 'HIGH' : 'MEDIUM', title: `Staff sign-in from a new network: ${email}`, detail: `${meta.ip} · ${meta.userAgent?.slice(0, 120) || 'unknown device'}. Not seen for this account in 30 days.`, subjectUserId: userId, data: { ip: meta.ip, userAgent: meta.userAgent }, dedupeKey: `newip:${userId}:${meta.ip}` });
+  }
+
+  /** Stronger verification for critical changes: a current TOTP code when MFA is on, otherwise the password. */
+  async verifyStepUp(userId: string, proof?: { code?: string; password?: string } | null) {
+    const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!u) throw new UnauthorizedException();
+    const fail = () => new ForbiddenException({ message: u.mfaEnabledAt ? 'Enter a current code from your authenticator app to confirm this change' : 'Enter your password to confirm this change', code: 'STEP_UP_REQUIRED', method: u.mfaEnabledAt ? 'totp' : 'password' });
+    if (!proof) throw fail();
+    if (u.mfaEnabledAt && u.mfaSecret) {
+      if (!proof.code || !verifyTotp(this.crypto.decrypt(u.mfaSecret), proof.code)) throw fail();
+    } else if (u.passwordHash) {
+      if (!proof.password || !(await argon2.verify(u.passwordHash, proof.password))) throw fail();
+    } else throw new ForbiddenException({ message: 'Turn on two-factor authentication to make critical changes', code: 'STEP_UP_REQUIRED', method: 'totp' });
+    await this.audit.log({ actorId: userId, action: 'auth.step_up', entityType: 'user', entityId: userId });
+  }
 
   async register(input: { email: string; password: string; name?: string; phone?: string; marketingConsent?: boolean }, meta: SessionMeta = {}) {
     const email = input.email.toLowerCase().trim();
@@ -64,16 +144,28 @@ export class AuthService {
 
   /** Password sign-in. Accounts with MFA get a short-lived challenge instead of tokens. */
   async login(email: string, password: string, meta: SessionMeta = {}) {
-    const [user] = await this.db.select().from(users).where(eq(users.email, email.toLowerCase().trim())).limit(1);
-    if (!user?.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    const em = email.toLowerCase().trim();
+    await this.assertNotLocked(em, meta);
+    const [user] = await this.db.select().from(users).where(eq(users.email, em)).limit(1);
+    if (!user?.passwordHash) {
+      await this.loginFailed(em, meta, user?.id ?? null, user ? 'no password set' : 'unknown account');
+      throw new UnauthorizedException('Invalid credentials');
+    }
     const ok = await argon2.verify(user.passwordHash, password);
-    if (!ok) throw new UnauthorizedException('Invalid credentials');
-    if (user.status === 'DISABLED') throw new ForbiddenException({ message: 'This account has been disabled', code: 'ACCOUNT_DISABLED' });
+    if (!ok) {
+      await this.loginFailed(em, meta, user.id, 'wrong password');
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    if (BLOCKED_STATUSES.includes(user.status)) {
+      await this.events.recordLogin({ userId: user.id, email: em, outcome: 'BLOCKED', reason: user.status.toLowerCase(), ip: meta.ip, userAgent: meta.userAgent });
+      throw new ForbiddenException(this.blockedMessage(user.status));
+    }
     if (user.mfaEnabledAt && user.mfaSecret) {
       const challengeToken = token(24);
       await this.redis.setJson(`mfa:ch:${challengeToken}`, { userId: user.id, meta, tries: 0 }, 300);
       return { mfaRequired: true as const, challengeToken };
     }
+    await this.loginSucceeded(user.id, em, meta, 'pwd');
     return this.startSession(user.id, ['pwd'], meta);
   }
 
@@ -89,9 +181,12 @@ export class AuthService {
     if (!user?.mfaSecret) throw new UnauthorizedException();
     if (!(await this.checkSecondFactor(user, code))) {
       await this.redis.setJson(key, { ...ch, tries: ch.tries + 1 }, 300);
+      await this.loginFailed(user.email, ch.meta, user.id, 'wrong MFA code', 'mfa');
       throw new UnauthorizedException({ message: 'Incorrect code', code: 'MFA_INVALID' });
     }
     await this.redis.del(key);
+    if (BLOCKED_STATUSES.includes(user.status)) throw new ForbiddenException(this.blockedMessage(user.status));
+    await this.loginSucceeded(user.id, user.email, ch.meta, 'mfa');
     return this.startSession(user.id, ['pwd', 'mfa'], ch.meta);
   }
 
@@ -128,12 +223,12 @@ export class AuthService {
       .limit(1);
     if (!row || row.expiresAt < new Date()) throw new UnauthorizedException('Refresh token invalid');
     const [user] = await this.db.select().from(users).where(eq(users.id, row.userId)).limit(1);
-    if (!user || user.status === 'DISABLED') throw new UnauthorizedException('Account disabled');
+    if (!user || BLOCKED_STATUSES.includes(user.status)) throw new UnauthorizedException('Account disabled');
     let sessionId = row.sessionId;
     if (sessionId) {
       const [s] = await this.db.select().from(userSessions).where(eq(userSessions.id, sessionId)).limit(1);
       if (!s || s.revokedAt || s.expiresAt < new Date()) throw new UnauthorizedException('Session ended');
-      if (user.roles.some(isStaffRole)) {
+      if ((await this.acl.get(user.id)).staff) {
         const policy = await this.settings.getObject('security.sessions', SESSION_DEFAULTS);
         if (Date.now() - s.lastSeenAt.getTime() > policy.staffIdleMinutes * 60_000) {
           await this.revokeSessionRow(s.id, 'idle timeout');
@@ -158,8 +253,7 @@ export class AuthService {
   // ───── sessions ─────
 
   private async createSession(userId: string, amr: string[], meta: SessionMeta) {
-    const [user] = await this.db.select({ roles: users.roles }).from(users).where(eq(users.id, userId)).limit(1);
-    const staff = !!user?.roles.some(isStaffRole);
+    const staff = (await this.acl.compute(userId)).staff;
     const policy = await this.settings.getObject('security.sessions', SESSION_DEFAULTS);
     const expiresAt = staff ? new Date(Date.now() + policy.staffMaxHours * 3600_000) : addDays(new Date(), loadConfig().REFRESH_TOKEN_TTL_DAYS);
     const [s] = await this.db.insert(userSessions).values({ userId, amr, client: meta.client ?? null, ip: meta.ip ?? null, userAgent: meta.userAgent?.slice(0, 300) ?? null, expiresAt }).returning();
@@ -320,8 +414,12 @@ export class AuthService {
     const domain = email.split('@')[1];
     if (c.allowedDomains.length && !c.allowedDomains.map((x) => x.toLowerCase()).includes(domain)) throw new ForbiddenException('Email domain not allowed for single sign-on');
     const [user] = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
-    if (!user || user.status === 'DISABLED') throw new ForbiddenException('No active Gutad account for this identity. Ask an administrator to add you.');
+    if (!user || BLOCKED_STATUSES.includes(user.status)) {
+      await this.events.recordLogin({ userId: user?.id ?? null, email, outcome: 'BLOCKED', method: 'sso', reason: user ? user.status.toLowerCase() : 'no account', ip: st.meta?.ip, userAgent: st.meta?.userAgent });
+      throw new ForbiddenException('No active Gutad account for this identity. Ask an administrator to add you.');
+    }
     await this.audit.log({ actorId: user.id, action: 'auth.sso_login', entityType: 'user', entityId: user.id, after: { issuer: d.issuer } });
+    await this.loginSucceeded(user.id, email, st.meta || {}, 'sso');
     return this.startSession(user.id, ['sso'], st.meta);
   }
 
@@ -415,20 +513,6 @@ export class AuthService {
 
   // ───── tokens ─────
 
-  /** Staff scope with regions expanded to their locations (and those locations' organizations). */
-  private async staffScope(userId: string): Promise<JwtPayload['scope']> {
-    const [sc] = await this.db.select().from(staffScopes).where(eq(staffScopes.userId, userId)).limit(1);
-    if (!sc) return undefined;
-    let locIds = [...sc.locationIds];
-    const conds = [];
-    if (sc.regionIds.length) conds.push(inArray(locations.regionId, sc.regionIds));
-    if (locIds.length) conds.push(inArray(locations.id, locIds));
-    const locs = conds.length ? await this.db.select({ id: locations.id, org: locations.organizationId }).from(locations).where(or(...conds)) : [];
-    locIds = Array.from(new Set([...locIds, ...locs.map((l) => l.id)]));
-    if (sc.regionIds.length && !locIds.length && !sc.organizationIds.length) locIds = ['00000000-0000-0000-0000-000000000000']; // region with no locations yet: nothing in scope
-    return { orgIds: sc.organizationIds, locationIds: locIds, locOrgIds: Array.from(new Set(locs.map((l) => l.org))), max: sc.maxSensitivity as Sensitivity };
-  }
-
   /** Builds the JWT with memberships, staff scope, MFA state and active grants embedded so guards can authorize without DB hits. */
   async issueTokens(userId: string, isGuest = false, sessionId?: string) {
     const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
@@ -444,8 +528,11 @@ export class AuthService {
       cur.locationIds = m.locationIds.length === 0 || cur.locationIds.length === 0 ? [] : Array.from(new Set([...cur.locationIds, ...m.locationIds]));
       orgs[m.organizationId] = cur;
     }
-    const roles = (user.status === 'DISABLED' ? user.roles.filter((r) => !isStaffRole(r)) : user.roles) as RoleName[];
-    const staff = roles.some(isStaffRole);
+    await this.acl.invalidate(userId);
+    const acl = await this.acl.get(userId);
+    const blocked = BLOCKED_STATUSES.includes(user.status);
+    const roles = [...user.roles.filter((r) => !isStaffRole(r)), ...(blocked ? [] : acl.staffRoles)] as RoleName[];
+    const staff = acl.staff;
     const payload: JwtPayload = { sub: user.id, email: user.email, roles, orgs, isGuest: isGuest || user.isGuest, sid: sessionId, amr };
     const grants = await this.db
       .select()
@@ -453,15 +540,14 @@ export class AuthService {
       .where(and(eq(accessGrants.userId, userId), isNull(accessGrants.revokedAt), gt(accessGrants.expiresAt, new Date())))
       .orderBy(desc(accessGrants.createdAt));
     const emergency = grants.find((g) => g.kind === 'EMERGENCY');
-    if (emergency && user.status !== 'DISABLED') payload.elev = { roles: emergency.roles as RoleName[], until: emergency.expiresAt.toISOString(), gid: emergency.id };
+    if (emergency && !blocked) payload.elev = { roles: emergency.roles as RoleName[], until: emergency.expiresAt.toISOString(), gid: emergency.id };
     const support = grants.find((g) => g.kind === 'SUPPORT' && g.organizationId);
     if (support) payload.sup = { org: support.organizationId!, until: support.expiresAt.toISOString(), ro: support.readOnly === 1, gid: support.id };
     if (staff || payload.elev) {
-      payload.scope = await this.staffScope(userId);
-      const required = await this.settings.get<string[]>('security.mfa_required_roles', []);
-      const needsMfa = [...roles, ...(payload.elev?.roles || [])].some((r) => required.includes(r));
-      if (needsMfa && !amr.includes('mfa') && !amr.includes('sso')) payload.mfaPending = true;
+      payload.scope = acl.scope;
+      if (acl.mfaRequired && !amr.includes('mfa') && !amr.includes('sso')) payload.mfaPending = true;
     }
+    const live = { ...payload, acl };
     const policy = await this.settings.getObject('security.sessions', SESSION_DEFAULTS);
     const accessToken = await this.jwt.signAsync(payload, staff ? { expiresIn: policy.staffTokenMinutes * 60 } : {});
     const raw = token(32);
@@ -482,7 +568,10 @@ export class AuthService {
         merchantIds: Object.keys(orgs),
         locationIds: Object.values(orgs).flatMap((o) => o.locationIds),
         memberRoles: Object.fromEntries(Object.entries(orgs).map(([k, v]) => [k, v.roles])),
-        permissions: permissionsOf(payload),
+        permissions: permissionsOf(live),
+        finePermissions: finePermissionsOf(live),
+        staff,
+        accessRoles: acl.roles.map((r) => ({ id: r.id, key: r.key, name: r.name, primary: r.primary, endsAt: r.endsAt })),
         elevated: payload.elev ? { roles: payload.elev.roles, until: payload.elev.until, grantId: payload.elev.gid } : null,
         supportAccess: payload.sup ? { organizationId: payload.sup.org, until: payload.sup.until, readOnly: payload.sup.ro, grantId: payload.sup.gid } : null,
         mfaEnabled: !!user.mfaEnabledAt,

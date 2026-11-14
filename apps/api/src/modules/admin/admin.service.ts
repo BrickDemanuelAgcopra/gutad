@@ -6,6 +6,7 @@ import { assertCan, isPlatformStaff, JwtPayload, RoleName, staffCovers } from '.
 import { isStaffRole, type Permission } from '@gutad/shared';
 import { ApprovalsService } from '../security/approvals.service';
 import { AuthService } from '../auth/auth.service';
+import { IamService } from '../security/iam.service';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
 import { LedgerService } from '../../core/ledger.service';
@@ -14,7 +15,7 @@ import { loadConfig } from '../../config/config';
 /** 30 — tenant provisioning, entitlements, staff roles, approval limits, config history, credentials, monitoring, offboarding. */
 @Injectable()
 export class AdminService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly dbs: DbService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly ledger: LedgerService, private readonly approvals: ApprovalsService, private readonly auth: AuthService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly dbs: DbService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly ledger: LedgerService, private readonly approvals: ApprovalsService, private readonly auth: AuthService, private readonly iam: IamService) {}
 
   onModuleInit() {
     this.approvals.register('SETTING_CHANGE', {
@@ -59,6 +60,17 @@ export class AdminService implements OnModuleInit {
   }
 
   async grantPlatformRole(user: JwtPayload, targetEmail: string, role: RoleName, grant: boolean) {
+    this.staff(user, 'security.manage');
+    if (!isStaffRole(role)) throw new BadRequestException('Not a platform role');
+    const [cur] = await this.db.select().from(users).where(eq(users.email, targetEmail.toLowerCase())).limit(1);
+    if (!cur) throw new NotFoundException('User not found');
+    const have = cur.roles.filter(isStaffRole) as string[];
+    const roles = grant ? Array.from(new Set([...have, role])) : have.filter((r) => r !== role);
+    return this.iam.setSystemRoles(user, { email: targetEmail, roles, reason: `${grant ? 'grant' : 'revoke'} ${role}` });
+  }
+
+  /** @deprecated replaced by IamService.setSystemRoles */
+  async grantPlatformRoleLegacy(user: JwtPayload, targetEmail: string, role: RoleName, grant: boolean) {
     this.staff(user, 'security.manage');
     if (!isStaffRole(role)) throw new BadRequestException('Not a platform role');
     if (role === 'PLATFORM_ADMIN' && !user.roles.includes('PLATFORM_ADMIN')) throw new ForbiddenException('Only a platform admin can grant platform admin');

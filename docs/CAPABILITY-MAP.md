@@ -5,6 +5,7 @@ Each row of the master blueprint's capability list, where it lives, and the main
 | # | Capability | Module | Key endpoints | Web | Mobile |
 |---|---|---|---|---|---|
 | 01 | Accounts & access | `auth` | `/auth/register,login,guest,refresh,recover*`, `/auth/me`, addresses, push tokens, consents; org memberships & location-scoped roles in `merchants` | `/account`, `/for-restaurants` | `login`, `(tabs)/account` |
+| 01b | Users, roles & permissions (IAM) | `security/iam*`, `core/acl` | `/admin/iam/{overview,users*,roles*,matrix,assignments*,sessions*,login-events,reviews*,service-accounts*,keys*,alerts*,policy,explain}`, `/iam/{access-requests*,requestable-roles,whoami}`, `/auth/invite/*`; API keys as `Bearer gsk_…` | `/admin/iam`, `/account/invite` | `ops/iam` |
 | 02 | Merchant & location registry | `merchants` | `/organizations*`, `/locations/:id` (claim, verify, status, pause/resume, hours), legal sellers, brands | `/merchant/settings` | — |
 | 03 | Publishing & distribution | `merchants` | `/locations/:id/publications` (listing, branded site, order link, QR, booking widget, partner link), `/public/source`, referral click/conversion | `/order/[slug]`, `/embed/book/[slug]`, settings → QR | — |
 | 04 | Local discovery | `discovery` | `/public/search` (text, city, cuisine, geo radius, service, open-now, sponsored ranking), `/public/locations/:slug` (hours, eligible pickup/delivery times, shifts), serviceability | `/`, `/search`, `/r/[slug]` | `(tabs)/index`, `r/[slug]` |

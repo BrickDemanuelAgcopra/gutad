@@ -6,11 +6,13 @@ import { NotifyService } from './notify.service';
 import { OutboxService } from './outbox.service';
 import { RedisService } from './redis.service';
 import { SettingsService } from './settings.service';
+import { AclService } from './acl.service';
+import { SecurityEventsService } from './security-events.service';
 
 /** Cross-cutting services every capability module relies on. */
 @Global()
 @Module({
-  providers: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService],
-  exports: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService],
+  providers: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService, AclService, SecurityEventsService],
+  exports: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService, AclService, SecurityEventsService],
 })
 export class CoreModule {}

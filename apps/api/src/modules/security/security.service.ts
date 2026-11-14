@@ -10,6 +10,7 @@ import { CryptoService } from '../../core/crypto.service';
 import { RedisService } from '../../core/redis.service';
 import { assertCan, can, effectiveRoles, JwtPayload, RoleName, staffCovers } from '../../common/auth';
 import { AuthService, SESSION_DEFAULTS, type SsoConfig } from '../auth/auth.service';
+import { IamService, type StepUp } from './iam.service';
 
 export const EMERGENCY_DEFAULTS = { maxMinutes: 240, grantableRoles: ['OPERATIONS', 'FINANCE', 'SUPPORT', 'CULINARY', 'MARKETING', 'IT', 'DISPATCHER', 'EXECUTIVE'] as string[] };
 
@@ -21,7 +22,7 @@ const csvCell = (v: unknown) => {
 /** 2 — staff access (roles, scopes, sessions, MFA resets, disable), emergency & support access, hierarchy, audit. */
 @Injectable()
 export class SecurityService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly auth: AuthService, private readonly notify: NotifyService, private readonly settings: SettingsService, private readonly crypto: CryptoService, private readonly redis: RedisService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly auth: AuthService, private readonly notify: NotifyService, private readonly settings: SettingsService, private readonly crypto: CryptoService, private readonly redis: RedisService, private readonly iam: IamService) {}
 
   // ───── staff directory ─────
 
@@ -58,7 +59,12 @@ export class SecurityService {
   }
 
   /** Replace a person's staff roles. Only platform admins can grant PLATFORM_ADMIN. Their sessions end so new claims apply. */
-  async setStaffRoles(user: JwtPayload, input: { email: string; roles: StaffRole[] }) {
+  async setStaffRoles(user: JwtPayload, input: { email: string; roles: StaffRole[]; reason?: string; stepUp?: StepUp }) {
+    return this.iam.setSystemRoles(user, { email: input.email, roles: input.roles, reason: input.reason || 'role change', stepUp: input.stepUp });
+  }
+
+  /** @deprecated replaced by IamService.setSystemRoles */
+  async setStaffRolesLegacy(user: JwtPayload, input: { email: string; roles: StaffRole[] }) {
     assertCan(user, 'security.manage');
     const [t] = await this.db.select().from(users).where(eq(users.email, input.email.toLowerCase().trim())).limit(1);
     if (!t) throw new NotFoundException('User not found. They must create an account first.');
@@ -72,7 +78,13 @@ export class SecurityService {
     return { userId: t.id, roles };
   }
 
-  async setScope(user: JwtPayload, userId: string, input: { regionIds?: string[]; organizationIds?: string[]; locationIds?: string[]; maxSensitivity?: Sensitivity; note?: string | null }) {
+  async setScope(user: JwtPayload, userId: string, input: { regionIds?: string[]; organizationIds?: string[]; locationIds?: string[]; maxSensitivity?: Sensitivity; note?: string | null; reason?: string }) {
+    const [cur] = await this.db.select().from(staffScopes).where(eq(staffScopes.userId, userId)).limit(1);
+    return this.iam.setScope(user, userId, { companyIds: cur?.companyIds, kitchenIds: cur?.kitchenIds, brandIds: cur?.brandIds, teams: cur?.teams, ...input });
+  }
+
+  /** @deprecated replaced by IamService.setScope */
+  async setScopeLegacy(user: JwtPayload, userId: string, input: { regionIds?: string[]; organizationIds?: string[]; locationIds?: string[]; maxSensitivity?: Sensitivity; note?: string | null }) {
     assertCan(user, 'security.manage');
     const [t] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!t) throw new NotFoundException();
@@ -89,7 +101,12 @@ export class SecurityService {
   }
 
   /** Access revocation in one step: account disabled, every session ended, every grant revoked. */
-  async setStatus(user: JwtPayload, userId: string, status: 'ACTIVE' | 'DISABLED', reason: string) {
+  async setStatus(user: JwtPayload, userId: string, status: 'ACTIVE' | 'DISABLED', reason: string, stepUp?: StepUp) {
+    return this.iam.setStatus(user, userId, { status, reason, stepUp });
+  }
+
+  /** @deprecated replaced by IamService.setStatus */
+  async setStatusLegacy(user: JwtPayload, userId: string, status: 'ACTIVE' | 'DISABLED', reason: string) {
     assertCan(user, 'security.manage');
     if (userId === user.sub) throw new BadRequestException('You cannot change your own status');
     const [t] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);

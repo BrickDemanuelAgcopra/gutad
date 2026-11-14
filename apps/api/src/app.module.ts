@@ -6,6 +6,7 @@ import { DbModule } from './db/db.module';
 import { CoreModule } from './core/core.module';
 import { JwtAuthGuard, RolesGuard } from './common/auth';
 import { IdempotencyInterceptor } from './common/idempotency.interceptor';
+import { FieldMaskInterceptor } from './common/field-mask.interceptor';
 import { AuthModule } from './modules/auth/auth.module';
 import { SecurityModule } from './modules/security/security.module';
 import { MerchantsModule } from './modules/merchants/merchants.module';
@@ -81,6 +82,7 @@ export const DOMAIN_MODULES = [
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: FeatureGuard },
     { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: FieldMaskInterceptor },
   ],
 })
 export class AppModule {}

@@ -21,6 +21,7 @@ import { GroupOrdersService } from '../modules/programs/group-orders.service';
 import { ProgramsService } from '../modules/programs/programs.service';
 import { addDays } from '../common/utils';
 import { ApprovalsService } from '../modules/security/approvals.service';
+import { IamGovernanceService } from '../modules/security/iam-governance.service';
 import { AlertsService } from '../modules/ops/alerts.service';
 import { LocationsAdminService } from '../modules/merchant-admin/locations-admin.service';
 import { MerchantsAdminService } from '../modules/merchant-admin/merchants-admin.service';
@@ -71,6 +72,7 @@ export class JobsService {
     private readonly sensors: SensorsService,
     private readonly equipmentVendors: EquipmentVendorService,
     private readonly glPush: GlPushService,
+    private readonly iam: IamGovernanceService,
   ) {}
 
   private async locked(name: string, ttlMs: number, fn: () => Promise<unknown>) {
@@ -104,6 +106,8 @@ export class JobsService {
   @Interval(60_000) kitchenLoad() { return this.locked('kitchen-load', 60_000, () => this.kitchen.loadSweep()); }
   @Interval(60_000) pickupNoShow() { return this.locked('pickup-no-show', 60_000, () => this.orders.noShowSweep()); }
   @Interval(3_600_000) privacySweep() { return this.locked('privacy', 600_000, () => this.customers.privacySweep()); }
+  @Interval(60_000) iamSweep() { return this.locked('iam-sweep', 60_000, () => this.iam.sweep()); }
+  @Interval(3_600_000) iamHourly() { return this.locked('iam-hourly', 600_000, () => this.iam.hourly()); }
   @Interval(300_000) approvalExpiry() { return this.locked('approval-expiry', 60_000, () => this.approvals.expireStale()); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {

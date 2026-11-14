@@ -19,3 +19,4 @@ export * from './operations';
 export * from './growth';
 export * from './followups-b';
 export * from './followups-c';
+export * from './iam';

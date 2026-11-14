@@ -103,6 +103,7 @@ Each phase ships with: migration, API, web, mobile, smoke checks, an updated `do
 | **H** | Payments ops, settlement/royalties/payouts, accounting & treasury | 18, 19, 20 |
 | **I** | Inventory & procurement, food safety & recalls, workforce/training/equipment | 21, 22, 23 |
 | **J** | Promotions, rewards, referrals, memberships, gift cards, campaign measurement | 25 |
+| **K** | Users, roles & permissions (IAM): custom roles, permission matrix, assignments, data restrictions, requests, reviews, offboarding, service accounts, security alerts. See [`IAM-PLAN.md`](IAM-PLAN.md) | 2 |
 
 Order rationale: Phase A comes first because every later module depends on permissions, approvals and the console shell. Phase B gives immediate operational value. The remaining phases follow the order's lifecycle (merchant → menu → checkout → kitchen → delivery → money → supply → growth).
 

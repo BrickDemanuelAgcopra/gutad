@@ -115,6 +115,14 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`);
       return sub(`Your request was ${String(p.status).toLowerCase()}`, `${p.summary} was ${String(p.status).toLowerCase()}${p.note ? `: ${p.note}` : ''}.`);
     case 'access.emergency':
       return sub('Emergency access activated', `${p.email} activated emergency access (${(p.roles as string[]).join(', ')}) until ${when(p.until)}. Reason: ${p.reason}. Review it in Admin → Staff & access.`);
+    case 'security.alert':
+      return sub(`[Security] ${p.title}`, `${p.title}${p.detail ? `\n${p.detail}` : ''}\nReview it in Admin → Users, roles & permissions → Alerts.`);
+    case 'staff.invite':
+      return sub('You are invited to the Gutad control center', `${p.inviter || 'An administrator'} invited you to join Gutad${p.roles ? ` as ${p.roles}` : ''}. Set your password here (the link expires ${when(p.expiresAt)}): ${p.link}`);
+    case 'access.request':
+      return sub(`Access request: ${p.role}`, `${p.requester} asked for the ${p.role} role${p.hours ? ` for ${p.hours} hours` : ''}. Why: ${p.justification}. Decide in Admin → Users, roles & permissions → Requests.`);
+    case 'access.request.decided':
+      return sub(`Your access request was ${String(p.status).toLowerCase()}`, `Your request for ${p.role} was ${String(p.status).toLowerCase()}${p.note ? `: ${p.note}` : ''}.`);
     default:
       return sub(template, JSON.stringify(p));
   }

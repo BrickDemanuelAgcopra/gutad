@@ -9,7 +9,8 @@ import { ApprovalsService } from './approvals.service';
 import { SecurityService } from './security.service';
 
 const Reason = z.object({ reason: z.string().min(5) });
-const RolesDto = z.object({ email: z.string().email(), roles: z.array(z.enum(STAFF_ROLES)), reason: z.string().min(5) });
+const StepUp = z.object({ code: z.string().max(12).optional(), password: z.string().max(200).optional() }).nullable().optional();
+const RolesDto = z.object({ email: z.string().email(), roles: z.array(z.enum(STAFF_ROLES)), reason: z.string().min(5), stepUp: StepUp });
 const ScopeDto = z.object({ regionIds: z.array(z.string().uuid()).optional(), organizationIds: z.array(z.string().uuid()).optional(), locationIds: z.array(z.string().uuid()).optional(), maxSensitivity: z.enum(SENSITIVITY).optional(), note: z.string().nullable().optional(), reason: z.string().min(5) });
 const EmergencyDto = z.object({ roles: z.array(z.enum(STAFF_ROLES)).min(1), minutes: z.number().int().min(5).max(1440), reason: z.string().min(10), ticketRef: z.string().optional() });
 const SupportDto = z.object({ organizationId: z.string().uuid(), minutes: z.number().int().min(5).max(240).optional(), reason: z.string().min(5), readOnly: z.boolean().optional() });
@@ -35,7 +36,7 @@ export class SecurityController {
   @Get('admin/security/staff/:id') staffDetail(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.userDetail(u, id); }
   @RequiresReason() @Post('admin/security/staff/roles') setRoles(@CurrentUser() u: JwtPayload, @Body(zod(RolesDto)) b: z.infer<typeof RolesDto>) { return this.svc.setStaffRoles(u, b); }
   @RequiresReason() @Put('admin/security/staff/:id/scope') setScope(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ScopeDto)) b: z.infer<typeof ScopeDto>) { return this.svc.setScope(u, id, b); }
-  @Post('admin/security/staff/:id/disable') disable(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(Reason)) b: { reason: string }) { return this.svc.setStatus(u, id, 'DISABLED', b.reason); }
+  @Post('admin/security/staff/:id/disable') disable(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(Reason.extend({ stepUp: StepUp }))) b: { reason: string; stepUp?: { code?: string; password?: string } | null }) { return this.svc.setStatus(u, id, 'DISABLED', b.reason, b.stepUp); }
   @Post('admin/security/staff/:id/enable') enable(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(Reason)) b: { reason: string }) { return this.svc.setStatus(u, id, 'ACTIVE', b.reason); }
   @Post('admin/security/staff/:id/reset-mfa') resetMfa(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(Reason)) b: { reason: string }) { return this.svc.resetMfa(u, id, b.reason); }
   @Post('admin/security/staff/:id/revoke-sessions') revoke(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(Reason.extend({ sessionId: z.string().uuid().optional() }))) b: { reason: string; sessionId?: string }) { return this.svc.revokeUserSessions(u, id, b.reason, b.sessionId); }

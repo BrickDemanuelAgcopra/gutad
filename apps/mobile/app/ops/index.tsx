@@ -13,7 +13,7 @@ export default function OpsHome() {
   if (!ready) return null;
   if (!user || !isStaff) return <View style={[s.screen, s.pad]}><Card title="Gutad Ops"><Muted>For Gutad staff only.</Muted></Card></View>;
   const mods = modulesFor(user.permissions || []).filter((m) => m.mobile && m.mobile !== '/ops');
-  const roles = user.roles.filter((r) => r in STAFF_ROLE_LABELS).map((r) => STAFF_ROLE_LABELS[r as StaffRole]);
+  const roles = user.accessRoles?.length ? user.accessRoles.map((r) => r.name) : user.roles.filter((r) => r in STAFF_ROLE_LABELS).map((r) => STAFF_ROLE_LABELS[r as StaffRole]);
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       <H1>Gutad Ops</H1>
@@ -36,6 +36,10 @@ export default function OpsHome() {
           </View>
         );
       })}
+      <Pressable onPress={() => router.push('/ops/my-access')} style={({ pressed }) => [{ backgroundColor: C.white, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: C.ink1, opacity: pressed ? 0.85 : 1 }]}>
+        <Text style={{ fontSize: 16, fontWeight: '600', color: C.ink }}>My access</Text>
+        <Muted>Your roles, request more access and follow your requests</Muted>
+      </Pressable>
       <Muted>Bulk editors (plans, menus, settings) are on the web console at gutad.io/admin.</Muted>
     </ScrollView>
   );

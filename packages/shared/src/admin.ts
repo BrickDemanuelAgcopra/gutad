@@ -135,7 +135,8 @@ export const ADMIN_MODULES: AdminModule[] = [
   { key: 'customers', group: 'Support', label: 'Customers', description: 'Directory, customer 360, duplicates and merges, restrictions and appeals, segments, privacy requests', permission: 'customers.read', web: '/admin/customers', mobile: '/ops/customers' },
   { key: 'integrations', group: 'Security', label: 'Integrations & health', description: 'Providers, webhooks, devices', permission: 'integrations.manage', web: '/admin/integrations' },
   { key: 'structure', group: 'Security', label: 'Organization structure', description: 'Company, legal entities, regions, food halls, merchants, brands', permission: 'merchants.read', web: '/admin/structure', mobile: '/ops/structure' },
-  { key: 'staff', group: 'Security', label: 'Staff & access', description: 'Roles, scopes, sessions, MFA, emergency access', permission: 'security.read', web: '/admin/security', mobile: '/ops/security' },
+  { key: 'iam', group: 'Security', label: 'Users, roles & permissions', description: 'Staff accounts, invitations, roles, permission matrix, scopes, requests, reviews, sessions, service accounts, security alerts', permission: 'security.read', web: '/admin/iam', mobile: '/ops/iam' },
+  { key: 'staff', group: 'Security', label: 'Emergency access & sign-in policy', description: 'Break-glass and support access, SSO, MFA and session policy', permission: 'security.read', web: '/admin/security', mobile: '/ops/security' },
   { key: 'audit', group: 'Security', label: 'Audit history', description: 'Who changed what, when and why', permission: 'security.read', web: '/admin/audit', mobile: '/ops/audit' },
   { key: 'settings', group: 'Security', label: 'Platform settings', description: 'Settings, thresholds, SSO and session policy', permission: 'settings.manage', web: '/admin/settings' },
 ];
@@ -173,6 +174,7 @@ export const APPROVAL_KINDS = {
   PURCHASE_ORDER: { label: 'Supplier purchase order', permission: 'kitchens.manage' },
   PRICE_CHANGE: { label: 'Price change', permission: 'catalog.manage' },
   PAYOUT_RELEASE: { label: 'Payout release', permission: 'finance.approve' },
+  ACCESS_CHANGE: { label: 'Critical access change', permission: 'security.manage' },
 } as const satisfies Record<string, { label: string; permission: Permission }>;
 export type ApprovalKind = keyof typeof APPROVAL_KINDS;
 

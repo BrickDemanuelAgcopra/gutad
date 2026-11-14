@@ -583,3 +583,27 @@ Verification:
 - **25.10-P** Gutad-wide email/SMS campaigns to platform customer segments (marketing consent only) with a holdout. **API W**
 - **25.10-S** 95% ranges on incremental orders and sales, flagged when not conclusive. **API W**
 
+
+## Phase K: users, roles & permissions (IAM) (shipped 2026-11-14)
+
+Plan and gap analysis: [`IAM-PLAN.md`](IAM-PLAN.md). Web `/admin/iam`, mobile Ops → Users & access. Smoke: 67 new checks (`scripts/smoke-iam.mjs`), 548/548 overall.
+
+- **K.1 User management**: create and invite staff, profile fields, activate / suspend (optionally until a date) / deactivate / archive, resend and revoke invitations, public invitation acceptance (`/account/invite`), bulk CSV import with dry run, staff CSV export. **API W M**
+- **K.2 Roles**: database roles (9 built-in, seeded with their previous access, plus custom); create, edit, duplicate, archive unused, restore; several roles per person. **API W**
+- **K.3–K.4 Permissions & matrix**: 20 resources × view/create/edit/delete/approve/publish/export/refund/manage access; checkbox matrix saved in one batch; coarse console checks are narrowed to the request's action. **API W**
+- **K.5 Scope**: companies, kitchens, brands and teams join regions, organizations, locations and the sensitivity ceiling; changes apply immediately. **API W**
+- **K.6 Assignments**: primary role and responsibility, scheduled start, end date, bulk assignment, removal; live without re-login. **API W M**
+- **K.7 Data restrictions**: personal info, bank & payout details, pay rates & payroll, financial reports; masked fields and gated report/export routes; export controlled separately. **API W**
+- **K.8 Approval authority**: per-role limits for refunds, discounts/credits, purchase orders, payouts and refunds without approval; enforced when deciding. **API W**
+- **K.9 Separation of duties**: no self-assignment, self-approval, self-review or self-status change; no granting permissions you don't hold; a second superadmin for critical changes. **API W**
+- **K.10 Login security**: lockout per account and per IP, sign-in event log, admin unlock (SSO/MFA/recovery from Phase A). **API W M**
+- **K.11 Sessions**: all staff sessions, end one, force sign-out, sign out all staff; inactivity timeout enforced on every request. **API W M**
+- **K.12 Temporary access**: time-limited roles, acting-manager cover, automatic expiry (plus Phase A emergency access). **API W**
+- **K.13 Access requests**: request with justification and duration, approve/reject, status tracking, expiry. **API W M**
+- **K.14 Audit**: `iam.*` actions for every access change, with reasons; sign-in events. **API W**
+- **K.15 Access reviews**: campaigns with flags, keep/revoke/suspend, periodic automatic campaigns, inactive-account flags and optional auto-suspend. **API W**
+- **K.16 Offboarding**: one-step disable and revocation with transfer of pending approvals, tickets, alerts, pipeline, accounts and service accounts. **API W**
+- **K.17 Effective access**: per-permission grant/deny with roles and reasons; explain for one permission in an organization or location. **API W M**
+- **K.18 Superadmin safeguards**: granter allowlist, last-superadmin lock, step-up verification, dual control, superadmin role locked. **API W**
+- **K.19 Service accounts & API keys**: own permissions and organization scope, IP allowlist, expiring hashed keys, rotation with grace period, revocation. **API W**
+- **K.20 Security notifications**: alert feed with email/push for privilege increases, new superadmins, suspicious sign-ins, lockouts, sensitive and API access changes, expiring keys, inactive accounts and offboarding. **API W M**

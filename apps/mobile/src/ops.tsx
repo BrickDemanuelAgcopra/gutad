@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
-import { merchantPageAllowed, type AuthResponse } from '@gutad/shared';
+import { Modal, Pressable, Text, View } from 'react-native';
+import { GutadApiError, merchantPageAllowed, type AuthResponse } from '@gutad/shared';
 import { api, money, session, when } from './api';
 import { useAction, useSession } from './hooks';
 import { Badge, Button, C, Card, ErrorText, Input, Muted, tone } from './ui';
@@ -85,4 +85,46 @@ export function WorkspaceGate({ page, children }: { page: string; children: Reac
     return <View style={{ flex: 1, padding: 16, backgroundColor: C.bg }}><Card title="Not part of your role"><Muted>Ask your manager if you need this screen.</Muted></Card></View>;
   }
   return <>{children}</>;
+}
+
+export type StepUpProof = { code: string } | { password: string };
+type StepUpAsk = { method: 'totp' | 'password'; message: string; retry: (p: StepUpProof) => Promise<unknown> };
+
+/**
+ * Critical IAM changes answer 403 STEP_UP_REQUIRED (method `totp` or `password`). `guard(fn)` runs `fn()` and,
+ * on that answer, opens a cross-platform prompt (Alert.prompt is iOS-only) that retries `fn(proof)`.
+ * Render `modal` once in the screen.
+ */
+export function useStepUp() {
+  const [ask, setAsk] = useState<StepUpAsk | null>(null);
+  const guard = async <T,>(fn: (proof?: StepUpProof) => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await fn();
+    } catch (e) {
+      const b = e instanceof GutadApiError && e.status === 403 ? (e.body as unknown as { code?: string; method?: string } | null) : null;
+      if (b?.code !== 'STEP_UP_REQUIRED') throw e;
+      setAsk({ method: b.method === 'password' ? 'password' : 'totp', message: e instanceof Error ? e.message : 'Confirm this change', retry: fn });
+      return undefined;
+    }
+  };
+  return { guard, modal: <StepUpModal ask={ask} onClose={() => setAsk(null)} /> };
+}
+
+function StepUpModal({ ask, onClose }: { ask: StepUpAsk | null; onClose: () => void }) {
+  const [value, setValue] = useState('');
+  const { run, error, busy } = useAction();
+  const close = () => { setValue(''); onClose(); };
+  return (
+    <Modal visible={!!ask} transparent animationType="fade" onRequestClose={close}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 24 }}>
+        <Card title="Confirm it's you">
+          <Muted>{ask?.message}</Muted>
+          <Input label={ask?.method === 'password' ? 'Password' : 'Authenticator code'} value={value} onChangeText={setValue} secureTextEntry={ask?.method === 'password'} keyboardType={ask?.method === 'password' ? 'default' : 'number-pad'} autoFocus />
+          <ErrorText msg={error} />
+          <Button title="Confirm" disabled={busy || !value.trim()} onPress={() => run(async () => { if (!ask) return; await ask.retry(ask.method === 'password' ? { password: value } : { code: value.trim() }); close(); })} />
+          <Button title="Cancel" variant="ghost" onPress={close} />
+        </Card>
+      </View>
+    </Modal>
+  );
 }

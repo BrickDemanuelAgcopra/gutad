@@ -26,6 +26,12 @@ export interface AuthUser {
   mfaEnabled?: boolean;
   /** true when the person's role requires MFA and they have not enrolled yet */
   mfaSetupRequired?: boolean;
+  /** platform staff (built-in or custom roles, or a service account) */
+  staff?: boolean;
+  /** IAM roles held right now (keys and names) */
+  accessRoles?: { id: string; key: string; name: string; primary: boolean; endsAt: string | null }[];
+  /** matrix permissions (`resource:action`) held right now */
+  finePermissions?: string[];
 }
 
 export interface AuthResponse {

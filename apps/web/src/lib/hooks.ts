@@ -49,7 +49,7 @@ export function useSession() {
   }, []);
   const isMerchant = !!user && (user.merchantIds.length > 0 || user.roles.includes('PLATFORM_ADMIN'));
   const perms = user?.permissions || [];
-  const isStaff = !!user && (user.roles.some((r) => (STAFF_ROLES as readonly string[]).includes(r)) || !!user.elevated);
+  const isStaff = !!user && (user.staff === true || user.roles.some((r) => (STAFF_ROLES as readonly string[]).includes(r)) || !!user.elevated);
   const isAdmin = isStaff && (perms.length > 0 || !!user?.mfaSetupRequired || user.roles.includes('PLATFORM_ADMIN'));
   const can = (p: string) => perms.includes(p);
   return { user, ready, isMerchant, isAdmin, isStaff, can, logout: () => session.clear() };
