@@ -45,6 +45,8 @@ To ship **without demo data** set `SEED_DEMO=false` in `.env` before the first r
   cat deploy/backups/gutad-<stamp>.dump | docker compose -f docker-compose.prod.yml exec -T postgres pg_restore -U gutad -d gutad --no-owner
   docker compose -f docker-compose.prod.yml start api worker
   ```
+- Uploaded files (courier documents) live in the bundled MinIO volume `objdata`, bucket `gutad-files`; the same nightly run writes `deploy/backups/files-YYYYMMDD-HHMMSS.tar.gz`. Restore: `docker compose -f docker-compose.prod.yml stop minio`, then `docker run --rm -v gutad_objdata:/data -v $PWD/deploy/backups:/b alpine sh -c 'rm -rf /data/* /data/.minio.sys && tar -xzf /b/files-<stamp>.tar.gz -C /data'`, then `start minio`.
+- To use AWS S3 or Cloudflare R2 instead, set `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` in `.env` and redeploy (copy existing objects across first).
 - Redis holds only caches, locks and throttles; losing it is harmless.
 
 ### Monitoring

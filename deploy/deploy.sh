@@ -30,6 +30,24 @@ if [ ! -f .env ]; then
   exit 0
 fi
 
+# Object storage for uploads: self-hosted MinIO unless the operator already configured a bucket (AWS, R2 …).
+env_get() { grep "^$1=" .env | tail -1 | cut -d= -f2-; }
+env_set() { if grep -q "^$1=" .env; then sed -i "s#^$1=.*#$1=$2#" .env; else [ -n "$(tail -c1 .env)" ] && echo >> .env; printf '%s=%s
+' "$1" "$2" >> .env; fi; }
+if [ -z "$(env_get MINIO_ROOT_PASSWORD)" ]; then
+  env_set MINIO_ROOT_USER "gutad-$(openssl rand -hex 4)"
+  env_set MINIO_ROOT_PASSWORD "$(openssl rand -hex 24)"
+fi
+if [ -z "$(env_get S3_BUCKET)" ]; then
+  echo "[deploy] configuring uploads to use the bundled object store (minio)"
+  env_set STORAGE_DRIVER s3
+  env_set S3_ENDPOINT http://minio:9000
+  env_set S3_REGION us-east-1
+  env_set S3_BUCKET gutad-files
+  env_set S3_ACCESS_KEY_ID "$(env_get MINIO_ROOT_USER)"
+  env_set S3_SECRET_ACCESS_KEY "$(env_get MINIO_ROOT_PASSWORD)"
+fi
+
 # firewall (optional, ufw present on Ubuntu)
 if command -v ufw >/dev/null 2>&1; then ufw allow 22/tcp >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; ufw allow 443/udp >/dev/null; ufw --force enable >/dev/null || true; fi
 

@@ -41,9 +41,10 @@ export class S3Storage implements StorageDriver {
   readonly name = 's3' as const;
   constructor(private readonly o: { endpoint: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string }) {}
 
-  private async send(method: 'PUT' | 'GET' | 'DELETE', key: string, body?: Buffer, contentType?: string) {
+  /** Signed request; `key` null addresses the bucket itself. Returns the response without judging the status. */
+  private async request(method: 'PUT' | 'GET' | 'DELETE' | 'HEAD', key: string | null, body?: Buffer, contentType?: string) {
     const endpoint = (this.o.endpoint || `https://s3.${this.o.region}.amazonaws.com`).replace(/\/$/, '');
-    const url = new URL(`${endpoint}/${enc(this.o.bucket)}/${safeKey(key).split('/').map(enc).join('/')}`);
+    const url = new URL(`${endpoint}/${enc(this.o.bucket)}${key === null ? '' : `/${safeKey(key).split('/').map(enc).join('/')}`}`);
     const now = new Date();
     const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
     const day = amzDate.slice(0, 8);
@@ -57,12 +58,30 @@ export class S3Storage implements StorageDriver {
     const kSigning = hmac(hmac(hmac(hmac(`AWS4${this.o.secretAccessKey}`, day), this.o.region), 's3'), 'aws4_request');
     const signature = createHmac('sha256', kSigning).update(toSign).digest('hex');
     const { host: _h, ...sendHeaders } = headers;
-    const res = await fetch(url, { method, body: body ? new Uint8Array(body) : undefined, headers: { ...sendHeaders, Authorization: `AWS4-HMAC-SHA256 Credential=${this.o.accessKeyId}/${scope}, SignedHeaders=${names.join(';')}, Signature=${signature}` } });
+    return fetch(url, { method, body: body ? new Uint8Array(body) : undefined, headers: { ...sendHeaders, Authorization: `AWS4-HMAC-SHA256 Credential=${this.o.accessKeyId}/${scope}, SignedHeaders=${names.join(';')}, Signature=${signature}` } });
+  }
+
+  private async send(method: 'PUT' | 'GET' | 'DELETE', key: string, body?: Buffer, contentType?: string) {
+    const res = await this.request(method, key, body, contentType);
     if (!res.ok && !(method === 'DELETE' && res.status === 404)) throw new Error(`storage ${method} ${res.status}`);
     return res;
   }
 
-  async put(key: string, body: Buffer, contentType: string) { await this.send('PUT', key, body, contentType); }
+  /** Creates the bucket when it does not exist yet (self-hosted MinIO starts empty). Private by default. */
+  async ensureBucket() {
+    const head = await this.request('HEAD', null);
+    if (head.ok) return false;
+    if (head.status !== 404) throw new Error(`storage bucket check ${head.status}`);
+    const res = await this.request('PUT', null);
+    if (!res.ok && res.status !== 409) throw new Error(`storage bucket create ${res.status}`);
+    return true;
+  }
+
+  async put(key: string, body: Buffer, contentType: string) {
+    const res = await this.request('PUT', key, body, contentType);
+    if (res.status === 404) { await this.ensureBucket(); await this.send('PUT', key, body, contentType); return; }
+    if (!res.ok) throw new Error(`storage PUT ${res.status}`);
+  }
   async get(key: string) { return Buffer.from(await (await this.send('GET', key)).arrayBuffer()); }
   async remove(key: string) { await this.send('DELETE', key); }
 }
@@ -79,7 +98,14 @@ export class StorageService {
   constructor() {
     const c = loadConfig();
     if (c.STORAGE_DRIVER === 's3' && c.S3_BUCKET && c.S3_ACCESS_KEY_ID && c.S3_SECRET_ACCESS_KEY) {
-      this.driver = new S3Storage({ endpoint: c.S3_ENDPOINT, region: c.S3_REGION || 'us-east-1', bucket: c.S3_BUCKET, accessKeyId: c.S3_ACCESS_KEY_ID, secretAccessKey: c.S3_SECRET_ACCESS_KEY });
+      const s3 = new S3Storage({ endpoint: c.S3_ENDPOINT, region: c.S3_REGION || 'us-east-1', bucket: c.S3_BUCKET, accessKeyId: c.S3_ACCESS_KEY_ID, secretAccessKey: c.S3_SECRET_ACCESS_KEY });
+      this.driver = s3;
+      // The object store may start after the API; keep trying for a minute, then leave it to the first upload.
+      const ready = async (n: number): Promise<void> => {
+        try { if (await s3.ensureBucket()) this.log.log(`created storage bucket ${c.S3_BUCKET}`); }
+        catch (e) { if (n < 12) { setTimeout(() => void ready(n + 1), 5000).unref(); } else this.log.warn(`storage bucket not reachable: ${(e as Error).message}`); }
+      };
+      void ready(1);
     } else {
       if (c.STORAGE_DRIVER === 's3') this.log.warn('STORAGE_DRIVER=s3 without S3_BUCKET / keys; using local disk');
       this.driver = new LocalStorage(c.STORAGE_DIR);
