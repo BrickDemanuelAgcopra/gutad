@@ -113,6 +113,8 @@ export const locations = pgTable(
     courierPointLat: doublePrecision('courier_point_lat'),
     courierPointLng: doublePrecision('courier_point_lng'),
     autoAccept: boolean('auto_accept').notNull().default(false),
+    /** per-order packaging fee charged to the customer and paid to the merchant; null = platform rule */
+    packagingFeeCents: integer('packaging_fee_cents'),
     /** minutes before an unaccepted order escalates; auto-reject happens at 4× this */
     acceptTimeoutMinutes: integer('accept_timeout_minutes').notNull().default(5),
     /** controlled restart: temporary throttle until this time */

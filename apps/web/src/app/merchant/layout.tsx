@@ -14,7 +14,7 @@ import { AccessBanner, adoptTokens } from '@/components/admin-ui';
 const NEEDS: Record<string, string[]> = { '/merchant/host': ['floor_plan'], '/merchant/dispatch': ['delivery'], '/merchant/events': ['experiences', 'private_events'] };
 
 const NAV = [
-  ['/merchant', 'Dashboard'], ['/merchant/onboarding', 'Onboarding'], ['/merchant/orders', 'Orders'], ['/merchant/menu', 'Menu'], ['/merchant/host', 'Host stand'], ['/merchant/dispatch', 'Delivery'], ['/merchant/kitchen', 'Kitchen'], ['/merchant/events', 'Events'], ['/merchant/guests', 'Guests'], ['/merchant/growth', 'Growth'], ['/merchant/finance', 'Finance'], ['/merchant/billing', 'Plan & billing'], ['/merchant/shift', 'Shift'], ['/merchant/location', 'Location & launch'], ['/merchant/support', 'Support'], ['/merchant/settings', 'Settings'],
+  ['/merchant', 'Dashboard'], ['/merchant/onboarding', 'Onboarding'], ['/merchant/orders', 'Orders'], ['/merchant/menu', 'Menu'], ['/merchant/host', 'Host stand'], ['/merchant/dispatch', 'Delivery'], ['/merchant/kitchen', 'Kitchen'], ['/merchant/recipes', 'Recipes'], ['/merchant/events', 'Events'], ['/merchant/guests', 'Guests'], ['/merchant/growth', 'Growth'], ['/merchant/finance', 'Finance'], ['/merchant/billing', 'Plan & billing'], ['/merchant/shift', 'Shift'], ['/merchant/location', 'Location & launch'], ['/merchant/support', 'Support'], ['/merchant/settings', 'Settings'],
 ];
 
 export default function MerchantLayout({ children }: { children: React.ReactNode }) {

@@ -225,3 +225,72 @@ Verification:
   - Enforced in public menus and quotes (`BRAND_NOT_AVAILABLE`).
   - A job expires contracts and raises an alert.
   - **API W M**
+
+## Phase D: menu, recipes, pricing (shipped 2026-11-13)
+
+Verification:
+- Typecheck is clean for API, web and mobile.
+- `next build`: OK.
+- `npm run smoke` on a fresh database: **275/275 checks pass**, including 25 new Phase D checks in `scripts/smoke-admin-d.mjs`.
+- Migration `0009_menu_pricing.sql`:
+  - new tables `menu_versions`, `menu_location_links`, `item_location_overrides`, `price_changes`, `tax_rates`, `recipe_acknowledgments`
+  - new columns on menu items, recipes, ingredients, coupons, quotes, orders and locations
+  - the global unique constraint on ingredient names is dropped, so merchants can have their own ingredients
+- New `MenuAdminService` (catalog), `RecipesService` (kitchen), and `PricingModule`.
+- Shared `packages/shared/src/pricing.ts`: fee rules, `computeCustomerFees`, tax categories, item kinds, allergens.
+- New worker job applies scheduled price changes.
+
+### 7. Menu & product catalog
+- **7.1** Serving size and extra photos on items, shown on public menus. **W** item details page.
+- **7.2** Modifier groups are reusable: list the groups used across a menu and attach or detach an existing group on any item (`/items/:id/modifier-groups/:groupId`). **W**
+- **7.3** Nutrition (calories, macros, sodium, sugar) on items. Ingredients carry allergens; an item shows the allergens from its recipe and from its modifier options, and highlights any it doesn't list. **W M** (kitchen recipe cards show allergens)
+- **7.4** Location-specific assortment and pricing:
+  - A menu can be offered at other locations of the same merchant (`menu_location_links`).
+  - Per-location price, hidden or sold-out overrides (`item_location_overrides`), applied on public menus and at checkout.
+  - **W**
+- **7.5 (fix)** The menu daypart and days now apply at checkout too: `resolveItems` used to ignore them. **API**
+- **7.6** Item kinds: item, bundle, beverage, extra, packaging. Bundles and combos use required modifier groups for their components. Packaging is also a fee rule (9.2). **W**
+- **7.7** Draft → review → publish → rollback:
+  - `menu_versions` holds documents.
+  - Drafts are edited separately while customers keep seeing the live menu. Drafts are validated and diffed against live.
+  - Publishing applies changes by item id and switches off removed items rather than deleting them, so past orders keep their references. The live menu before the first versioned publish is kept as a baseline.
+  - Rollback republishes an older version as a new one.
+  - With `menus.require_review`, someone other than the author publishes.
+  - **W** merchant Menu → Versions & publish, admin Menus & recipes review. **M** `ops/culinary` (publish or send back).
+- **7.8** Export as CSV or JSON. Import validation (dry run) reports errors, duplicate names and items already on the menu. **W**
+
+### 8. Recipe & culinary production
+- **8.1** Recipes belong to a merchant (`organization_id`), with quantities, yield and portion size. Merchants keep their own ingredients; the shared catalog is maintained by Gutad culinary only.
+  - **Fixed:** previously any merchant role could overwrite shared ingredient costs.
+  - **W** merchant Recipes. **M** merchant `recipes`.
+- **8.2** Preparation steps with a station code and minutes per step, shown on kitchen recipe cards. **W M**
+- **8.3** Versions: a new version is a draft copied from the current one, with a change summary and full history. Approved ingredient substitutions show the substitute's allergens. **W**
+- **8.4** Plate cost (ingredients plus labor at the configurable rate) and, for each menu item using the recipe, food cost % and margin. **W M**
+- **8.5** Equipment requirements, prep minutes and maximum batch size are recorded (enforcement in kitchen batching: follow-up 8.5-K). **W**
+- **8.6** Test-kitchen trials (notes and score). Release needs approval by someone other than the author: the merchant owner/manager or Gutad culinary. Setting `recipes.require_trial` can require a trial first. Approved recipes cannot be edited; you start a new version instead. **W M**
+- **8.7** Training notes and link per recipe. Kitchen staff are notified of a new version and confirm they've read it; the recipe page lists who has and hasn't. **W M**
+- **8.8** Traceability: releasing a recipe flags every menu item whose listed allergens miss one in the recipe (`allergen_review_needed`). Changing an ingredient's allergens flags every item that uses it. Flags appear for the merchant (Recipes, item details) and for Gutad culinary (allergen review). **API W M**
+
+### 9. Pricing, fees & tax
+- **9.1** Base price plus per-channel prices plus per-location overrides (7.4). Price changes above the threshold go through approval (Phase A). **W**
+- **9.2** Configurable customer fees (setting `fees.customer`):
+  - service fee: % with min and cap, by channel and fulfillment
+  - small-order fee
+  - packaging fee: per order and per item, or a location's own amount
+  - These replace the hard-coded service-fee constants; the defaults keep today's behavior.
+  - New `small_order_fee_cents` and `packaging_fee_cents` on quotes and orders. In the ledger, packaging goes to the merchant payable and the small-order fee to platform revenue.
+  - **W** admin Pricing → Customer fees.
+- **9.3** Membership benefits (free delivery threshold, service fee waiver, monthly credit, priority waitlist) are editable in admin. **W M** (read)
+- **9.4** Commission (published plan fees), brand royalties, promotion funding and scheduled price changes on one page. **W M**
+- **9.5** Item tax categories (standard, prepared food, beverage, alcohol, grocery, merchandise, exempt):
+  - `tax_rates` resolves location, then region, then platform, then the location's own rate.
+  - Discounts are spread across categories. With a single category the result is identical to the old flat calculation.
+  - Tax lines are frozen into the quote snapshot.
+  - External tax provider: follow-up 9.5-X.
+  - **W**
+- **9.6** Promotion funding split: a coupon can be funded part platform, part merchant (`platform_share_pct`, staff only). The ledger re-credits the merchant only for the platform's share. **W**
+- **9.7** Effective-dated price changes (now or on a date; base, channel or location price), approval when above the threshold, cancellation, a worker that applies them when due, and price history from the audit trail. **W**
+- **9.8** Checkout-price simulator: `QuoteService.simulate` prices a sample cart with draft fee rules, tax rates and item prices without storing anything, and compares it with today. **W** admin Pricing → Simulator.
+
+### 11. Cart & checkout (done along the way)
+- **11.2** Per-item quantity limit (`max_per_order`, `QUANTITY_LIMIT`). **API W M**

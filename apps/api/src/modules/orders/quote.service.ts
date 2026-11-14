@@ -1,8 +1,10 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, gt, inArray, lte } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { brands, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
+import { brands, taxRates, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
 import { brandSellable } from '../../common/brand-rules';
+import { computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
+import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
 import { DeliveryService } from '../delivery/delivery.service';
@@ -41,10 +43,13 @@ export interface QuoteSnapshotLine {
   lineTotalCents: number;
   modifiers: { id: string; name: string; priceCents: number }[];
   specialInstructions?: string;
+  taxCategory?: string;
 }
 
-const SERVICE_FEE_BPS_MARKETPLACE = 500; // diner service fee on marketplace delivery orders (capped); pickup has none
-const SERVICE_FEE_CAP_CENTS = 400;
+/** Simulation inputs (9.8): draft fee rules, tax rates and item prices; nothing is stored. */
+export interface SimulationResult { subtotalCents: number; discountCents: number; taxCents: number; serviceFeeCents: number; smallOrderFeeCents: number; packagingFeeCents: number; deliveryFeeCents: number; tipCents: number; creditsCents: number; loyaltyCents: number; totalCents: number; commissionCents: number; promotionFunder: string | null; promotionPlatformShareCents: number; taxLines: { category: string; rateBps: number; taxableCents: number; taxCents: number }[]; lines: QuoteSnapshotLine[]; warnings: string[] }
+export interface QuoteSimulation { feeRules?: CustomerFeeRules; taxRates?: Record<string, number>; priceOverrides?: Record<string, number>; ignoreHours?: boolean }
+
 const QUOTE_TTL_MINUTES = 10;
 
 /** Prices a cart deterministically and stores an immutable snapshot that checkout consumes. */
@@ -59,17 +64,27 @@ export class QuoteService {
     private readonly kitchen: KitchenService,
     private readonly payments: PaymentsService,
     private readonly entitlements: EntitlementsService,
+    private readonly settings: SettingsService,
   ) {}
 
   async quote(input: QuoteInput, tx: DbOrTx = this.db) {
+    return this.quoteImpl(input, tx) as Promise<ReturnType<QuoteService['present']>>;
+  }
+
+  /** 9.8 — price a cart with draft fee rules, tax rates or item prices; nothing is stored and hours/pauses are ignored. */
+  async simulate(input: QuoteInput, sim: QuoteSimulation) {
+    return this.quoteImpl(input, this.db, { ignoreHours: true, ...sim }) as Promise<SimulationResult>;
+  }
+
+  private async quoteImpl(input: QuoteInput, tx: DbOrTx = this.db, sim?: QuoteSimulation): Promise<unknown> {
     const [loc] = await tx.select().from(locations).where(eq(locations.id, input.locationId)).limit(1);
     if (!loc) throw new NotFoundException('Restaurant not found');
     const warnings: string[] = [];
-    if (!['LIVE', 'VERIFIED'].includes(loc.status)) throw new BadRequestException('Restaurant is not accepting orders');
+    if (!sim && !['LIVE', 'VERIFIED'].includes(loc.status)) throw new BadRequestException('Restaurant is not accepting orders');
     // plan gating: ordering for every order, delivery on top for delivery orders
     await this.entitlements.assertLocation(loc.id, 'ordering', 'customer', tx);
     if (input.fulfillmentType === 'DELIVERY') await this.entitlements.assertLocation(loc.id, 'delivery', 'customer', tx);
-    if (loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new BadRequestException(loc.pausedReason || 'Restaurant is temporarily paused');
+    if (!sim && loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new BadRequestException(loc.pausedReason || 'Restaurant is temporarily paused');
     if (input.fulfillmentType === 'PICKUP' && !loc.acceptsPickup) throw new BadRequestException('Pickup not offered');
     if (input.fulfillmentType === 'DELIVERY' && !loc.acceptsDelivery) throw new BadRequestException('Delivery not offered');
     if (input.fulfillmentType === 'CATERING' && !loc.acceptsCatering) throw new BadRequestException('Catering not offered');
@@ -82,13 +97,14 @@ export class QuoteService {
       scheduledFor = new Date(input.scheduledFor);
       if (isNaN(scheduledFor.getTime())) throw new BadRequestException('Invalid scheduledFor');
       if (scheduledFor < addMinutes(now, loc.defaultPrepMinutes)) throw new BadRequestException('Scheduled time is too soon');
-      if (!(await this.openAt(loc, scheduledFor, tx))) throw new BadRequestException('Restaurant is closed at the scheduled time');
-    } else if (!(await this.openAt(loc, now, tx))) {
+      if (!sim?.ignoreHours && !(await this.openAt(loc, scheduledFor, tx))) throw new BadRequestException('Restaurant is closed at the scheduled time');
+    } else if (!sim?.ignoreHours && !(await this.openAt(loc, now, tx))) {
       throw new BadRequestException('Restaurant is closed right now; schedule for later');
     }
 
     // items & modifiers
-    const items = await this.catalog.resolveItems(loc.id, input.channel, input.lines.map((l) => l.menuItemId));
+    const items = await this.catalog.resolveItems(loc.id, input.channel, input.lines.map((l) => l.menuItemId), sim?.ignoreHours ? undefined : scheduledFor ?? now);
+    if (sim?.priceOverrides) for (const [id, cents] of Object.entries(sim.priceOverrides)) { const it = items.get(id); if (it) it.priceCents = cents; }
     const eligibleBrands = await this.kitchen.eligibleBrands(loc.id, tx);
     const brandIds = [...new Set([...items.values()].map((i) => i.brandId).filter((x): x is string => !!x))];
     const brandRows = new Map((brandIds.length ? await tx.select().from(brands).where(inArray(brands.id, brandIds)) : []).map((b) => [b.id, b]));
@@ -98,6 +114,8 @@ export class QuoteService {
       if (!item) throw new BadRequestException(`Item ${l.menuItemId} is not available on this menu/channel`);
       if (item.soldOut) throw new BadRequestException(`${item.name} is sold out`);
       if (l.quantity < 1 || l.quantity > 50) throw new BadRequestException('Quantity must be 1–50');
+      const totalQty = input.lines.filter((x) => x.menuItemId === l.menuItemId).reduce((a, x) => a + x.quantity, 0);
+      if (item.maxPerOrder && totalQty > item.maxPerOrder) throw new BadRequestException({ message: `${item.name}: at most ${item.maxPerOrder} per order`, code: 'QUANTITY_LIMIT' });
       if (item.brandId && eligibleBrands.length && !eligibleBrands.some((b) => b.id === item.brandId)) throw new BadRequestException(`${item.name} is from a brand not served at this kitchen`);
       if (item.brandId) {
         const b = brandRows.get(item.brandId);
@@ -105,20 +123,23 @@ export class QuoteService {
       }
       const mods = this.resolveModifiers(item, l.modifierOptionIds || []);
       const modifiersCents = mods.reduce((a, m) => a + m.priceCents, 0);
-      snapLines.push({ menuItemId: item.id, name: item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions });
+      snapLines.push({ menuItemId: item.id, name: item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory });
     }
     const subtotalCents = snapLines.reduce((a, l) => a + l.lineTotalCents, 0);
     if (subtotalCents < loc.minOrderCents) throw new BadRequestException(`Minimum order is ${loc.minOrderCents} cents`);
 
     // promotions
     let discountCents = 0;
-    let promotionFunder: 'MERCHANT' | 'PLATFORM' | null = null;
+    let promotionFunder: 'MERCHANT' | 'PLATFORM' | 'SPLIT' | null = null;
+    let promotionPlatformShareCents = 0;
     let couponId: string | null = null;
     let freeDelivery = false;
     if (input.promoCode) {
       const promo = await this.growth.validateCoupon(input.promoCode, { locationId: loc.id, channel: input.channel, subtotalCents, userId: input.userId }, tx);
       discountCents = promo.discountCents;
-      promotionFunder = promo.funder;
+      promotionFunder = promo.platformSharePct !== null && promo.platformSharePct !== undefined && promo.platformSharePct > 0 && promo.platformSharePct < 100 ? 'SPLIT' : promo.funder;
+      // 9.6 — who pays for the discount: all platform, all merchant, or a split
+      promotionPlatformShareCents = promotionFunder === 'SPLIT' ? Math.round((discountCents * promo.platformSharePct!) / 100) : promotionFunder === 'PLATFORM' ? discountCents : 0;
       couponId = promo.couponId;
       freeDelivery = promo.freeDelivery;
     }
@@ -154,10 +175,17 @@ export class QuoteService {
     // fees, tax, tip
     const terms = await this.contracts.termsFor(loc.id, input.channel, now, tx, input.fulfillmentType === 'DELIVERY' || input.fulfillmentType === 'PICKUP' || input.fulfillmentType === 'DINE_IN' ? input.fulfillmentType : undefined);
     // service fee applies to marketplace delivery orders only (pickup never carries it); members have it waived
-    let serviceFeeCents = input.channel === 'MARKETPLACE' && input.fulfillmentType === 'DELIVERY' ? Math.min(bps(subtotalCents, SERVICE_FEE_BPS_MARKETPLACE), SERVICE_FEE_CAP_CENTS) : 0;
-    if (membership?.benefits.serviceFeeWaived) serviceFeeCents = 0;
+    // 9.2 — configurable customer fees (setting `fees.customer`); members can have the service fee waived
+    const feeRules = sim?.feeRules || (await this.settings.getObject('fees.customer', DEFAULT_CUSTOMER_FEES));
+    const fees = computeCustomerFees(feeRules, { channel: input.channel, fulfillmentType: input.fulfillmentType, subtotalCents, itemCount: snapLines.reduce((a, l) => a + l.quantity, 0), locationPackagingCents: loc.packagingFeeCents, serviceFeeWaived: !!membership?.benefits.serviceFeeWaived });
+    const serviceFeeCents = fees.serviceFeeCents;
+    const smallOrderFeeCents = fees.smallOrderFeeCents;
+    const packagingFeeCents = fees.packagingFeeCents;
+    if (smallOrderFeeCents) warnings.push(`Small-order fee applies under ${(feeRules.smallOrder.thresholdCents / 100).toFixed(2)}`);
     const taxableCents = Math.max(0, subtotalCents - discountCents);
-    const taxCents = bps(taxableCents, loc.taxRateBps);
+    // 9.5 — tax by item category (discount spread across lines); one category at the location rate = the old flat calculation
+    const tax = await this.taxForLines(loc, snapLines, discountCents, subtotalCents, tx, sim?.taxRates);
+    const taxCents = tax.taxCents;
     const tipCents = Math.max(0, input.tipCents || 0);
     const commissionCents = bps(taxableCents, terms.commissionBps);
 
@@ -168,7 +196,7 @@ export class QuoteService {
       if (input.useCreditsCents) creditsCents = Math.min(input.useCreditsCents, await this.payments.availableCredit(input.userId, tx));
       if (input.useLoyaltyPoints) loyaltyCents = Math.min(input.useLoyaltyPoints, await this.growth.loyaltyBalance(input.userId, tx)); // 1 point = 1 cent
     }
-    const grossTotal = taxableCents + taxCents + serviceFeeCents + deliveryFeeCents + tipCents;
+    const grossTotal = taxableCents + taxCents + serviceFeeCents + smallOrderFeeCents + packagingFeeCents + deliveryFeeCents + tipCents;
     const totalCents = Math.max(0, grossTotal - creditsCents - loyaltyCents);
 
     const promiseAt = scheduledFor ? scheduledFor : addMinutes(now, etaMinutes);
@@ -182,6 +210,10 @@ export class QuoteService {
       commissionCents,
       couponId,
       promotionFunder,
+      promotionPlatformShareCents,
+      taxLines: tax.lines,
+      fees: { serviceFeeCents, smallOrderFeeCents, packagingFeeCents, rules: feeRules },
+      menuVersions: [...new Set(snapLines.map((l) => l.menuItemId))].length ? await this.catalog.menuVersionsFor([...items.values()].map((i) => i.id)) : {},
       creditsCents,
       loyaltyCents,
       deliveryFleet,
@@ -191,9 +223,10 @@ export class QuoteService {
       etaMinutes,
       membershipId: membership?.id || null,
     };
+    if (sim) return { subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, creditsCents, loyaltyCents, totalCents, commissionCents, promotionFunder, promotionPlatformShareCents, taxLines: tax.lines, lines: snapLines, warnings };
     const [q] = await tx
       .insert(quotes)
-      .values({ locationId: loc.id, userId: input.userId ?? null, channel: input.channel, fulfillmentType: input.fulfillmentType, currency: loc.currency, snapshot, subtotalCents, discountCents, taxCents, serviceFeeCents, deliveryFeeCents, tipCents, totalCents, promoCode: input.promoCode?.toUpperCase() ?? null, promotionFunder, deliveryQuoteId, deliveryProviderCostCents, scheduledFor, promiseAt, expiresAt })
+      .values({ locationId: loc.id, userId: input.userId ?? null, channel: input.channel, fulfillmentType: input.fulfillmentType, currency: loc.currency, snapshot, subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, totalCents, promoCode: input.promoCode?.toUpperCase() ?? null, promotionFunder, deliveryQuoteId, deliveryProviderCostCents, scheduledFor, promiseAt, expiresAt })
       .returning();
     return this.present(q, warnings);
   }
@@ -211,6 +244,8 @@ export class QuoteService {
       discountCents: q.discountCents,
       taxCents: q.taxCents,
       serviceFeeCents: q.serviceFeeCents,
+      smallOrderFeeCents: q.smallOrderFeeCents,
+      packagingFeeCents: q.packagingFeeCents,
       deliveryFeeCents: q.deliveryFeeCents,
       tipCents: q.tipCents,
       creditsCents: s.creditsCents,
@@ -282,6 +317,28 @@ export class QuoteService {
     const prevDay = (lp.dayOfWeek + 6) % 7;
     const prev = hours.filter((h) => h.dayOfWeek === prevDay && h.closes <= h.opens);
     return prev.some((h) => lp.hhmm < h.closes);
+  }
+
+  /** Tax per category: location rate → tax_rates (location, then region, then platform) → simulation overrides. */
+  private async taxForLines(loc: typeof locations.$inferSelect, lines: QuoteSnapshotLine[], discountCents: number, subtotalCents: number, tx: DbOrTx, simRates?: Record<string, number>) {
+    const cats = [...new Set(lines.map((l) => l.taxCategory || 'STANDARD'))];
+    const rates = await tx.select().from(taxRates).where(and(inArray(taxRates.category, cats), or(eq(taxRates.locationId, loc.id), and(isNull(taxRates.locationId), or(eq(taxRates.region, loc.region), isNull(taxRates.region))))));
+    const rateFor = (c: string) => {
+      if (simRates && simRates[c] !== undefined) return simRates[c];
+      if (c === 'EXEMPT') return 0;
+      const pick = rates.find((r) => r.category === c && r.locationId === loc.id) || rates.find((r) => r.category === c && !r.locationId && r.region === loc.region) || rates.find((r) => r.category === c && !r.locationId && !r.region);
+      return pick ? pick.rateBps : loc.taxRateBps;
+    };
+    const out: { category: string; rateBps: number; taxableCents: number; taxCents: number }[] = [];
+    for (const c of cats) {
+      const gross = lines.filter((l) => (l.taxCategory || 'STANDARD') === c).reduce((a, l) => a + l.lineTotalCents, 0);
+      const share = subtotalCents ? Math.round((discountCents * gross) / subtotalCents) : 0;
+      const taxable = Math.max(0, gross - share);
+      const rate = rateFor(c);
+      out.push({ category: c, rateBps: rate, taxableCents: taxable, taxCents: bps(taxable, rate) });
+    }
+    if (out.length === 1) { out[0].taxableCents = Math.max(0, subtotalCents - discountCents); out[0].taxCents = bps(out[0].taxableCents, out[0].rateBps); }
+    return { taxCents: out.reduce((a, t) => a + t.taxCents, 0), lines: out };
   }
 
   /** Helper used by UI: convert a local "YYYY-MM-DD HH:MM" at the location into an ISO instant. */

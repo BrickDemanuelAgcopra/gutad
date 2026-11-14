@@ -98,6 +98,8 @@ export class OrdersService {
           discountCents: q.discountCents,
           taxCents: q.taxCents,
           serviceFeeCents: q.serviceFeeCents,
+          smallOrderFeeCents: q.smallOrderFeeCents,
+          packagingFeeCents: q.packagingFeeCents,
           deliveryFeeCents: q.deliveryFeeCents,
           tipCents: q.tipCents,
           totalCents: q.totalCents,

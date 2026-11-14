@@ -40,35 +40,10 @@ Phase C shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase D: menu, recipes, pricing
 
-### 7. Menu & product catalog
-- [ ] 7.1 [improve] Serving size and photos management · API W
-- [ ] 7.2 [improve] Reusable modifier groups shared across items; customization limits · API W
-- [ ] 7.3 [improve] Nutrition (calories, macros); allergens derived from recipe ingredients, with manual override · API W M
-- [ ] 7.4 [new] Location-specific assortment, price and availability overrides of a shared item · API W
-- [ ] 7.5 [fix] Menu daypart schedule also enforced in checkout (`resolveItems` ignores it) · API
-- [ ] 7.6 [new] Bundles and combos (fixed price, component choices), packaging options, beverages and extras flags · API W M
-- [ ] 7.7 [new] Menu draft → review → publish, version snapshots, diff, rollback · API W M
-- [ ] 7.8 [improve] Bulk import validation report, CSV/JSON export, duplicate detection · API W
-
-### 8. Recipes & culinary production
-- [ ] 8.1 [improve] Recipes owned by an org, editable in web UI (quantities, yield, portion size) · API W M
-- [ ] 8.2 [new] Preparation steps and station-specific instructions · API W M
-- [ ] 8.3 [improve] Recipe version history and approved ingredient substitutions · API W
-- [ ] 8.4 [improve] Ingredient cost and dish profitability (price vs plate cost, margin %) · API W M
-- [ ] 8.5 [new] Equipment requirements, prep time, batch limits · API W
-- [ ] 8.6 [new] Test-kitchen trials (notes, score) and release approval before a recipe goes active · API W M
-- [ ] 8.7 [new] Training materials per recipe and staff acknowledgment of recipe changes · API W M
-- [ ] 8.8 [new] Traceability: ingredient allergens → recipe → menu item; a recipe change flags the affected items for review · API W
-
-### 9. Pricing, fees & tax
-- [ ] 9.1 [improve] Base price with authorized location and channel overrides (requires 7.4); changes over the threshold need approval · API W
-- [ ] 9.2 [new] Configurable fee rules: delivery, service, small-order and packaging fees (replacing hard-coded service fee constants) · API W
-- [ ] 9.3 [improve] Membership benefits and fee-waiver eligibility editable in admin · API W
-- [ ] 9.4 [improve] Commission and royalty schedule views together · W
-- [ ] 9.5 [new] Item tax categories, a `TaxProvider` interface (flat default; external adapter slot) · API W
-- [ ] 9.6 [improve] Promotion funding split (platform % / merchant %) · API W
-- [ ] 9.7 [new] Effective-dated price changes, approval workflow, price-change history · API W M
-- [ ] 9.8 [new] Checkout-price simulator: run a sample cart against draft rules before publishing · API W
+Phase D shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 7.7-M [improve] Include modifier groups and options in versioned menu documents (today versions cover categories and items; modifier groups change directly) · API W
+- [ ] 8.5-K [improve] Enforce recipe batch limits and equipment requirements in kitchen sequencing (with 13.3) · API W M
+- [ ] 9.5-X [new] External tax provider adapter (Avalara or TaxJar) behind the tax calculation; today the built-in rate table is used · API
 
 ---
 
@@ -86,13 +61,12 @@ Phase C shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ### 11. Cart, checkout & order eligibility
 - [ ] 11.1 [improve] Service-area and hours validation errors carry codes and next-open time · API W M
-- [ ] 11.2 [improve] Item quantity limits per item (max per order) · API W M
 - [ ] 11.3 [new] Shared `cartCompatibility()`: Made at Gutad menus mix in one cart when one platform-operated fulfillment location serves them all · API W M
 - [ ] 11.4 [new] Separate-order enforcement: independent restaurants or incompatible locations → `SEPARATE_ORDER_REQUIRED`; carts explain why instead of silently clearing · API W M
 - [ ] 11.5 [new] Scheduled-order slot capacity and cutoff checks · API W M
 - [ ] 11.6 [improve] Gift balance in the payment mix (with 25.9); calculation breakdown shown · API W M
 - [ ] 11.7 [improve] Payment-failure recovery: retry with a new card on the same order without a duplicate · API W M
-- [ ] 11.8 [improve] Snapshot menu version, cancellation and refund policy version on each order · API
+- [ ] 11.8 [improve] Snapshot the cancellation and refund policy version on each order (menu versions, fee rules and tax lines are already frozen into the quote/order snapshot since Phase D) · API
 
 ### 24. Customer support & service recovery
 - [ ] 24.1 [improve] Tickets linked to payment and merchant (org) as well as order, reservation and delivery · API W M

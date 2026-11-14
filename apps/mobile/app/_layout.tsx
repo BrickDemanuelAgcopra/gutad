@@ -29,6 +29,9 @@ export default function RootLayout() {
         <Stack.Screen name="ops/brands" options={{ title: 'Brands & partners' }} />
         <Stack.Screen name="merchant/support" options={{ title: 'Support' }} />
         <Stack.Screen name="merchant/location" options={{ title: 'Location & launch' }} />
+        <Stack.Screen name="ops/culinary" options={{ title: 'Menus & recipes review' }} />
+        <Stack.Screen name="ops/pricing" options={{ title: 'Pricing, fees & tax' }} />
+        <Stack.Screen name="merchant/recipes" options={{ title: 'Recipes' }} />
         <Stack.Screen name="ops/approvals" options={{ title: 'Approvals' }} />
         <Stack.Screen name="ops/security" options={{ title: 'Staff & access' }} />
         <Stack.Screen name="ops/audit" options={{ title: 'Audit history' }} />

@@ -107,6 +107,8 @@ export const coupons = pgTable('coupons', {
   minSubtotalCents: integer('min_subtotal_cents').notNull().default(0),
   maxUses: integer('max_uses'),
   uses: integer('uses').notNull().default(0),
+  /** share of the discount the platform funds (0–100); null = all by `funder` */
+  platformSharePct: integer('platform_share_pct'),
   perUserLimit: integer('per_user_limit').notNull().default(1),
   locationIds: uuid('location_ids').array().notNull().default([]),
   channels: channelEnum('channels').array().notNull().default([]),

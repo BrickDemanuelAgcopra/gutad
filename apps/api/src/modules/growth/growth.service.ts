@@ -15,6 +15,8 @@ export interface PromoResult {
   discountCents: number;
   freeDelivery: boolean;
   funder: 'MERCHANT' | 'PLATFORM';
+  /** share of the discount the platform funds (0–100); null = all by funder */
+  platformSharePct?: number | null;
   couponId: string;
   campaignId: string | null;
 }
@@ -55,7 +57,7 @@ export class GrowthService {
       if (camp && !['ACTIVE', 'DRAFT'].includes(camp.status)) throw new BadRequestException('Promotion not active');
     }
     const discount = c.kind === 'PERCENT' ? bps(ctx.subtotalCents, c.value) : c.kind === 'FIXED' ? Math.min(c.value, ctx.subtotalCents) : 0;
-    return { discountCents: discount, freeDelivery: c.kind === 'FREE_DELIVERY', funder: c.funder as 'MERCHANT' | 'PLATFORM', couponId: c.id, campaignId: c.campaignId };
+    return { discountCents: discount, freeDelivery: c.kind === 'FREE_DELIVERY', funder: c.funder as 'MERCHANT' | 'PLATFORM', platformSharePct: c.platformSharePct, couponId: c.id, campaignId: c.campaignId };
   }
 
   /** Called when an order is accepted: counts the use, spends campaign budget, stops at budget. */
@@ -70,8 +72,9 @@ export class GrowthService {
     }
   }
 
-  async createCoupon(user: JwtPayload, orgId: string, input: { code?: string; kind: 'PERCENT' | 'FIXED' | 'FREE_DELIVERY'; value: number; funder?: 'MERCHANT' | 'PLATFORM'; minSubtotalCents?: number; maxUses?: number; perUserLimit?: number; locationIds?: string[]; channels?: string[]; startsAt?: Date; expiresAt?: Date; campaignId?: string }) {
+  async createCoupon(user: JwtPayload, orgId: string, input: { platformSharePct?: number | null; code?: string; kind: 'PERCENT' | 'FIXED' | 'FREE_DELIVERY'; value: number; funder?: 'MERCHANT' | 'PLATFORM'; minSubtotalCents?: number; maxUses?: number; perUserLimit?: number; locationIds?: string[]; channels?: string[]; startsAt?: Date; expiresAt?: Date; campaignId?: string }) {
     if (input.funder === 'PLATFORM' && !isPlatformStaff(user)) throw new ForbiddenException('Only platform staff can fund promotions');
+    if (input.platformSharePct && !isPlatformStaff(user)) throw new ForbiddenException('Only platform staff can set a platform funding share');
     assertOrgAccess(user, orgId, null, MANAGER_ROLES);
     const locs = await this.db.select({ id: locations.id }).from(locations).where(eq(locations.organizationId, orgId));
     const locationIds = input.locationIds?.length ? input.locationIds.filter((id) => locs.some((l) => l.id === id)) : locs.map((l) => l.id);

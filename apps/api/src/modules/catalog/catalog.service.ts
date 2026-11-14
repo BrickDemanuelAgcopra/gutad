@@ -1,7 +1,7 @@
 import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, eq, inArray } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
-import { brands, changeRequests, itemModifierGroups, locations, menuCategories, menuItems, menus, modifierGroups, modifierOptions } from '../../db/schema';
+import { brands, changeRequests, itemLocationOverrides, menuLocationLinks, itemModifierGroups, locations, menuCategories, menuItems, menus, modifierGroups, modifierOptions } from '../../db/schema';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
@@ -9,6 +9,7 @@ import { localParts } from '../../common/utils';
 import { ApprovalsService } from '../security/approvals.service';
 import { SettingsService } from '../../core/settings.service';
 import { brandSellable } from '../../common/brand-rules';
+import { MenuAdminService } from './menu-admin.service';
 
 type Channel = (typeof menus.channels.enumValues)[number];
 
@@ -25,17 +26,26 @@ export interface ResolvedItem {
   stationCode: string | null;
   allergens: string[];
   recipeId: string | null;
+  taxCategory: string;
+  maxPerOrder: number | null;
+  kind: string;
   modifierGroups: { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: { id: string; name: string; priceCents: number; soldOut: boolean }[] }[];
 }
 
 @Injectable()
 export class CatalogService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly approvals: ApprovalsService, private readonly settings: SettingsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly approvals: ApprovalsService, private readonly settings: SettingsService, private readonly menuAdmin: MenuAdminService) {}
+
+  /** Menu version of each item's menu, frozen into the quote/order snapshot (11.8). */
+  menuVersionsFor(itemIds: string[]) {
+    return this.menuAdmin.menuVersionsFor(itemIds);
+  }
 
   onModuleInit() {
     this.approvals.register('PRICE_CHANGE', {
       execute: async (req) => {
-        const p = req.payload as { itemId: string; priceCents: number; locationId: string };
+        const p = req.payload as { itemId: string; priceCents: number; locationId: string; priceChangeId?: string };
+        if (p.priceChangeId) return this.menuAdmin.releaseApproved(p.priceChangeId);
         const [item] = await this.db.update(menuItems).set({ priceCents: p.priceCents }).where(eq(menuItems.id, p.itemId)).returning();
         await this.audit.log({ organizationId: req.organizationId, actorId: req.decidedById, action: 'menu_item.price', entityType: 'menu_item', entityId: p.itemId, after: { priceCents: p.priceCents }, reason: req.reason });
         await this.invalidate(p.locationId);
@@ -50,7 +60,7 @@ export class CatalogService implements OnModuleInit {
     const [loc] = await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
     if (!loc) throw new NotFoundException('Location not found');
     const lp = localParts(at, loc.timezone);
-    const menuRows = await this.db.select().from(menus).where(and(eq(menus.locationId, locationId), eq(menus.isActive, true)));
+    const menuRows = await this.menusOffered(locationId);
     const visible = menuRows.filter(
       (m) =>
         channelAllowed(m, channel) &&
@@ -62,14 +72,29 @@ export class CatalogService implements OnModuleInit {
     const brandRows = brandIds.length ? await this.db.select().from(brands).where(inArray(brands.id, brandIds)) : [];
     const sellable = visible.filter((m) => { const b = brandRows.find((x) => x.id === m.brandId); return !b || brandSellable(b, loc.regionId, channel, at); });
     const out = [];
-    for (const m of sellable) out.push(await this.buildMenu(m, channel));
+    for (const m of sellable) out.push(await this.buildMenu(m, channel, locationId));
     return out;
   }
 
-  async buildMenu(m: typeof menus.$inferSelect, channel: Channel) {
+  /** Menus offered at a location: its own plus menus shared to it from another location of the same merchant (7.4). */
+  async menusOffered(locationId: string) {
+    const own = await this.db.select().from(menus).where(and(eq(menus.locationId, locationId), eq(menus.isActive, true)));
+    const linked = await this.db.select({ m: menus }).from(menuLocationLinks).innerJoin(menus, eq(menus.id, menuLocationLinks.menuId)).where(and(eq(menuLocationLinks.locationId, locationId), eq(menus.isActive, true)));
+    return [...own, ...linked.map((x) => x.m).filter((m) => !own.some((o) => o.id === m.id))];
+  }
+
+  async overridesFor(locationId: string, itemIds: string[]) {
+    if (!itemIds.length) return new Map<string, typeof itemLocationOverrides.$inferSelect>();
+    const rows = await this.db.select().from(itemLocationOverrides).where(and(eq(itemLocationOverrides.locationId, locationId), inArray(itemLocationOverrides.menuItemId, itemIds)));
+    return new Map(rows.map((r) => [r.menuItemId, r]));
+  }
+
+  async buildMenu(m: typeof menus.$inferSelect, channel: Channel, forLocationId?: string) {
     const cats = await this.db.select().from(menuCategories).where(eq(menuCategories.menuId, m.id)).orderBy(menuCategories.sortOrder);
     const catIds = cats.map((c) => c.id);
-    const items = catIds.length ? await this.db.select().from(menuItems).where(and(inArray(menuItems.categoryId, catIds), eq(menuItems.isActive, true))).orderBy(menuItems.sortOrder) : [];
+    const allItems = catIds.length ? await this.db.select().from(menuItems).where(and(inArray(menuItems.categoryId, catIds), eq(menuItems.isActive, true))).orderBy(menuItems.sortOrder) : [];
+    const ov = await this.overridesFor(forLocationId || m.locationId || '', allItems.map((i) => i.id));
+    const items = allItems.filter((i) => !ov.get(i.id)?.hidden);
     const groupsByItem = await this.modifierGroupsFor(items.map((i) => i.id));
     const brand = m.brandId ? (await this.db.select().from(brands).where(eq(brands.id, m.brandId)).limit(1))[0] : null;
     return {
@@ -86,11 +111,16 @@ export class CatalogService implements OnModuleInit {
             id: i.id,
             name: i.name,
             description: i.description,
-            priceCents: this.channelPrice(i, channel),
+            priceCents: ov.get(i.id)?.priceCents ?? this.channelPrice(i, channel),
             imageUrl: i.imageUrl,
+            photos: i.photos,
             allergens: i.allergens,
             dietaryTags: i.dietaryTags,
-            soldOut: i.soldOut && (!i.soldOutUntil || i.soldOutUntil > new Date()),
+            servingSize: i.servingSize,
+            nutrition: i.nutrition,
+            kind: i.kind,
+            maxPerOrder: i.maxPerOrder,
+            soldOut: (i.soldOut && (!i.soldOutUntil || i.soldOutUntil > new Date())) || !!ov.get(i.id)?.soldOut,
             modifierGroups: groupsByItem.get(i.id) || [],
           })),
       })),
@@ -121,23 +151,34 @@ export class CatalogService implements OnModuleInit {
   }
 
   /** Resolve items for pricing (used by the quote engine). Validates the item belongs to the location & channel. */
-  async resolveItems(locationId: string, channel: Channel, itemIds: string[]): Promise<Map<string, ResolvedItem>> {
+  async resolveItems(locationId: string, channel: Channel, itemIds: string[], at?: Date): Promise<Map<string, ResolvedItem>> {
     const result = new Map<string, ResolvedItem>();
     if (!itemIds.length) return result;
+    const offered = await this.menusOffered(locationId);
+    if (!offered.length) return result;
     const rows = await this.db
       .select({ item: menuItems, menu: menus })
       .from(menuItems)
       .innerJoin(menuCategories, eq(menuCategories.id, menuItems.categoryId))
       .innerJoin(menus, eq(menus.id, menuCategories.menuId))
-      .where(and(inArray(menuItems.id, itemIds), eq(menus.locationId, locationId), eq(menus.isActive, true), eq(menuItems.isActive, true)));
+      .where(and(inArray(menuItems.id, itemIds), inArray(menus.id, offered.map((m) => m.id)), eq(menuItems.isActive, true)));
     const groups = await this.modifierGroupsFor(rows.map((r) => r.item.id));
+    const ov = await this.overridesFor(locationId, rows.map((r) => r.item.id));
+    // 7.5 — the menu's daypart and days apply at checkout too, not only on the public menu
+    const [loc] = at ? await this.db.select({ timezone: locations.timezone }).from(locations).where(eq(locations.id, locationId)).limit(1) : [null];
+    const lp = loc ? localParts(at!, loc.timezone) : null;
     for (const { item, menu } of rows) {
       if (!channelAllowed(menu, channel)) continue;
+      if (ov.get(item.id)?.hidden) continue;
+      if (lp && (!menu.daysOfWeek.includes(lp.dayOfWeek) || (menu.availableFrom && lp.hhmm < menu.availableFrom) || (menu.availableUntil && lp.hhmm >= menu.availableUntil))) continue;
       result.set(item.id, {
         id: item.id,
         name: item.name,
-        priceCents: this.channelPrice(item, channel),
-        soldOut: item.soldOut && (!item.soldOutUntil || item.soldOutUntil > new Date()),
+        priceCents: ov.get(item.id)?.priceCents ?? this.channelPrice(item, channel),
+        soldOut: (item.soldOut && (!item.soldOutUntil || item.soldOutUntil > new Date())) || !!ov.get(item.id)?.soldOut,
+        taxCategory: item.taxCategory,
+        maxPerOrder: item.maxPerOrder,
+        kind: item.kind,
         brandId: menu.brandId,
         stationCode: item.stationCode,
         allergens: item.allergens,

@@ -160,7 +160,7 @@ export class PaymentsService {
   private async postOrderCapture(p: typeof payments.$inferSelect, tx: DbOrTx) {
     const [o] = await tx.select().from(orders).where(eq(orders.id, p.orderId!)).limit(1);
     if (!o) return;
-    const snap = o.priceSnapshot as { deliveryProviderCostCents?: number; platformDeliverySubsidyCents?: number; promotionFunder?: string | null; taxRemitter?: string };
+    const snap = o.priceSnapshot as { deliveryProviderCostCents?: number; platformDeliverySubsidyCents?: number; promotionFunder?: string | null; promotionPlatformShareCents?: number; taxRemitter?: string };
     const captured = p.capturedCents;
     // scale all components proportionally if a partial capture happened
     const ratio = o.totalCents > 0 ? captured / o.totalCents : 1;
@@ -171,17 +171,21 @@ export class PaymentsService {
     const serviceFee = r(o.serviceFeeCents);
     const deliveryFee = r(o.deliveryFeeCents);
     const commission = r(o.commissionCents);
-    const merchantDiscountFunded = o.promotionFunder === 'MERCHANT' ? 0 : r(o.discountCents); // platform re-credits merchant when it funds the promo
+    // the platform re-credits the merchant for the part of the discount it funds (all, none, or a split share)
+    const merchantDiscountFunded = snap.promotionPlatformShareCents !== undefined ? r(snap.promotionPlatformShareCents) : o.promotionFunder === 'MERCHANT' ? 0 : r(o.discountCents);
+    const packagingFee = r(o.packagingFeeCents);
+    const smallOrderFee = r(o.smallOrderFeeCents);
     const isDelivery = o.fulfillmentType === 'DELIVERY';
     const driverPayable = isDelivery ? tip : 0;
     const merchantTip = isDelivery ? 0 : tip;
-    const merchantPayable = food + tax + merchantTip - commission + merchantDiscountFunded;
+    const merchantPayable = food + tax + merchantTip + packagingFee - commission + merchantDiscountFunded;
     const platformDeliveryRevenue = isDelivery ? deliveryFee : 0;
     const lines: Parameters<LedgerService['post']>[1] = [
       { account: 'PROCESSOR_CLEARING', debitCents: captured, memo: `Capture ${o.number}` },
       { account: 'MERCHANT_PAYABLE', partyId: o.organizationId, organizationId: o.organizationId, locationId: o.locationId, creditCents: merchantPayable, memo: 'Food + tax − commission' },
       { account: 'PLATFORM_REVENUE_COMMISSION', creditCents: commission, organizationId: o.organizationId },
       { account: 'PLATFORM_REVENUE_SERVICE_FEE', creditCents: serviceFee, organizationId: o.organizationId },
+      { account: 'PLATFORM_REVENUE_SERVICE_FEE', creditCents: smallOrderFee, organizationId: o.organizationId, memo: 'Small-order fee' },
       { account: 'PLATFORM_REVENUE_DELIVERY', creditCents: platformDeliveryRevenue, organizationId: o.organizationId },
       { account: 'DRIVER_PAYABLE', partyId: `order:${o.id}`, creditCents: driverPayable, memo: 'Courier tip' },
       { account: 'PLATFORM_EXPENSE_PROMOTION', debitCents: merchantDiscountFunded, organizationId: o.organizationId, memo: 'Platform-funded promotion' },

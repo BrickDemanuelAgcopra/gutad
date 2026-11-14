@@ -113,6 +113,8 @@ export const ADMIN_MODULES: AdminModule[] = [
   { key: 'availability', group: 'Operations', label: 'Availability', description: 'Sold-out items, paused stores and stations down across merchants', permission: 'ops.read', web: '/admin/availability' },
   { key: 'changes', group: 'Merchants', label: 'Change requests', description: 'Merchant menu and business-information changes waiting for review', permission: 'merchants.read', web: '/admin/changes' },
   { key: 'performance', group: 'Merchants', label: 'Merchant performance', description: 'Acceptance, cancellations, prep time, lateness and errors by location', permission: 'merchants.read', web: '/admin/performance' },
+  { key: 'culinary', group: 'Kitchens', label: 'Menus & recipes review', description: 'Menu versions waiting for review, recipe releases and allergen flags across merchants', permission: 'catalog.read', web: '/admin/culinary', mobile: '/ops/culinary' },
+  { key: 'pricing', group: 'Finance', label: 'Pricing, fees & tax', description: 'Customer fee rules, tax categories and rates, memberships, commission and royalty schedules, price simulator', permission: 'catalog.read', web: '/admin/pricing', mobile: '/ops/pricing' },
   { key: 'brands', group: 'Merchants', label: 'Brands & partners', description: 'Ownership, rights, territories, channels, royalties, assets, reviews and statements', permission: 'catalog.read', web: '/admin/brands', mobile: '/ops/brands' },
   { key: 'approvals', group: 'Overview', label: 'Approvals', description: 'Refunds, bank changes, payouts and settings waiting for a decision', permission: 'approvals.decide', web: '/admin/approvals', mobile: '/ops/approvals' },
   { key: 'plans', group: 'Merchants', label: 'Plans & pricing', description: 'Plan catalog, add-ons, subscriptions, promotions, revenue', permission: 'finance.read', web: '/admin/plans' },
@@ -138,6 +140,7 @@ export const MERCHANT_PAGE_ROLES: Record<string, Role[]> = {
   '/merchant/dispatch': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'DISPATCHER'],
   '/merchant/shift': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF'],
   '/merchant/support': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF'],
+  '/merchant/recipes': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'KITCHEN'],
 };
 /** Pages not listed above are for owners and managers only. */
 export function merchantPageAllowed(path: string, roles: readonly string[]): boolean {

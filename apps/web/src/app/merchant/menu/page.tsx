@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useState } from 'react';
 import { api, money } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
@@ -18,6 +19,7 @@ export default function MenuPage() {
   const [item, setItem] = useState<{ categoryId: string; name: string; priceCents: string; description: string; allergens: string; stationCode: string } | null>(null);
   const [mod, setMod] = useState<{ itemId: string; name: string; required: boolean; maxSelect: number; options: string } | null>(null);
   const [importJson, setImportJson] = useState('');
+  const [check, setCheck] = useState<{ ok: boolean; errors: string[]; warnings: string[]; alreadyOnMenu: string[]; items: number } | null>(null);
   if (!loc) return null;
   const act = (fn: () => Promise<unknown>) => run(async () => { await fn(); await reload(); });
   return (
@@ -32,7 +34,7 @@ export default function MenuPage() {
       </div>
       {error && <Alert>{error}</Alert>}
       {menus?.map((m) => (
-        <Card key={m.id} title={<span>{m.name} <span className="text-xs text-ink-500">v{m.version} · {m.channels.join(', ')}{m.availableFrom ? ` · ${m.availableFrom}–${m.availableUntil}` : ''}</span></span>} action={<div className="flex gap-1"><Badge tone={m.isActive ? 'good' : 'bad'}>{m.isActive ? 'Live' : 'Hidden'}</Badge><Button size="sm" variant="ghost" onClick={() => act(() => api.patch(`/menus/${m.id}`, { isActive: !m.isActive }))}>{m.isActive ? 'Hide' : 'Publish'}</Button><Button size="sm" variant="ghost" onClick={() => { const from = prompt('Available from (HH:MM, blank for all day)', m.availableFrom || ''); const until = prompt('Until (HH:MM)', m.availableUntil || ''); act(() => api.patch(`/menus/${m.id}`, { availableFrom: from || null, availableUntil: until || null })); }}>Schedule</Button></div>}>
+        <Card key={m.id} title={<span>{m.name} <span className="text-xs text-ink-500">v{m.version} · {m.channels.join(', ')}{m.availableFrom ? ` · ${m.availableFrom}–${m.availableUntil}` : ''}</span></span>} action={<div className="flex gap-1"><Link className="rounded-lg border border-ink-100 px-2.5 py-1 text-xs" href={`/merchant/menu/${m.id}/versions`}>Versions & publish</Link><Badge tone={m.isActive ? 'good' : 'bad'}>{m.isActive ? 'Live' : 'Hidden'}</Badge><Button size="sm" variant="ghost" onClick={() => act(() => api.patch(`/menus/${m.id}`, { isActive: !m.isActive }))}>{m.isActive ? 'Hide' : 'Publish'}</Button><Button size="sm" variant="ghost" onClick={() => { const from = prompt('Available from (HH:MM, blank for all day)', m.availableFrom || ''); const until = prompt('Until (HH:MM)', m.availableUntil || ''); act(() => api.patch(`/menus/${m.id}`, { availableFrom: from || null, availableUntil: until || null })); }}>Schedule</Button></div>}>
           {m.categories.map((c) => (
             <Disclosure key={c.id} title={<span>{c.name} <span className="text-xs text-ink-500">({c.items.length})</span></span>} defaultOpen>
               <ul className="divide-y divide-ink-100">
@@ -42,6 +44,7 @@ export default function MenuPage() {
                     <div className="flex gap-1">
                       <Button size="sm" variant={it.soldOut ? 'primary' : 'secondary'} onClick={() => act(() => api.post(`/items/${it.id}/sold-out`, { soldOut: !it.soldOut, untilMinutes: it.soldOut ? undefined : 240 }))}>{it.soldOut ? 'Back in stock' : '86 (4h)'}</Button>
                       <Button size="sm" variant="ghost" onClick={() => { const p = prompt('New price (USD)', (it.priceCents / 100).toFixed(2)); if (p) act(() => api.patch(`/items/${it.id}`, { priceCents: Math.round(Number(p) * 100) })); }}>Price</Button>
+                      <Link className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50" href={`/merchant/menu/item/${it.id}`}>Details</Link>
                       <Button size="sm" variant="ghost" onClick={() => setMod({ itemId: it.id, name: '', required: false, maxSelect: 1, options: '' })}>+ Modifier</Button>
                       <Button size="sm" variant="ghost" onClick={() => confirm('Remove item?') && act(() => api.delete(`/items/${it.id}`))}>Remove</Button>
                     </div>
@@ -56,7 +59,8 @@ export default function MenuPage() {
       ))}
       <Card title="Import menu (JSON from POS export)">
         <Textarea rows={4} value={importJson} onChange={(e) => setImportJson(e.target.value)} placeholder='{"name":"Dinner","categories":[{"name":"Mains","items":[{"name":"Steak","priceCents":3200,"posExternalId":"POS-1"}]}]}' />
-        <Button className="mt-2" variant="secondary" disabled={!importJson} onClick={() => act(async () => { await api.post(`/locations/${loc.id}/menus/import`, JSON.parse(importJson)); setImportJson(''); })}>Import</Button>
+        <div className="mt-2 flex gap-2"><Button variant="ghost" disabled={!importJson} onClick={() => run(async () => { const v = await api.post<{ ok: boolean; errors: string[]; warnings: string[]; alreadyOnMenu: string[]; items: number }>(`/locations/${loc.id}/menus/validate-import`, JSON.parse(importJson)); setCheck(v); })}>Validate</Button><Button variant="secondary" disabled={!importJson} onClick={() => act(async () => { await api.post(`/locations/${loc.id}/menus/import`, JSON.parse(importJson)); setImportJson(''); })}>Import</Button></div>
+        {check && <div className={`mt-2 rounded-lg p-2 text-xs ${check.ok ? 'bg-emerald-50' : 'bg-red-50'}`}>{check.items} items · {check.ok ? 'no errors' : check.errors.join('; ')}{check.warnings.length > 0 && <div>Warnings: {check.warnings.join('; ')}</div>}{check.alreadyOnMenu.length > 0 && <div>Already on your menu: {check.alreadyOnMenu.join(', ')}</div>}</div>}
       </Card>
       <Modal open={!!item} onClose={() => setItem(null)} title="New item">
         {item && (<div className="space-y-2"><Input label="Name" value={item.name} onChange={(e) => setItem({ ...item, name: e.target.value })} /><Input label="Price (USD)" value={item.priceCents} onChange={(e) => setItem({ ...item, priceCents: e.target.value })} /><Textarea label="Description" value={item.description} onChange={(e) => setItem({ ...item, description: e.target.value })} /><Input label="Allergens (comma separated)" value={item.allergens} onChange={(e) => setItem({ ...item, allergens: e.target.value })} /><Input label="Kitchen station code (optional)" value={item.stationCode} onChange={(e) => setItem({ ...item, stationCode: e.target.value })} /><Button onClick={() => act(async () => { await api.post(`/categories/${item.categoryId}/items`, { name: item.name, priceCents: Math.round(Number(item.priceCents) * 100), description: item.description || undefined, allergens: item.allergens ? item.allergens.split(',').map((s) => s.trim()) : [], stationCode: item.stationCode || undefined }); setItem(null); })}>Save</Button></div>)}

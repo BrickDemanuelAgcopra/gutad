@@ -89,6 +89,8 @@ export function render(template: string, p: Record<string, unknown>): Rendered {
       return sub(p.approved ? 'Your change is live' : 'Your change was not approved', p.approved ? `Gutad approved: ${p.summary}.` : `Gutad did not approve: ${p.summary}. ${p.note || ''}`);
     case 'case.reply':
       return sub('Gutad support replied', `About your ${String(p.category).toLowerCase().replace(/_/g, ' ')} case: ${p.body}`);
+    case 'recipe.changed':
+      return sub(`Recipe updated: ${p.name} v${p.version}`, `${p.name} changed${p.summary ? `: ${p.summary}` : ''}. Read the new version and confirm on the kitchen screen.`);
     case 'approval.requested':
       return sub(`Approval needed: ${p.summary}`, `${p.requester} asked for approval: ${p.summary}${p.amountCents ? ` (${money(p.amountCents as number)})` : ''}. Reason: ${p.reason}. Review it in Admin → Approvals.`);
     case 'approval.decided':

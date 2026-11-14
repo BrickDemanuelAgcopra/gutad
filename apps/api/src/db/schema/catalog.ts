@@ -19,9 +19,13 @@ import { brands, kitchens, locations } from './merchants';
 
 export const ingredients = pgTable('ingredients', {
   id: id(),
-  name: text('name').notNull().unique(),
+  name: text('name').notNull(),
   unit: text('unit').notNull(), // g, ml, each
   costCentsPerUnit: integer('cost_cents_per_unit').notNull().default(0),
+  /** allergens this ingredient contains (milk, egg, fish, shellfish, tree_nuts, peanuts, wheat, soy, sesame, …) */
+  allergens: text('allergens').array().notNull().default([]),
+  /** owner of a merchant-specific ingredient; null = shared catalog */
+  organizationId: uuid('organization_id'),
 });
 
 export const ingredientStock = pgTable(
@@ -47,6 +51,26 @@ export const recipes = pgTable('recipes', {
   yieldPortions: doublePrecision('yield_portions').notNull().default(1),
   laborMinutes: doublePrecision('labor_minutes').notNull().default(0),
   isActive: boolean('is_active').notNull().default(true),
+  organizationId: uuid('organization_id'),
+  portionSize: text('portion_size'),
+  /** [{ n, text, stationCode?, minutes? }] */
+  steps: jsonb('steps').notNull().default([]),
+  /** [{ ingredientId, substituteId, ratio, approved }] */
+  substitutions: jsonb('substitutions').notNull().default([]),
+  equipment: text('equipment').array().notNull().default([]),
+  prepMinutes: doublePrecision('prep_minutes').notNull().default(0),
+  batchMaxPortions: integer('batch_max_portions'),
+  /** DRAFT | TRIAL | APPROVED | RETIRED — only APPROVED recipes go live on menu items */
+  status: text('status').notNull().default('APPROVED'),
+  /** [{ at, by, notes, score }] */
+  trials: jsonb('trials').notNull().default([]),
+  approvedById: uuid('approved_by_id'),
+  approvedAt: ts('approved_at'),
+  trainingUrl: text('training_url'),
+  trainingNotes: text('training_notes'),
+  changeSummary: text('change_summary'),
+  previousRecipeId: uuid('previous_recipe_id'),
+  createdById: uuid('created_by_id'),
   createdAt: createdAt(),
 });
 
@@ -158,6 +182,16 @@ export const menuItems = pgTable('menu_items', {
   /** per-channel price overrides, e.g. {"MARKETPLACE": 1299} */
   channelPrices: jsonb('channel_prices').notNull().default({}),
   stationCode: text('station_code'),
+  servingSize: text('serving_size'),
+  photos: text('photos').array().notNull().default([]),
+  /** { calories, proteinG, carbsG, fatG, sodiumMg, sugarG } */
+  nutrition: jsonb('nutrition').notNull().default({}),
+  /** ITEM | BUNDLE | BEVERAGE | EXTRA | PACKAGING */
+  kind: text('kind').notNull().default('ITEM'),
+  taxCategory: text('tax_category').notNull().default('STANDARD'),
+  maxPerOrder: integer('max_per_order'),
+  /** set when a recipe change adds allergens the item does not list */
+  allergenReviewNeeded: boolean('allergen_review_needed').notNull().default(false),
   recipeId: uuid('recipe_id').references(() => recipes.id),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: createdAt(),
@@ -214,6 +248,8 @@ export const quotes = pgTable(
     serviceFeeCents: integer('service_fee_cents').notNull().default(0),
     deliveryFeeCents: integer('delivery_fee_cents').notNull().default(0),
     tipCents: integer('tip_cents').notNull().default(0),
+    smallOrderFeeCents: integer('small_order_fee_cents').notNull().default(0),
+    packagingFeeCents: integer('packaging_fee_cents').notNull().default(0),
     totalCents: integer('total_cents').notNull(),
     promoCode: text('promo_code'),
     promotionFunder: text('promotion_funder'),

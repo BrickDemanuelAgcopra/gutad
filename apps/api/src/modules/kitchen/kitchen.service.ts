@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { brands, ingredientStock, ingredients, kitchenBrands, kitchenTickets, kitchens, laborEntries, locations, menuItems, orderLines, orders, packingTasks, purchaseOrderLines, purchaseOrders, recipeLines, recipes, stations, wasteEvents } from '../../db/schema';
 import { assertOrgAccess, JwtPayload, MANAGER_ROLES } from '../../common/auth';
@@ -194,7 +194,8 @@ export class KitchenService implements OnModuleInit {
       const [r] = await this.db.update(ingredients).set(input).where(eq(ingredients.id, input.id)).returning();
       return r;
     }
-    const [r] = await this.db.insert(ingredients).values(input).onConflictDoUpdate({ target: ingredients.name, set: { unit: input.unit, costCentsPerUnit: input.costCentsPerUnit ?? 0 } }).returning();
+    const [ex] = await this.db.select().from(ingredients).where(and(eq(ingredients.name, input.name), isNull(ingredients.organizationId))).limit(1);
+    const [r] = ex ? await this.db.update(ingredients).set({ unit: input.unit, costCentsPerUnit: input.costCentsPerUnit ?? ex.costCentsPerUnit }).where(eq(ingredients.id, ex.id)).returning() : await this.db.insert(ingredients).values(input).returning();
     return r;
   }
 

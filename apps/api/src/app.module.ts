@@ -31,6 +31,7 @@ import { ReportingModule } from './modules/reporting/reporting.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { OpsModule } from './modules/ops/ops.module';
 import { MerchantAdminModule } from './modules/merchant-admin/merchant-admin.module';
+import { PricingModule } from './modules/pricing/pricing.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { JobsService } from './jobs/jobs.service';
 
@@ -63,6 +64,7 @@ export const DOMAIN_MODULES = [
   NotificationsModule,
   OpsModule,
   MerchantAdminModule,
+  PricingModule,
 ];
 
 @Module({

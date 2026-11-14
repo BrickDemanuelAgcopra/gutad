@@ -10,3 +10,4 @@ export * from './money';
 export * from './tracking';
 export * from './plans';
 export * from './admin';
+export * from './pricing';

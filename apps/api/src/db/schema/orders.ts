@@ -39,6 +39,8 @@ export const orders = pgTable(
     serviceFeeCents: integer('service_fee_cents').notNull().default(0),
     deliveryFeeCents: integer('delivery_fee_cents').notNull().default(0),
     tipCents: integer('tip_cents').notNull().default(0),
+    smallOrderFeeCents: integer('small_order_fee_cents').notNull().default(0),
+    packagingFeeCents: integer('packaging_fee_cents').notNull().default(0),
     totalCents: integer('total_cents').notNull(),
     commissionCents: integer('commission_cents').notNull().default(0),
     commissionBps: integer('commission_bps').notNull().default(0),
