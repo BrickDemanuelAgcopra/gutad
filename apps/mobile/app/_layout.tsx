@@ -36,6 +36,9 @@ export default function RootLayout() {
         <Stack.Screen name="ops/security" options={{ title: 'Staff & access' }} />
         <Stack.Screen name="ops/audit" options={{ title: 'Audit history' }} />
         <Stack.Screen name="ops/structure" options={{ title: 'Organization structure' }} />
+        <Stack.Screen name="ops/customers" options={{ title: 'Customers' }} />
+        <Stack.Screen name="ops/support" options={{ title: 'Support queue' }} />
+        <Stack.Screen name="me" options={{ title: 'My account' }} />
         <Stack.Screen name="security" options={{ title: 'Security' }} />
         <Stack.Screen name="login" options={{ title: 'Sign in', presentation: 'modal' }} />
       </Stack>

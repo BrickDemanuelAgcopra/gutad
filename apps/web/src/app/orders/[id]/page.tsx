@@ -2,14 +2,15 @@
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
-import { trackingStages } from '@gutad/shared';
+import { CUSTOMER_CATEGORIES, SUPPORT_CATEGORIES, trackingStages } from '@gutad/shared';
+import { CaseThread } from '@/components/case-thread';
 import { api, money, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
-import { Alert, Badge, Button, Card, Spinner, statusTone, Textarea } from '@/components/ui';
+import { Alert, Badge, Button, Card, Select, Spinner, statusTone, Textarea } from '@/components/ui';
 
 interface Order {
   id: string; number: string; status: string; fulfillmentType: string; locationName: string; locationSlug: string; locationPhone: string | null; totalCents: number; subtotalCents: number; taxCents: number; tipCents: number; deliveryFeeCents: number; serviceFeeCents: number; discountCents: number; promiseAt: string | null; readyAt: string | null; pickupCode: string | null; canCancel: boolean; createdAt: string;
-  lines: { id: string; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null; modifiers: { name: string }[] }[];
+  lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null; modifiers: { name: string }[] }[];
   payment: { status: string; capturedCents: number; refundedCents: number } | null;
   delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; proofPhotoUrl: string | null } | null;
 }
@@ -17,6 +18,37 @@ interface Order {
 
 const COURIER: Record<string, string> = { QUOTED: 'Waiting for the restaurant', REQUESTED: 'Finding a courier', ASSIGNED: 'Courier heading to pick up', PICKED_UP: 'Courier on the way', DELIVERED: 'Delivered', UNASSIGNED: 'Finding a new courier', CANCELED: 'Delivery canceled', FAILED: 'Delivery problem: support has been notified', RETURNED: 'Returned to the restaurant', QUOTE_EXPIRED: 'Delivery quote expired' };
 const courierLabel = (s: string) => COURIER[s] || s.replace(/_/g, ' ').toLowerCase();
+
+const catLabel = (k: string) => (SUPPORT_CATEGORIES as Record<string, { label: string }>)[k]?.label || k;
+const NEEDS_ITEM = ['MISSING_ITEM', 'WRONG_ITEM', 'QUALITY', 'DAMAGED', 'FOOD_SAFETY'];
+
+function ReportProblem({ order, onDone, onCancel }: { order: Order; onDone: (msg: string) => void; onCancel: () => void }) {
+  const [category, setCategory] = useState<string>('MISSING_ITEM');
+  const [itemId, setItemId] = useState('');
+  const [text, setText] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const items = order.lines.filter((l) => l.menuItemId);
+  const submit = async () => {
+    setErr(null);
+    const line = items.find((l) => l.menuItemId === itemId);
+    try {
+      await api.post('/incidents', { orderId: order.id, category, menuItemId: line?.menuItemId || undefined, description: `${line ? `${line.name}: ` : ''}${text}` });
+      onDone(category === 'FOOD_SAFETY' ? 'Thank you. Food safety reports go straight to our culinary team, who will contact you shortly.' : 'Thanks. Your ticket is open and you can follow the conversation below.');
+    } catch (e) { setErr((e as Error).message); }
+  };
+  return (
+    <Card title="Report a problem">
+      <div className="space-y-2">
+        <Select label="What went wrong?" value={category} onChange={(e) => setCategory(e.target.value)}>{CUSTOMER_CATEGORIES.map((c) => <option key={c} value={c}>{catLabel(c)}</option>)}</Select>
+        {NEEDS_ITEM.includes(category) && <Select label="Which item?" value={itemId} onChange={(e) => setItemId(e.target.value)}><option value="">Choose an item</option>{items.map((l) => <option key={l.id} value={l.menuItemId!}>{l.quantity}× {l.name}</option>)}</Select>}
+        {category === 'FOOD_SAFETY' && <Alert tone="info">If anyone is unwell, contact a doctor first. Please keep any remaining food and packaging.</Alert>}
+        <Textarea label="Tell us more" rows={3} value={text} onChange={(e) => setText(e.target.value)} />
+        {err && <Alert>{err}</Alert>}
+        <div className="flex gap-2"><Button disabled={text.length < 3 || (NEEDS_ITEM.includes(category) && !itemId && items.length > 0)} onClick={submit}>Send to support</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
+      </div>
+    </Card>
+  );
+}
 
 export default function OrderPage() {
   const { id } = useParams<{ id: string }>();
@@ -27,6 +59,10 @@ export default function OrderPage() {
   const { data: track } = useApi<{ status: string; etaAt: string | null; courierLocation: { lat: number; lng: number } | null; events: { type: string; at: string }[] }>(o?.delivery ? `/public/delivery/${o.delivery.id}/track` : null, { poll: 7000, deps: [o?.delivery?.id] });
   const [review, setReview] = useState({ rating: 5, body: '' });
   const [msg, setMsg] = useState<string | null>(null);
+  const [reporting, setReporting] = useState(false);
+  const [thread, setThread] = useState<string | null>(null);
+  const { data: allTickets, reload: reloadTickets } = useApi<{ id: string; orderId: string | null; category: string; description: string; status: string; remedy: string | null; remedyCents: number }[]>(user ? '/incidents' : null);
+  const tickets = allTickets?.filter((t) => t.orderId === id);
   if (!o) return <Spinner />;
   const stages = trackingStages({ status: o.status, fulfillmentType: o.fulfillmentType, deliveryStatus: track?.status || o.delivery?.status });
   const current = stages?.find((s) => s.current);
@@ -85,10 +121,24 @@ export default function OrderPage() {
       <div className="flex flex-wrap gap-2">
         {o.canCancel && user && <Button variant="danger" onClick={async () => { await api.post(`/orders/${o.id}/cancel`, { reason: 'Changed my mind' }); reload(); }}>Cancel order</Button>}
         {user && <Button variant="secondary" onClick={async () => { const q = await api.post<{ id: string; warnings: string[] }>(`/orders/${o.id}/reorder`, {}); setMsg(`Rebuilt as quote ${q.id.slice(0, 8)}${q.warnings.length ? ' — ' + q.warnings.join('; ') : ''}. Open the restaurant page to add items to your cart.`); }}>Reorder</Button>}
-        {user && !terminalBad && <Button variant="secondary" onClick={async () => { await api.post('/incidents', { orderId: o.id, category: 'OTHER', description: 'Customer reported a problem from the order page' }); setMsg('Support case opened. We will follow up by email.'); }}>Report a problem</Button>}
+        {user && !terminalBad && !reporting && <Button variant="secondary" onClick={() => setReporting(true)}>Report a problem</Button>}
         <Link href={`/r/${o.locationSlug}`}><Button variant="ghost">Back to {o.locationName}</Button></Link>
       </div>
       {msg && <Alert tone="info">{msg}</Alert>}
+      {user && reporting && <ReportProblem order={o} onDone={(t) => { setReporting(false); setMsg(t); reloadTickets(); }} onCancel={() => setReporting(false)} />}
+      {user && !!tickets?.length && (
+        <Card title="Your support tickets">
+          {tickets.map((t) => (
+            <div key={t.id} className="border-b border-ink-100 py-2 last:border-0">
+              <div className="flex items-center justify-between text-sm"><span className="font-medium">{catLabel(t.category)}</span><Badge tone={statusTone(t.status)}>{t.status === 'OPEN' ? 'With support' : t.status}</Badge></div>
+              <p className="text-xs text-ink-500">{t.description}</p>
+              {t.remedy && t.remedy !== 'NONE' && <p className="text-xs text-emerald-700">Outcome: {t.remedy.toLowerCase()}{t.remedyCents ? ` ${money(t.remedyCents)}` : ''}</p>}
+              <button className="mt-1 text-xs underline" onClick={() => setThread(thread === t.id ? null : t.id)}>{thread === t.id ? 'Hide conversation' : 'Conversation'}</button>
+              {thread === t.id && <CaseThread incidentId={t.id} simple />}
+            </div>
+          ))}
+        </Card>
+      )}
       {o.status === 'COMPLETED' && user && (
         <Card title="Rate your order">
           <div className="flex gap-1">{[1, 2, 3, 4, 5].map((n) => <button key={n} onClick={() => setReview({ ...review, rating: n })} className={`text-2xl ${n <= review.rating ? 'text-amber-500' : 'text-ink-100'}`}>★</button>)}</div>

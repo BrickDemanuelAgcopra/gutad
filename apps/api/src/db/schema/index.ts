@@ -15,3 +15,4 @@ export * from './security';
 export * from './ops';
 export * from './merchant-admin';
 export * from './menu-admin';
+export * from './customers';

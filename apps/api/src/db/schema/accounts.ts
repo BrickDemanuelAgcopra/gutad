@@ -38,6 +38,12 @@ export const users = pgTable(
     mfaEnabledAt: ts('mfa_enabled_at'),
     /** sha256 hashes of one-time recovery codes */
     mfaRecoveryCodes: text('mfa_recovery_codes').array().notNull().default([]),
+    /** per-topic channel choices: { orders: { email, sms, push }, reservations: {…}, marketing: {…} } */
+    notificationPrefs: jsonb('notification_prefs').notNull().default({}),
+    /** processor customer id (e.g. Stripe cus_…) */
+    paymentCustomerRef: text('payment_customer_ref'),
+    /** set when this account was merged into another one */
+    mergedIntoId: uuid('merged_into_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

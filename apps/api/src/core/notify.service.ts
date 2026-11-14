@@ -32,6 +32,7 @@ export class NotifyService {
     let pushTokens: string[] = [];
     let marketingConsent = false;
     let smsConsent = false;
+    let prefs: Record<string, { email?: boolean; sms?: boolean; push?: boolean }> = {};
     if (input.userId) {
       const [u] = await tx.select().from(users).where(eq(users.id, input.userId)).limit(1);
       if (u) {
@@ -40,9 +41,14 @@ export class NotifyService {
         pushTokens = u.pushTokens;
         marketingConsent = u.marketingConsent;
         smsConsent = u.smsConsent;
+        prefs = (u.notificationPrefs || {}) as typeof prefs;
       }
     }
-    const channels = input.channels || ['EMAIL', 'PUSH', 'IN_APP', ...(phone ? (['SMS'] as NotifyChannel[]) : [])];
+    // 10.5 — per-topic channel choices; in-app is always delivered and account/security messages are never suppressed
+    const topic = kind === 'MARKETING' ? 'marketing' : input.template.startsWith('reservation') ? 'reservations' : input.template.startsWith('order') || input.template.startsWith('delivery') || input.template.startsWith('payment') ? 'orders' : 'account';
+    const pref = prefs[topic] || {};
+    const allowed = (c: NotifyChannel) => c === 'IN_APP' || topic === 'account' || (c === 'EMAIL' ? pref.email !== false : c === 'SMS' ? pref.sms !== false : pref.push !== false);
+    const channels = (input.channels || ['EMAIL', 'PUSH', 'IN_APP', ...(phone ? (['SMS'] as NotifyChannel[]) : [])]).filter(allowed);
     const rows: (typeof notifications.$inferInsert)[] = [];
     for (const channel of channels) {
       let recipient: string | null = null;

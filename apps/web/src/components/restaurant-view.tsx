@@ -82,11 +82,15 @@ function OrderTab({ loc, channel, src, initialBrand }: { loc: LocationPage; chan
     if (!initialBrand || !menus?.length) return;
     document.getElementById(`brand-${initialBrand}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [initialBrand, menus]);
-  const doAdd = (line: NewLine) => add({ id: loc.id, slug: loc.slug, name: loc.name }, line, channel, src);
+  const [why, setWhy] = useState<string | null>(null);
+  const doAdd = (line: NewLine, park = false) => add({ id: loc.id, slug: loc.slug, name: loc.name }, line, channel, src, { park });
   const tryAdd = (line: NewLine) => {
     setPicked(null);
-    if (cart.locationId && cart.locationId !== loc.id && cart.lines.length) setPending(line);
-    else doAdd(line);
+    if (cart.locationId && cart.locationId !== loc.id && cart.lines.length) {
+      setWhy(null);
+      setPending(line);
+      api.get<{ ok: boolean; reason?: string }>(`/public/cart-compatibility?current=${cart.locationId}&adding=${loc.id}`).then((r) => setWhy(r.reason || null)).catch(() => undefined);
+    } else doAdd(line);
   };
   const groups = useMemo(() => {
     const by = new Map<string, typeof cart.lines>();
@@ -161,11 +165,13 @@ function OrderTab({ loc, channel, src, initialBrand }: { loc: LocationPage; chan
         </Card>
       </aside>
       {picked && <ItemModal item={picked.item} brand={picked.brand} currency={loc.currency} onClose={() => setPicked(null)} onAdd={tryAdd} />}
-      <Modal open={!!pending} onClose={() => setPending(null)} title="Start a new order?">
-        <p className="text-sm text-ink-700">Your cart has items from <b>{cart.locationName}</b>. Each order comes from one place: a local restaurant, or one Made at Gutad food hall (where you can mix its menus). Starting a new order empties your current cart.</p>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setPending(null)}>Keep my cart</Button>
-          <Button onClick={() => { if (pending) doAdd(pending); setPending(null); }}>Start new order</Button>
+      <Modal open={!!pending} onClose={() => setPending(null)} title="This will be a separate order">
+        <p className="text-sm text-ink-700">Your cart has items from <b>{cart.locationName}</b>. {why || 'Each order comes from one place: a local restaurant, or one Made at Gutad food hall (where you can mix its menus).'}</p>
+        <p className="mt-2 text-sm text-ink-500">You can keep your {cart.locationName} cart saved and check out both orders one after the other.</p>
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" onClick={() => setPending(null)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => { if (pending) doAdd(pending, false); setPending(null); }}>Replace my cart</Button>
+          <Button onClick={() => { if (pending) doAdd(pending, true); setPending(null); }}>Save it &amp; start a separate order</Button>
         </div>
       </Modal>
     </div>

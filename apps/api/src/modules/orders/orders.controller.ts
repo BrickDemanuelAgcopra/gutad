@@ -19,7 +19,7 @@ const QuoteDto = z.object({
   useCreditsCents: z.number().int().min(0).optional(),
   useLoyaltyPoints: z.number().int().min(0).optional(),
 });
-const CheckoutDto = z.object({ quoteId: z.string().uuid(), paymentMethodId: z.string().optional(), guest: z.object({ name: z.string(), email: z.string().email(), phone: z.string().optional() }).optional(), specialInstructions: z.string().max(500).optional(), groupOrderId: z.string().uuid().optional(), campusAccountId: z.string().uuid().optional() });
+const CheckoutDto = z.object({ quoteId: z.string().uuid(), paymentMethodId: z.string().optional(), savedPaymentMethodId: z.string().uuid().optional(), guest: z.object({ name: z.string(), email: z.string().email(), phone: z.string().optional() }).optional(), specialInstructions: z.string().max(500).optional(), groupOrderId: z.string().uuid().optional(), campusAccountId: z.string().uuid().optional() });
 const CounterDto = z.object({ lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1), modifierOptionIds: z.array(z.string().uuid()).optional() })).min(1), guestName: z.string(), guestPhone: z.string().optional(), fulfillmentType: z.enum(['PICKUP', 'DINE_IN']).optional(), channel: z.enum(['PHONE', 'WALK_IN']).optional() });
 const ReasonDto = z.object({ reason: z.string().min(2) });
 const StaffCancelDto = z.object({ reason: z.string().min(2), funder: z.enum(['MERCHANT', 'PLATFORM', 'PROVIDER', 'DRIVER']) });

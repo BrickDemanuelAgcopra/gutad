@@ -1,17 +1,27 @@
-import { ScrollView, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { trackingStages } from '@gutad/shared';
+import { CUSTOMER_CATEGORIES, SUPPORT_CATEGORIES, trackingStages } from '@gutad/shared';
+import { CaseThread } from '@/case-thread';
 import { api, money, when } from '@/api';
 import { useApi, useSession } from '@/hooks';
-import { Badge, Button, C, Card, Loading, Muted, s, tone } from '@/ui';
+import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
+
+const catLabel = (k: string) => (SUPPORT_CATEGORIES as Record<string, { label: string }>)[k]?.label || k;
+const NEEDS_ITEM = ['MISSING_ITEM', 'WRONG_ITEM', 'QUALITY', 'DAMAGED', 'FOOD_SAFETY'];
 
 const COURIER: Record<string, string> = { QUOTED: 'Waiting for the restaurant', REQUESTED: 'Finding a courier', ASSIGNED: 'Courier heading to pick up', PICKED_UP: 'Courier on the way', DELIVERED: 'Delivered', UNASSIGNED: 'Finding a new courier', CANCELED: 'Delivery canceled', FAILED: 'Delivery problem', RETURNED: 'Returned to the restaurant' };
 
 export default function Order() {
   const { id, email } = useLocalSearchParams<{ id: string; email?: string }>();
   const { user } = useSession();
-  const { data: o, reload } = useApi<{ id: string; number: string; status: string; fulfillmentType: string; locationName: string; totalCents: number; promiseAt: string | null; pickupCode: string | null; canCancel: boolean; lines: { id: string; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null }[]; payment: { status: string; refundedCents: number } | null; delivery: { id: string; status: string; etaAt: string | null; proofPhotoUrl: string | null } | null }>(`/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`, { poll: 5000 });
+  const { data: o, reload } = useApi<{ id: string; number: string; status: string; fulfillmentType: string; locationName: string; totalCents: number; promiseAt: string | null; pickupCode: string | null; canCancel: boolean; lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null }[]; payment: { status: string; refundedCents: number } | null; delivery: { id: string; status: string; etaAt: string | null; proofPhotoUrl: string | null } | null }>(`/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`, { poll: 5000 });
   const { data: track } = useApi<{ status: string; etaAt: string | null; courierLocation: { lat: number; lng: number } | null }>(o?.delivery ? `/public/delivery/${o.delivery.id}/track` : null, { poll: 7000, deps: [o?.delivery?.id] });
+  const [report, setReport] = useState<{ category: string; itemId: string; text: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [thread, setThread] = useState<string | null>(null);
+  const { data: allTickets, reload: reloadTickets } = useApi<{ id: string; orderId: string | null; category: string; description: string; status: string; remedy: string | null; remedyCents: number }[]>(user ? '/incidents' : null, { deps: [user?.id] });
+  const tickets = allTickets?.filter((t) => t.orderId === id) || [];
   if (!o) return <Loading />;
   const stages = trackingStages({ status: o.status, fulfillmentType: o.fulfillmentType, deliveryStatus: track?.status || o.delivery?.status });
   const current = stages?.find((st) => st.current);
@@ -27,7 +37,36 @@ export default function Order() {
       {o.delivery && <Card title="Delivery"><View style={s.row}><Text>Courier</Text><Badge text={COURIER[track?.status || o.delivery.status] || track?.status || o.delivery.status} tone={tone(track?.status || o.delivery.status)} /></View>{track?.etaAt && <Muted>ETA {when(track.etaAt)}</Muted>}{track?.courierLocation && <Muted>Courier at {track.courierLocation.lat.toFixed(3)}, {track.courierLocation.lng.toFixed(3)}</Muted>}{o.delivery.proofPhotoUrl && <Muted>Proof of delivery captured</Muted>}</Card>}
       <Card title="Items">{o.lines.map((l) => <View key={l.id} style={s.row}><Text>{l.quantity}× {l.name} {l.status === 'CREDITED' ? '(credited)' : ''}</Text><Text>{money(l.lineTotalCents)}</Text></View>)}<View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>Total</Text><Text style={{ fontWeight: '700' }}>{money(o.totalCents)}</Text></View>{o.payment && <Muted>Payment {o.payment.status}{o.payment.refundedCents ? ` · refunded ${money(o.payment.refundedCents)}` : ''}</Muted>}</Card>
       {o.canCancel && user && <Button title="Cancel order" variant="danger" onPress={() => api.post(`/orders/${o.id}/cancel`, { reason: 'Changed my mind' }).then(reload)} />}
-      {user && !bad && <Button title="Report a problem" variant="secondary" onPress={() => api.post('/incidents', { orderId: o.id, category: 'OTHER', description: 'Reported from the app' }).then(() => alert('Support case opened'))} />}
+      {user && !bad && !report && <Button title="Report a problem" variant="secondary" onPress={() => setReport({ category: 'MISSING_ITEM', itemId: '', text: '' })} />}
+      {report && (
+        <Card title="Report a problem">
+          <Muted>What went wrong?</Muted>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>{CUSTOMER_CATEGORIES.map((c) => <Button key={c} title={catLabel(c)} variant={report.category === c ? 'primary' : 'secondary'} onPress={() => setReport({ ...report, category: c })} />)}</View>
+          {NEEDS_ITEM.includes(report.category) && <><Muted>Which item?</Muted><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>{o.lines.filter((l) => l.menuItemId).map((l) => <Button key={l.id} title={`${l.quantity}× ${l.name}`} variant={report.itemId === l.menuItemId ? 'primary' : 'secondary'} onPress={() => setReport({ ...report, itemId: l.menuItemId! })} />)}</View></>}
+          {report.category === 'FOOD_SAFETY' && <Text style={{ color: C.warn }}>If anyone is unwell, contact a doctor first. Keep any remaining food and packaging.</Text>}
+          <Input label="Tell us more" multiline value={report.text} onChangeText={(v) => setReport({ ...report, text: v })} />
+          <ErrorText msg={err} />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button title="Send to support" disabled={report.text.trim().length < 3 || (NEEDS_ITEM.includes(report.category) && !report.itemId)} onPress={() => { const line = o.lines.find((l) => l.menuItemId === report.itemId); api.post('/incidents', { orderId: o.id, category: report.category, menuItemId: line?.menuItemId || undefined, description: `${line ? `${line.name}: ` : ''}${report.text}` }).then(() => { setReport(null); setErr(null); reloadTickets(); }).catch((e) => setErr((e as Error).message)); }} />
+            <Button title="Cancel" variant="ghost" onPress={() => setReport(null)} />
+          </View>
+        </Card>
+      )}
+      {tickets.length > 0 && (
+        <Card title="Your support tickets">
+          {tickets.map((t) => (
+            <View key={t.id} style={{ marginBottom: 8 }}>
+              <Pressable onPress={() => setThread(thread === t.id ? null : t.id)}>
+                <View style={s.row}><Text style={{ fontWeight: '600' }}>{catLabel(t.category)}</Text><Badge text={t.status === 'OPEN' ? 'With support' : t.status} tone={tone(t.status)} /></View>
+                <Muted>{t.description}</Muted>
+                {t.remedy && t.remedy !== 'NONE' && <Text style={{ color: C.good }}>Outcome: {t.remedy.toLowerCase()}{t.remedyCents ? ` ${money(t.remedyCents)}` : ''}</Text>}
+                <Muted>{thread === t.id ? 'Hide conversation' : 'Tap for conversation'}</Muted>
+              </Pressable>
+              {thread === t.id && <CaseThread incidentId={t.id} />}
+            </View>
+          ))}
+        </Card>
+      )}
     </ScrollView>
   );
 }

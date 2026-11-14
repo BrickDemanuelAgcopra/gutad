@@ -294,3 +294,43 @@ Verification:
 
 ### 11. Cart & checkout (done along the way)
 - **11.2** Per-item quantity limit (`max_per_order`, `QUANTITY_LIMIT`). **API W M**
+
+## Phase E: customers, checkout, support (shipped 2026-11-13)
+
+Verification:
+- Typecheck is clean for API, web and mobile; `next build`: OK.
+- `npm run smoke` on a fresh database: **296/296 checks pass**, including 21 new Phase E checks in `scripts/smoke-admin-e.mjs`.
+- Migration `0010_customers_support.sql`:
+  - new tables `payment_methods` (processor token, brand, last 4 only), `customer_restrictions`, `platform_segments`
+  - new columns on users (notification preferences, processor customer reference, merged-into), incidents (priority, queue, SLA due/breach, first response, menu item, responsibility dispute), data requests (scheduled date, reviewer, note) and locations (scheduled slot capacity, schedule lead minutes)
+- New `CustomersModule`; shared `packages/shared/src/support.ts` (categories with owner/priority/queue, SLA and goodwill defaults, `cartCompatibility()`).
+- New worker jobs: `supportSla` (every minute) and `privacySweep` (hourly).
+
+### 10. Customer account management
+- **10.1** Admin customer directory with search and filters (status, orders, recency); contact details are masked unless the staff member has `customers.pii`. **W** Customers. **M** `ops/customers`.
+- **10.2** Customer 360: orders, complaints, refunds, credits, loyalty, memberships, reservations, saved cards, restrictions, privacy requests and 90-day goodwill. **W** Customers → profile. **M**
+- **10.3** `payment_methods` stores the processor token with brand and last 4; raw card numbers are rejected. Customers save, remove and pick a default card; checkout can pay with a saved card. **W** Account → Payments, checkout. **M** `me`, checkout.
+- **10.4** Staff send a recovery link (reason required). Duplicate detection on normalized email, phone and address; merging moves orders, reservations, addresses, credits, loyalty, tickets and reviews and disables the source account (reason required, `customers.pii`). **W** (merge); **M** shows duplicates and sends recovery.
+- **10.5** Per-topic, per-channel notification preferences (orders, reservations, account, marketing × email, SMS, push). `NotifyService` honors them; in-app and account messages always go. **W** Account → Notifications; admin sees them on the profile. **M** `me`.
+- **10.6** Saved platform segments (orders, spend, recency, membership, consent) with live size and CSV export; goodwill cap (setting `support.goodwill`) drives approvals. **W**
+- **10.7** Privacy: data export is immediate; deletion is scheduled after a grace period (`privacy.deleteGraceDays`, 14), can be canceled by the customer, executed or blocked by staff, never runs with open orders or chargebacks; the hourly job also anonymizes old guest accounts. Orders and ledger rows are kept anonymized. **W** Account → Privacy, admin Privacy requests. **M** `me`.
+- **10.8** Customer restrictions (ordering blocked, promotions blocked, refund review) with reasons, expiry, lift and an appeal flow. Three customer strike points create an ordering block. Checkout returns `ACCOUNT_RESTRICTED`; promo codes are refused under a promotions block; refunds under review need approval. **W** account banner + appeal, admin Appeals. **M** account notice, `me` appeal, `ops/customers` appeals.
+
+### 11. Cart, checkout & order eligibility
+- **11.1** Eligibility errors carry codes: `PAUSED`, `CLOSED` (with `nextOpenAt`), `SCHEDULE_TOO_SOON`, `SLOT_FULL`, `DELIVERY_UNAVAILABLE`, `ITEM_UNAVAILABLE`, `SEPARATE_ORDER_REQUIRED`, `ACCOUNT_RESTRICTED`; checkout explains each in plain language. **API W M**
+- **11.3** Shared `cartCompatibility()` and `GET /public/cart-compatibility`: Made at Gutad menus mix within one food hall; anything else is a separate order, with the reason. **API W M**
+- **11.4** Separate-order handling: adding from another place offers to save the current cart and start a separate order (or replace it). Checkout lists saved carts; the next one opens after an order is placed. **W M**
+- **11.5** Scheduled orders respect a per-slot capacity and a minimum lead time per location; discovery hides full slots. **API W M**
+- **11.7** A declined card returns `PAYMENT_DECLINED` with the quote id; the customer picks another card and retries on the same quote with a new idempotency key, without a duplicate order. **W M**
+- **11.8** Each order snapshot records the cancellation and refund policy versions (setting `policies.versions`). **API**
+
+### 24. Customer support & service recovery
+- **24.1** Tickets link to payment, merchant, menu item, order, reservation and delivery. **API W M**
+- **24.2** Categories with a default owner, priority and queue, including wrong item, quality, failed delivery, food safety and payment. Food-safety tickets open a critical alert for culinary. **W M** (customer report form with item picker).
+- **24.3** First-response and resolution SLAs by priority (setting `support.sla`), breach detection with alerts, queues, priority changes and assignment. **W** Support queue (filters: status, priority, queue, reporter, mine, breached). **M** `ops/support`.
+- **24.4** Remedy preview before resolving: refundable amount, prior compensation, goodwill, restrictions, and whether approval is needed and why. **W M**
+- **24.5** Repeat compensation on an order, goodwill over the cap, or a customer under refund review always needs a second approver. **API W M**
+- **24.6** A merchant or courier can dispute being held responsible; an admin reverses (Gutad absorbs the cost, ledger re-credits the merchant) or upholds. **API W M** (admin side; follow-up 24.6-W for merchant/courier screens).
+- **24.7** One conversation per ticket for customers, merchants and staff, with internal notes and approved templates; a staff reply marks first response. **W** order page + admin. **M** order screen + `ops/support`.
+- **24.8** Root-cause report by category, dish, merchant, location, kitchen, delivery zone or owner, with compensation, SLA breaches and time to resolve. **W** Support → Root causes.
+

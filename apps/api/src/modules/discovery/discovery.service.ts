@@ -190,8 +190,8 @@ export class DiscoveryService {
       ...this.masked(this.summary(loc), e),
       isOpenNow,
       hours,
-      pickupTimes: this.eligibleTimes(loc, hours, 'ORDERING'),
-      deliveryTimes: loc.acceptsDelivery && can(e, 'delivery') ? this.eligibleTimes(loc, hours, 'ORDERING') : [],
+      pickupTimes: await this.withoutFullSlots(loc, this.eligibleTimes(loc, hours, 'ORDERING')),
+      deliveryTimes: loc.acceptsDelivery && can(e, 'delivery') ? await this.withoutFullSlots(loc, this.eligibleTimes(loc, hours, 'ORDERING')) : [],
       diningShifts: (can(e, 'reservations') ? shiftRows : []).map((s) => ({ id: s.id, name: s.name, daysOfWeek: s.daysOfWeek, startTime: s.startTime, endTime: s.endTime, maxPartySize: s.maxPartySize })),
       experiences: (can(e, 'experiences') ? exps : []).map((e) => ({ id: e.id, name: e.name, description: e.description, pricingMode: e.pricingMode, priceCents: e.priceCents, imageUrl: e.imageUrl })),
       partnerLinks: pubs.filter((p) => p.kind === 'PARTNER_LINK').map((p) => ({ id: p.id, partnerName: p.partnerName })),
@@ -205,6 +205,14 @@ export class DiscoveryService {
   }
 
   /** Next 7 days of 15-minute ordering windows inside opening hours (used by "schedule for later"). */
+  /** 11.5 — hide 15-minute slots already at the location's scheduled-order capacity. */
+  private async withoutFullSlots(loc: typeof locations.$inferSelect, days: { date: string; slots: string[] }[]) {
+    if (!loc.scheduledSlotCapacity) return days;
+    const r = await this.db.execute(sql`select to_timestamp(floor(extract(epoch from scheduled_for) / 900) * 900) as slot, count(*)::int as n from orders where location_id = ${loc.id} and scheduled_for > now() and scheduled_for < now() + interval '8 days' and status not in ('CANCELED','REJECTED') group by 1 having count(*) >= ${loc.scheduledSlotCapacity}`);
+    const full = new Set(((r as unknown as { rows: { slot: string }[] }).rows || []).map((x) => { const lp = localParts(new Date(x.slot), loc.timezone); return `${lp.ymd} ${lp.hhmm}`; }));
+    return full.size ? days.map((d) => ({ ...d, slots: d.slots.filter((t) => !full.has(`${d.date} ${t}`)) })) : days;
+  }
+
   private eligibleTimes(loc: typeof locations.$inferSelect, hours: (typeof openingHours.$inferSelect)[], service: string) {
     const out: { date: string; slots: string[] }[] = [];
     const now = new Date();

@@ -49,34 +49,12 @@ Phase D shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase E: customers, checkout, support
 
-### 10. Customer account management
-- [ ] 10.1 [new] Admin customer directory and profile (addresses, contact preferences, account status) · API W M
-- [ ] 10.2 [new] Customer 360: orders, complaints, refunds, credits, memberships, loyalty · API W M
-- [ ] 10.3 [new] Payment-provider customer reference and masked saved cards (brand/last4 only) · API W M
-- [ ] 10.4 [new] Account recovery assist and duplicate-account detection (same phone, email or device) with merge · API W
-- [ ] 10.5 [improve] Marketing consent and per-channel/topic notification preferences (customer and admin) · API W M
-- [ ] 10.6 [new] Platform segments and service-recovery eligibility (e.g., no more than N goodwill credits in 90 days) · API W
-- [ ] 10.7 [improve] Privacy requests queue (export, deletion), retention policy job · API W M
-- [ ] 10.8 [fix+new] Customer restrictions (ordering block, cash/credit limits) with reasons and an appeal flow; customer strikes take effect · API W M
-
-### 11. Cart, checkout & order eligibility
-- [ ] 11.1 [improve] Service-area and hours validation errors carry codes and next-open time · API W M
-- [ ] 11.3 [new] Shared `cartCompatibility()`: Made at Gutad menus mix in one cart when one platform-operated fulfillment location serves them all · API W M
-- [ ] 11.4 [new] Separate-order enforcement: independent restaurants or incompatible locations → `SEPARATE_ORDER_REQUIRED`; carts explain why instead of silently clearing · API W M
-- [ ] 11.5 [new] Scheduled-order slot capacity and cutoff checks · API W M
-- [ ] 11.6 [improve] Gift balance in the payment mix (with 25.9); calculation breakdown shown · API W M
-- [ ] 11.7 [improve] Payment-failure recovery: retry with a new card on the same order without a duplicate · API W M
-- [ ] 11.8 [improve] Snapshot the cancellation and refund policy version on each order (menu versions, fee rules and tax lines are already frozen into the quote/order snapshot since Phase D) · API
-
-### 24. Customer support & service recovery
-- [ ] 24.1 [improve] Tickets linked to payment and merchant (org) as well as order, reservation and delivery · API W M
-- [ ] 24.2 [improve] Categories: WRONG_ITEM, QUALITY, FAILED_DELIVERY, FOOD_SAFETY, PAYMENT, plus the existing ones · API W M
-- [ ] 24.3 [new] Response and resolution SLAs per category and priority, escalation queues, assignment and ownership · API W M
-- [ ] 24.4 [improve] Refund, credit, remake and redelivery options with clear previews · W M
-- [ ] 24.5 [fix+new] Duplicate-compensation prevention across tickets for the same order (partly done in Phase A: approval limits are enforced, and repeat compensation on an order always needs approval). Still to do: preview of prior compensation in the ticket UI, and a per-customer goodwill cap · API W M
-- [ ] 24.6 [new] Merchant/courier responsibility review: they can dispute the assigned fault and admins rule on it · API W M
-- [ ] 24.7 [new] Communication thread per ticket and approved response templates · API W M
-- [ ] 24.8 [new] Root-cause report by dish, kitchen, merchant and delivery zone · API W M
+Phase E shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 11.6 [improve] Gift balance in the payment mix with a calculation breakdown (ships with 25.9 gift cards) · API W M
+- [ ] 10.8-L [new] Cash and credit limits per customer (restriction kinds today: ordering block, promotions block, refund review) · API W
+- [ ] 10.4-D [improve] Device fingerprint as a duplicate-account signal (today: normalized email, phone and address) · API W
+- [ ] 10.3-P [improve] Real processor SetupIntent/tokenization for saved cards on web and mobile (test mode builds a mock token client-side; the API already rejects raw card numbers) · API W M
+- [ ] 24.6-W [improve] Merchant and courier screens to dispute a ticket's responsibility (API and admin decision shipped; merchants use the case thread today) · W M
 
 ---
 

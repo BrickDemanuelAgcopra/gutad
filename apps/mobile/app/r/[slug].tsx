@@ -28,10 +28,12 @@ export default function Restaurant() {
   const addLine = (l: Parameters<typeof add>[1]) => {
     setPicked(null);
     if (cart.locationId && cart.locationId !== loc.id && cart.lines.length) {
-      Alert.alert('Start a new order?', `Your cart has items from ${cart.locationName}. Each order comes from one local restaurant or one Made at Gutad food hall.`, [
-        { text: 'Keep my cart', style: 'cancel' },
-        { text: 'Start new order', style: 'destructive', onPress: () => add({ id: loc.id, name: loc.name, slug: loc.slug }, l) },
+      const ask = (why?: string) => Alert.alert('This will be a separate order', `Your cart has items from ${cart.locationName}. ${why || 'Each order comes from one local restaurant or one Made at Gutad food hall.'}`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace my cart', style: 'destructive', onPress: () => add({ id: loc.id, name: loc.name, slug: loc.slug }, l) },
+        { text: 'Save it & start separate order', onPress: () => add({ id: loc.id, name: loc.name, slug: loc.slug }, l, { park: true }) },
       ]);
+      api.get<{ reason?: string }>(`/public/cart-compatibility?current=${cart.locationId}&adding=${loc.id}`).then((r) => ask(r.reason)).catch(() => ask());
     } else add({ id: loc.id, name: loc.name, slug: loc.slug }, l);
   };
   return (

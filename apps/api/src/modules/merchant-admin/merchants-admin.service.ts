@@ -309,6 +309,7 @@ export class MerchantsAdminService {
   async postCaseMessage(user: JwtPayload, incidentId: string, input: { body: string; visibility?: 'PARTIES' | 'INTERNAL'; templateKey?: string }) {
     const { i, staff, role } = await this.caseAccess(user, incidentId);
     if (input.visibility === 'INTERNAL' && !staff) throw new ForbiddenException('Only staff can write internal notes');
+    if (staff && input.visibility !== 'INTERNAL' && !i.firstRespondedAt) await this.db.update(incidents).set({ firstRespondedAt: new Date() }).where(eq(incidents.id, incidentId));
     const [m] = await this.db.insert(incidentMessages).values({ incidentId, authorId: user.sub, authorRole: role, visibility: input.visibility || 'PARTIES', body: input.body, templateKey: input.templateKey ?? null }).returning();
     if (staff && input.visibility !== 'INTERNAL' && i.reporterId && i.reporterId !== user.sub) await this.notify.queue({ userId: i.reporterId, template: 'case.reply', payload: { category: i.category, body: input.body, incidentId }, channels: ['IN_APP', 'EMAIL', 'PUSH'] });
     if (!staff && i.status === 'RESOLVED') await this.db.update(incidents).set({ status: 'APPEALED', appealNote: input.body }).where(eq(incidents.id, incidentId));

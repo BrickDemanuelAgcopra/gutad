@@ -1,9 +1,9 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { brands, taxRates, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
+import { brands, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
 import { brandSellable } from '../../common/brand-rules';
-import { computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
+import { cartCompatibility, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
@@ -84,7 +84,11 @@ export class QuoteService {
     // plan gating: ordering for every order, delivery on top for delivery orders
     await this.entitlements.assertLocation(loc.id, 'ordering', 'customer', tx);
     if (input.fulfillmentType === 'DELIVERY') await this.entitlements.assertLocation(loc.id, 'delivery', 'customer', tx);
-    if (!sim && loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new BadRequestException(loc.pausedReason || 'Restaurant is temporarily paused');
+    if (!sim && loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new BadRequestException({ message: loc.pausedReason || 'Restaurant is temporarily paused', code: 'PAUSED', reopensAt: loc.pausedUntil });
+    // 10.8 — account restrictions
+    const restr = input.userId && !sim ? await tx.select({ kind: customerRestrictions.kind, reason: customerRestrictions.reason }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, input.userId), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), gt(customerRestrictions.expiresAt, new Date())))) : [];
+    if (restr.some((r) => r.kind === 'ORDERING_BLOCKED')) throw new ForbiddenException({ message: 'Ordering is paused on this account. See Account → Help to appeal.', code: 'ACCOUNT_RESTRICTED' });
+    if (input.promoCode && restr.some((r) => r.kind === 'PROMOTIONS_BLOCKED')) throw new BadRequestException({ message: 'Promotions are not available on this account', code: 'PROMOTIONS_BLOCKED' });
     if (input.fulfillmentType === 'PICKUP' && !loc.acceptsPickup) throw new BadRequestException('Pickup not offered');
     if (input.fulfillmentType === 'DELIVERY' && !loc.acceptsDelivery) throw new BadRequestException('Delivery not offered');
     if (input.fulfillmentType === 'CATERING' && !loc.acceptsCatering) throw new BadRequestException('Catering not offered');
@@ -96,10 +100,17 @@ export class QuoteService {
     if (input.scheduledFor) {
       scheduledFor = new Date(input.scheduledFor);
       if (isNaN(scheduledFor.getTime())) throw new BadRequestException('Invalid scheduledFor');
-      if (scheduledFor < addMinutes(now, loc.defaultPrepMinutes)) throw new BadRequestException('Scheduled time is too soon');
-      if (!sim?.ignoreHours && !(await this.openAt(loc, scheduledFor, tx))) throw new BadRequestException('Restaurant is closed at the scheduled time');
+      // 11.5 — lead time and slot capacity for scheduled orders
+      const lead = Math.max(loc.defaultPrepMinutes, loc.scheduleLeadMinutes ?? 0);
+      if (scheduledFor < addMinutes(now, lead)) throw new BadRequestException({ message: `Schedule at least ${lead} minutes ahead`, code: 'SCHEDULE_TOO_SOON', earliestAt: addMinutes(now, lead) });
+      if (!sim?.ignoreHours && !(await this.openAt(loc, scheduledFor, tx))) throw new BadRequestException({ message: 'Restaurant is closed at the scheduled time', code: 'CLOSED', nextOpenAt: await this.nextOpenAt(loc, scheduledFor, tx) });
+      if (!sim && loc.scheduledSlotCapacity) {
+        const slot = new Date(Math.floor(scheduledFor.getTime() / 900_000) * 900_000);
+        const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(orders).where(and(eq(orders.locationId, loc.id), sql`${orders.scheduledFor} >= ${slot.toISOString()} and ${orders.scheduledFor} < ${new Date(slot.getTime() + 900_000).toISOString()}`, sql`${orders.status} not in ('CANCELED','REJECTED')`));
+        if (n >= loc.scheduledSlotCapacity) throw new BadRequestException({ message: 'That time is fully booked; pick another slot', code: 'SLOT_FULL' });
+      }
     } else if (!sim?.ignoreHours && !(await this.openAt(loc, now, tx))) {
-      throw new BadRequestException('Restaurant is closed right now; schedule for later');
+      throw new BadRequestException({ message: 'Restaurant is closed right now; schedule for later', code: 'CLOSED', nextOpenAt: await this.nextOpenAt(loc, now, tx) });
     }
 
     // items & modifiers
@@ -111,7 +122,15 @@ export class QuoteService {
     const snapLines: QuoteSnapshotLine[] = [];
     for (const l of input.lines) {
       const item = items.get(l.menuItemId);
-      if (!item) throw new BadRequestException(`Item ${l.menuItemId} is not available on this menu/channel`);
+      if (!item) {
+        // 11.3 / 11.4 — an item from another place means a separate order (Gutad mixing rule)
+        const [elsewhere] = await tx.select({ locationId: menus.locationId, name: locations.name, platformOperated: locations.platformOperated }).from(menuItems).innerJoin(menuCategories, eq(menuCategories.id, menuItems.categoryId)).innerJoin(menus, eq(menus.id, menuCategories.menuId)).innerJoin(locations, eq(locations.id, menus.locationId)).where(eq(menuItems.id, l.menuItemId)).limit(1);
+        if (elsewhere && elsewhere.locationId && elsewhere.locationId !== loc.id) {
+          const c = cartCompatibility({ locationId: loc.id, name: loc.name, platformOperated: loc.platformOperated }, { locationId: elsewhere.locationId, name: elsewhere.name, platformOperated: elsewhere.platformOperated });
+          if (!c.ok) throw new BadRequestException({ message: c.reason, code: c.code });
+        }
+        throw new BadRequestException({ message: `Item ${l.menuItemId} is not available on this menu right now`, code: 'ITEM_UNAVAILABLE' });
+      }
       if (item.soldOut) throw new BadRequestException(`${item.name} is sold out`);
       if (l.quantity < 1 || l.quantity > 50) throw new BadRequestException('Quantity must be 1–50');
       const totalQty = input.lines.filter((x) => x.menuItemId === l.menuItemId).reduce((a, x) => a + x.quantity, 0);
@@ -156,7 +175,7 @@ export class QuoteService {
     let etaMinutes = loc.defaultPrepMinutes;
     if (input.fulfillmentType === 'DELIVERY') {
       if (!input.deliveryAddress) throw new BadRequestException('Delivery address required');
-      const q = await this.delivery.quoteForLocation(loc.id, input.deliveryAddress, subtotalCents, input.tipCents || 0, tx);
+      const q = await this.delivery.quoteForLocation(loc.id, input.deliveryAddress, subtotalCents, input.tipCents || 0, tx).catch((e: Error) => { throw new BadRequestException({ message: e.message, code: 'DELIVERY_UNAVAILABLE' }); });
       deliveryFeeCents = q.retailFeeCents;
       deliveryProviderCostCents = q.providerCostCents;
       deliveryQuoteId = q.providerQuoteId;
@@ -222,6 +241,8 @@ export class QuoteService {
       deliveryAddress: input.deliveryAddress || null,
       etaMinutes,
       membershipId: membership?.id || null,
+      // 11.8 — the policies the customer accepted with this order
+      policies: await this.settings.getObject('policies.versions', { cancellation: '2026-11-01', refund: '2026-11-01', terms: '2026-11-01' }),
     };
     if (sim) return { subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, creditsCents, loyaltyCents, totalCents, commissionCents, promotionFunder, promotionPlatformShareCents, taxLines: tax.lines, lines: snapLines, warnings };
     const [q] = await tx
@@ -317,6 +338,23 @@ export class QuoteService {
     const prevDay = (lp.dayOfWeek + 6) % 7;
     const prev = hours.filter((h) => h.dayOfWeek === prevDay && h.closes <= h.opens);
     return prev.some((h) => lp.hhmm < h.closes);
+  }
+
+  /** 11.1 — next time ordering opens (regular hours, closures and special hours), scanning up to 7 days in 15-minute steps. */
+  private async nextOpenAt(loc: typeof locations.$inferSelect, from: Date, tx: DbOrTx): Promise<string | null> {
+    const hours = await tx.select().from(openingHours).where(eq(openingHours.locationId, loc.id));
+    const closures = await tx.select().from(locationClosures).where(and(eq(locationClosures.locationId, loc.id), gt(locationClosures.endsAt, from), inArray(locationClosures.service, ['ALL', 'ORDERING'])));
+    if (!hours.length && !closures.length) return null;
+    let t = new Date(Math.ceil(from.getTime() / 900_000) * 900_000);
+    for (let i = 0; i < 7 * 96; i++, t = new Date(t.getTime() + 900_000)) {
+      const c = closures.find((x) => x.startsAt <= t && x.endsAt > t);
+      const lp = localParts(t, loc.timezone);
+      if (c?.kind === 'CLOSED') continue;
+      if (c?.kind === 'SPECIAL_HOURS' && c.opens && c.closes) { if (isWithin(lp.hhmm, c.opens, c.closes)) return t.toISOString(); continue; }
+      if (!hours.length) return t.toISOString();
+      if (hours.some((h) => h.dayOfWeek === lp.dayOfWeek && (h.service === 'ALL' || h.service === 'ORDERING') && isWithin(lp.hhmm, h.opens, h.closes))) return t.toISOString();
+    }
+    return null;
   }
 
   /** Tax per category: location rate → tax_rates (location, then region, then platform) → simulation overrides. */

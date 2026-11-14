@@ -20,6 +20,8 @@ import { LocationsAdminService } from '../modules/merchant-admin/locations-admin
 import { MerchantsAdminService } from '../modules/merchant-admin/merchants-admin.service';
 import { BrandsAdminService } from '../modules/merchant-admin/brands-admin.service';
 import { MenuAdminService } from '../modules/catalog/menu-admin.service';
+import { CustomersService } from '../modules/customers/customers.service';
+import { SupportService } from '../modules/support/support.service';
 
 /**
  * Background jobs. Every job takes a Redis lock so several worker replicas never double-run,
@@ -49,6 +51,8 @@ export class JobsService {
     private readonly merchantsAdmin: MerchantsAdminService,
     private readonly brandsAdmin: BrandsAdminService,
     private readonly menuAdmin: MenuAdminService,
+    private readonly customers: CustomersService,
+    private readonly support: SupportService,
   ) {}
 
   private async locked(name: string, ttlMs: number, fn: () => Promise<unknown>) {
@@ -73,6 +77,8 @@ export class JobsService {
   @Interval(3_600_000) documentExpiry() { return this.locked('doc-expiry', 600_000, () => this.merchantsAdmin.documentExpiry()); }
   @Interval(900_000) brandRights() { return this.locked('brand-rights', 300_000, () => this.brandsAdmin.expireRights()); }
   @Interval(60_000) priceChanges() { return this.locked('price-changes', 60_000, () => this.menuAdmin.applyDue()); }
+  @Interval(60_000) supportSla() { return this.locked('support-sla', 60_000, () => this.support.slaSweep()); }
+  @Interval(3_600_000) privacySweep() { return this.locked('privacy', 600_000, () => this.customers.privacySweep()); }
   @Interval(300_000) approvalExpiry() { return this.locked('approval-expiry', 60_000, () => this.approvals.expireStale()); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {

@@ -66,6 +66,18 @@ export const incidents = pgTable('incidents', {
   description: text('description').notNull(),
   status: incidentStatusEnum('status').notNull().default('OPEN'),
   owner: text('owner'), // MERCHANT | PLATFORM | PROVIDER | DRIVER | CUSTOMER
+  /** LOW | NORMAL | HIGH | URGENT */
+  priority: text('priority').notNull().default('NORMAL'),
+  /** team queue: SUPPORT | OPERATIONS | FINANCE | FOOD_SAFETY | DELIVERY */
+  queue: text('queue').notNull().default('SUPPORT'),
+  firstResponseDueAt: ts('first_response_due_at'),
+  resolveDueAt: ts('resolve_due_at'),
+  firstRespondedAt: ts('first_responded_at'),
+  slaBreachedAt: ts('sla_breached_at'),
+  /** dish the complaint is about (root-cause reporting) */
+  menuItemId: uuid('menu_item_id'),
+  /** { by, role, reason, at, status: OPEN|UPHELD|REVERSED, decidedById, note, decidedAt } */
+  responsibilityDispute: jsonb('responsibility_dispute'),
   remedy: text('remedy'), // REFUND | CREDIT | REMAKE | REDELIVERY | REASSIGN | NONE
   remedyCents: integer('remedy_cents').notNull().default(0),
   evidence: jsonb('evidence').notNull().default([]),
@@ -89,7 +101,11 @@ export const dataRequests = pgTable('data_requests', {
   id: id(),
   userId: uuid('user_id').notNull(),
   kind: text('kind').notNull(), // ACCESS | DELETE
-  status: text('status').notNull().default('OPEN'),
+  status: text('status').notNull().default('OPEN'), // OPEN | PENDING | FULFILLED | CANCELED | BLOCKED
+  /** DELETE: runs after the grace period unless canceled or blocked */
+  scheduledFor: ts('scheduled_for'),
+  reviewedById: uuid('reviewed_by_id'),
+  note: text('note'),
   fulfilledAt: ts('fulfilled_at'),
   createdAt: createdAt(),
 });

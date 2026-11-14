@@ -23,7 +23,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = b.message ?? exception.message;
         error = b.error ?? exception.name;
         // machine-readable details for plan gating (FEATURE_NOT_IN_PLAN / PLAN_LIMIT_REACHED)
-        if (b.code) extra = { code: b.code, feature: b.feature, plan: b.plan, limit: b.limit, used: b.used };
+        // machine-readable details travel with a code (e.g. nextOpenAt, quoteId, plan limits, validation lists)
+        if (b.code) { const { message: _m, error: _e, statusCode: _s, ...rest } = b as Record<string, unknown>; extra = rest; }
       }
     } else if (exception && typeof exception === 'object' && 'code' in exception) {
       // Postgres unique violation → 409 rather than 500

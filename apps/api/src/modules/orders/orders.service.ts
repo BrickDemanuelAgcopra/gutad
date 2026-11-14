@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { deliveryJobs, devices, locations, orderEvents, orderLines, orders, payments, quotes } from '../../db/schema';
+import { deliveryJobs, devices, locations, orderEvents, orderLines, orders, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
@@ -20,6 +20,8 @@ type OrderStatus = (typeof orders.status.enumValues)[number];
 export interface CheckoutInput {
   quoteId: string;
   paymentMethodId?: string | null;
+  /** a saved card (payment_methods.id) of the signed-in customer */
+  savedPaymentMethodId?: string | null;
   guest?: { name: string; email: string; phone?: string } | null;
   specialInstructions?: string;
   idempotencyKey?: string;
@@ -67,6 +69,15 @@ export class OrdersService {
     if (!user && !input.guest) throw new BadRequestException('Guest details required for guest checkout');
     const [loc] = await this.db.select().from(locations).where(eq(locations.id, q.locationId)).limit(1);
     if (!loc) throw new NotFoundException();
+    if (user) {
+      const [blocked] = await this.db.select({ id: customerRestrictions.id }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, user.sub), eq(customerRestrictions.kind, 'ORDERING_BLOCKED'), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), sql`${customerRestrictions.expiresAt} > now()`))).limit(1);
+      if (blocked) throw new ForbiddenException({ message: 'Ordering is paused on this account. See Account → Help to appeal.', code: 'ACCOUNT_RESTRICTED' });
+      if (input.savedPaymentMethodId) {
+        const [pm] = await this.db.select().from(paymentMethods).where(and(eq(paymentMethods.id, input.savedPaymentMethodId), eq(paymentMethods.userId, user.sub))).limit(1);
+        if (!pm) throw new BadRequestException('Saved card not found');
+        input = { ...input, paymentMethodId: pm.providerRef };
+      }
+    }
     if (loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new ConflictException(loc.pausedReason || 'Restaurant paused');
     // merchant throttle: max orders per 15 minutes
     const ramp = loc.rampUntil && loc.rampUntil > new Date() && loc.rampThrottlePer15m ? loc.rampThrottlePer15m : null;
@@ -130,7 +141,12 @@ export class OrdersService {
 
       // card authorization (manual capture)
       if (o.totalCents > 0) {
-        await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
+        // 11.7 — a declined card rolls the order back but keeps the quote, so the customer retries with another card (no duplicate order)
+        try {
+          await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
+        } catch (e) {
+          throw new BadRequestException({ message: `Payment failed: ${(e as Error).message}. Try another card.`, code: 'PAYMENT_DECLINED', quoteId: q.id });
+        }
       } else {
         await tx.insert(payments).values({ orderId: o.id, userId, purpose: 'ORDER', provider: 'none', status: 'CAPTURED', currency: o.currency, amountCents: 0, idempotencyKey: `pay:${o.id}` });
       }
