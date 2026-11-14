@@ -36,6 +36,7 @@ export default function AdminSettings() {
         <p className="mt-2 text-xs text-ink-500">Now: support refunds up to {money(t.refundByRole.SUPPORT || 0)}, purchase orders over {money(t.purchaseOrderCents)} need approval, price changes {t.priceChangeBps ? `over ${t.priceChangeBps / 100}%` : 'never'} need approval. Merchant staff use the approval limit on their membership; owners are unlimited.</p>
         <Button className="mt-2" size="sm" disabled={!th} onClick={() => save('approvals.thresholds', cur)}>Request change</Button>
       </Card>
+      <MessagingCard />
       <div className="grid gap-4 md:grid-cols-2">
         <Card title="Runtime configuration">{s && <pre className="overflow-auto rounded bg-ink-50 p-2 text-xs">{JSON.stringify(s.env, null, 2)}</pre>}</Card>
         <Card title="All settings">
@@ -45,5 +46,44 @@ export default function AdminSettings() {
         </Card>
       </div>
     </div>
+  );
+}
+
+type ChannelStatus = { provider: string; from?: string | null; fromName?: string; replyTo?: string | null; configured: boolean };
+
+/** Email/SMS provider status plus a test send, so a new Brevo/Twilio setup can be checked without placing an order. */
+function MessagingCard() {
+  const { data } = useApi<{ email: ChannelStatus; sms: ChannelStatus }>('/admin/messaging');
+  const { run, error, busy } = useAction();
+  const [to, setTo] = useState({ EMAIL: '', SMS: '' });
+  const [result, setResult] = useState<string | null>(null);
+  const send = (channel: 'EMAIL' | 'SMS') => run(async () => {
+    setResult(null);
+    const r = await api.post<{ provider: string; id?: string; note?: string }>('/admin/messaging/test', { channel, to: to[channel] });
+    setResult(r.note || `Accepted by ${r.provider}${r.id ? ` (id ${r.id})` : ''}. Check the inbox or phone.`);
+  });
+  const row = (label: string, channel: 'EMAIL' | 'SMS', st?: ChannelStatus) => (
+    <div className="space-y-2 rounded border border-ink-100 p-3">
+      <div className="flex items-center justify-between text-sm">
+        <b>{label}</b>
+        <span className={st?.configured ? 'text-green-700' : 'text-amber-700'}>{st ? (st.provider === 'log' ? 'Not sending (log only)' : st.configured ? `${st.provider} configured` : `${st.provider}: missing keys`) : '…'}</span>
+      </div>
+      {st && st.provider !== 'log' && <p className="text-xs text-ink-500">From {channel === 'EMAIL' ? `${st.fromName} <${st.from}>` : st.from || 'not set'}{st.replyTo ? `, replies to ${st.replyTo}` : ''}</p>}
+      <div className="flex gap-2">
+        <Input placeholder={channel === 'EMAIL' ? 'you@example.com' : '+15551234567'} value={to[channel]} onChange={(e) => setTo({ ...to, [channel]: e.target.value })} />
+        <Button size="sm" variant="secondary" disabled={busy || !to[channel]} onClick={() => send(channel)}>Send test</Button>
+      </div>
+    </div>
+  );
+  return (
+    <Card title="Messaging">
+      {error && <Alert>{error}</Alert>}
+      {result && <Alert tone="info">{result}</Alert>}
+      <div className="grid gap-3 md:grid-cols-2">
+        {row('Email', 'EMAIL', data?.email)}
+        {row('SMS', 'SMS', data?.sms)}
+      </div>
+      <p className="mt-2 text-xs text-ink-500">Providers and keys are set in the server environment (EMAIL_PROVIDER=brevo, BREVO_API_KEY, SMS_PROVIDER=twilio, TWILIO_*) and take effect after a restart.</p>
+    </Card>
   );
 }

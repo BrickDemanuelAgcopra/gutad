@@ -63,8 +63,9 @@ To ship **without demo data** set `SEED_DEMO=false` in `.env` before the first r
 | Stripe | Create a Connect platform; set `PAYMENT_PROVIDER=stripe`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`; add webhook `https://api.gutad.io/webhooks/payments` for `payment_intent.*`, `charge.refunded`, `charge.dispute.*`, `transfer.*`, `account.updated`. Merchants complete Express onboarding from *Merchant → Finance → Set up payouts*. |
 | DoorDash Drive | Request production access; set `DELIVERY_PROVIDER=doordash` + developer id / key id / signing secret; webhook `https://api.gutad.io/webhooks/delivery`. |
 | Uber Direct | Set `DELIVERY_PROVIDER=uber` + customer id / client id / secret; webhook as above. |
-| Twilio | `SMS_PROVIDER=twilio` + SID/token/from. Marketing SMS is only sent to consented users. |
-| Email | `EMAIL_PROVIDER=smtp` and `SMTP_URL=https://…` pointing at an HTTP relay that accepts `{from,to,subject,text}` (or keep `log` and wire your ESP in `apps/api/src/modules/notifications/senders.ts`). |
+| Twilio | `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_FROM` (E.164 number) or `TWILIO_MESSAGING_SERVICE_SID` (MG…, for alphanumeric sender IDs / A2P 10DLC). Marketing SMS is only sent to consented users. |
+| Email (Brevo) | Authenticate `gutad.io` in Brevo (DKIM CNAMEs set to DNS only; one SPF record: `v=spf1 include:_spf.mx.cloudflare.net include:spf.brevo.com ~all`), add `EMAIL_FROM` as a verified sender, then set `EMAIL_PROVIDER=brevo`, `BREVO_API_KEY=xkeysib-…`, `EMAIL_FROM=no-reply@gutad.io`, `EMAIL_FROM_NAME=Gutad`, `EMAIL_REPLY_TO=support@gutad.io`. Inbound mail to `support@gutad.io` is Cloudflare Email Routing (forward-only). Alternative: `EMAIL_PROVIDER=smtp` + `SMTP_URL=https://…` HTTP relay accepting `{from,to,subject,text}`. |
+| Check | After `docker compose -f docker-compose.prod.yml up -d api worker` (env changes need a recreate), use **Admin → Settings → Messaging → Send test** for email and SMS. Errors from the provider are shown there and in the audit log (`messaging.test.failed`). |
 | Push | Expo push works out of the box for EAS builds; set `EXPO_ACCESS_TOKEN` for higher limits. |
 | Geocoding | `GEOCODER_PROVIDER=google` + key; wire the checkout "Verify address" button to Places Autocomplete (pilot uses a demo pin). |
 

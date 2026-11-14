@@ -28,9 +28,16 @@ const schema = z.object({
   TWILIO_ACCOUNT_SID: z.string().optional().default(''),
   TWILIO_AUTH_TOKEN: z.string().optional().default(''),
   TWILIO_FROM: z.string().optional().default(''),
-  EMAIL_PROVIDER: z.enum(['log', 'smtp']).default('log'),
+  /** Optional Twilio Messaging Service (MG…); when set it is used instead of TWILIO_FROM (alphanumeric sender IDs, A2P 10DLC pools). */
+  TWILIO_MESSAGING_SERVICE_SID: z.string().optional().default(''),
+  /** log (write to app log only) | brevo (Brevo transactional API) | smtp (HTTP relay at SMTP_URL accepting {from,to,subject,text}) */
+  EMAIL_PROVIDER: z.enum(['log', 'smtp', 'brevo']).default('log'),
   SMTP_URL: z.string().optional().default(''),
+  BREVO_API_KEY: z.string().optional().default(''),
   EMAIL_FROM: z.string().default('no-reply@gutad.io'),
+  EMAIL_FROM_NAME: z.string().default('Gutad'),
+  /** Where customer replies go (empty = no Reply-To header). */
+  EMAIL_REPLY_TO: z.string().optional().default('support@gutad.io'),
   EXPO_ACCESS_TOKEN: z.string().optional().default(''),
   GEOCODER_PROVIDER: z.enum(['mock', 'google']).default('mock'),
   GOOGLE_MAPS_API_KEY: z.string().optional().default(''),
