@@ -52,6 +52,15 @@ const LocationDto = z.object({
   posProvider: z.string().optional(),
   posExternalId: z.string().optional(),
   tabletFallbackPhone: z.string().optional(),
+  contacts: z.array(z.object({ name: z.string(), role: z.string().optional(), phone: z.string().optional(), email: z.string().optional() })).optional(),
+  acceptsKiosk: z.boolean().optional(),
+  pickupInstructions: z.string().nullable().optional(),
+  parkingInfo: z.string().nullable().optional(),
+  courierInstructions: z.string().nullable().optional(),
+  courierPointLat: z.number().nullable().optional(),
+  courierPointLng: z.number().nullable().optional(),
+  autoAccept: z.boolean().optional(),
+  acceptTimeoutMinutes: z.number().int().min(2).max(30).optional(),
 });
 const HoursDto = z.object({ hours: z.array(z.object({ dayOfWeek: z.number().int().min(0).max(6), opens: z.string().regex(/^\d{2}:\d{2}$/), closes: z.string().regex(/^\d{2}:\d{2}$/), service: z.string().optional() })) });
 const StatusDto = z.object({ status: z.enum(['LIVE', 'PAUSED', 'SUSPENDED', 'OFFBOARDED']), reason: z.string().optional() });

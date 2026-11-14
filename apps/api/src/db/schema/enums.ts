@@ -32,6 +32,7 @@ export const channelEnum = pgEnum('channel', [
   'CAMPUS',
   'CORPORATE',
   'API',
+  'KIOSK',
 ]);
 
 export const fulfillmentTypeEnum = pgEnum('fulfillment_type', [

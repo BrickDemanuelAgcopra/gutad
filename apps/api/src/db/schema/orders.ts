@@ -136,6 +136,10 @@ export const stations = pgTable('stations', {
     .references(() => kitchens.id, { onDelete: 'cascade' }),
   code: text('code').notNull(),
   name: text('name').notNull(),
+  /** tickets the station can work at once; null = no limit */
+  maxConcurrent: integer('max_concurrent'),
+  isAvailable: boolean('is_available').notNull().default(true),
+  equipment: text('equipment').array().notNull().default([]),
 });
 
 export const kitchenTickets = pgTable('kitchen_tickets', {

@@ -106,6 +106,16 @@ export const organizations = pgTable('organizations', {
   kind: text('kind').notNull().default('MERCHANT'),
   /** parent company for groups of organizations */
   parentId: uuid('parent_id'),
+  /** beneficial owners: [{ name, title, ownershipPct, email }] */
+  owners: jsonb('owners').notNull().default([]),
+  /** business contacts: [{ name, role, email, phone }] */
+  contacts: jsonb('contacts').notNull().default([]),
+  website: text('website'),
+  accountManagerId: uuid('account_manager_id'),
+  statusReason: text('status_reason'),
+  statusChangedAt: ts('status_changed_at'),
+  /** location statuses saved at suspension, restored on reinstatement */
+  suspendedLocationStates: jsonb('suspended_location_states'),
   taxId: text('tax_id'),
   billingEmail: text('billing_email'),
   status: merchantStatusEnum('status').notNull().default('PROSPECT'),

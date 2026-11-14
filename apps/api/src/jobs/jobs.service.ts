@@ -16,6 +16,9 @@ import { ProgramsService } from '../modules/programs/programs.service';
 import { addDays } from '../common/utils';
 import { ApprovalsService } from '../modules/security/approvals.service';
 import { AlertsService } from '../modules/ops/alerts.service';
+import { LocationsAdminService } from '../modules/merchant-admin/locations-admin.service';
+import { MerchantsAdminService } from '../modules/merchant-admin/merchants-admin.service';
+import { BrandsAdminService } from '../modules/merchant-admin/brands-admin.service';
 
 /**
  * Background jobs. Every job takes a Redis lock so several worker replicas never double-run,
@@ -41,6 +44,9 @@ export class JobsService {
     private readonly programs: ProgramsService,
     private readonly approvals: ApprovalsService,
     private readonly alerts: AlertsService,
+    private readonly locationsAdmin: LocationsAdminService,
+    private readonly merchantsAdmin: MerchantsAdminService,
+    private readonly brandsAdmin: BrandsAdminService,
   ) {}
 
   private async locked(name: string, ttlMs: number, fn: () => Promise<unknown>) {
@@ -61,6 +67,9 @@ export class JobsService {
   @Interval(30_000) orderEscalation() { return this.locked('order-escalation', 60_000, () => this.orders.escalateUnacknowledged()); }
   @Interval(60_000) alertDetectors() { return this.locked('alert-detect', 120_000, () => this.alerts.detect()); }
   @Interval(60_000) alertEscalation() { return this.locked('alert-escalate', 60_000, () => this.alerts.escalate()); }
+  @Interval(300_000) restartRamps() { return this.locked('restart-ramps', 60_000, () => this.locationsAdmin.clearRamps()); }
+  @Interval(3_600_000) documentExpiry() { return this.locked('doc-expiry', 600_000, () => this.merchantsAdmin.documentExpiry()); }
+  @Interval(900_000) brandRights() { return this.locked('brand-rights', 300_000, () => this.brandsAdmin.expireRights()); }
   @Interval(300_000) approvalExpiry() { return this.locked('approval-expiry', 60_000, () => this.approvals.expireStale()); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {

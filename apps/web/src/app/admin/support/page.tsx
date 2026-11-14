@@ -2,9 +2,10 @@
 import { useState } from 'react';
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
+import { CaseThread } from '@/components/case-thread';
 import { Alert, Badge, Button, Card, Input, Select, statusTone, Table, Textarea } from '@/components/ui';
 
-interface Incident { id: string; category: string; description: string; status: string; owner: string | null; remedy: string | null; remedyCents: number; orderId: string | null; createdAt: string }
+interface Incident { id: string; reporterType?: string; category: string; description: string; status: string; owner: string | null; remedy: string | null; remedyCents: number; orderId: string | null; createdAt: string }
 
 export default function AdminSupport() {
   const [status, setStatus] = useState('OPEN');
@@ -17,7 +18,7 @@ export default function AdminSupport() {
     <div className="space-y-4">
       <div className="flex items-center justify-between"><h1 className="text-2xl font-bold">Support queue</h1><Select value={status} onChange={(e) => setStatus(e.target.value)}>{['OPEN', 'INVESTIGATING', 'APPEALED', 'RESOLVED', 'CLOSED'].map((s) => <option key={s}>{s}</option>)}</Select></div>
       {error && <Alert>{error}</Alert>}
-      <Table rows={data || []} empty="Queue is empty." cols={[{ key: 'c', label: 'Category', render: (r) => <Badge>{r.category}</Badge> }, { key: 'd', label: 'Description', render: (r) => <button className="text-left underline" onClick={() => api.get<typeof sel>(`/incidents/${r.id}`).then(setSel)}>{r.description}</button> }, { key: 'o', label: 'Owner', render: (r) => r.owner }, { key: 's', label: 'Status', render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> }, { key: 'r', label: 'Remedy', render: (r) => r.remedy ? `${r.remedy} ${r.remedyCents ? money(r.remedyCents) : ''}` : '—' }, { key: 't', label: 'Opened', render: (r) => when(r.createdAt) }]} />
+      <Table rows={data || []} empty="Queue is empty." cols={[{ key: 'c', label: 'Category', render: (r) => <span><Badge>{r.category}</Badge>{r.reporterType && r.reporterType !== 'CUSTOMER' && <span className="block text-xs text-ink-500">from {r.reporterType.toLowerCase()}</span>}</span> }, { key: 'd', label: 'Description', render: (r) => <button className="text-left underline" onClick={() => api.get<typeof sel>(`/incidents/${r.id}`).then(setSel)}>{r.description}</button> }, { key: 'o', label: 'Owner', render: (r) => r.owner }, { key: 's', label: 'Status', render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> }, { key: 'r', label: 'Remedy', render: (r) => r.remedy ? `${r.remedy} ${r.remedyCents ? money(r.remedyCents) : ''}` : '—' }, { key: 't', label: 'Opened', render: (r) => when(r.createdAt) }]} />
       {sel && (
         <Card title={`Case ${sel.incident.id.slice(0, 8)} — ${sel.incident.category}`} action={<Button size="sm" variant="ghost" onClick={() => setSel(null)}>Close</Button>}>
           <p className="text-sm">{sel.incident.description}</p>
@@ -29,6 +30,7 @@ export default function AdminSupport() {
               <div className="mt-1">Timeline: {sel.order.events.map((e) => `${e.type}(${e.actorRole || 'sys'}) ${new Date(e.createdAt).toLocaleTimeString()}`).join(' → ')}</div>
             </div>
           )}
+          <CaseThread incidentId={sel.incident.id} />
           {['OPEN', 'INVESTIGATING', 'APPEALED'].includes(sel.incident.status) && (
             <div className="mt-3 grid gap-2 sm:grid-cols-4">
               <Select label="Cost owner" value={res.owner} onChange={(e) => setRes({ ...res, owner: e.target.value })}>{['MERCHANT', 'PLATFORM', 'PROVIDER', 'DRIVER', 'CUSTOMER'].map((o) => <option key={o}>{o}</option>)}</Select>

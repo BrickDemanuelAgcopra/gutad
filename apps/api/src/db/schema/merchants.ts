@@ -60,6 +60,24 @@ export const brands = pgTable('brands', {
   logoUrl: text('logo_url'),
   contentRightsOk: boolean('content_rights_ok').notNull().default(true),
   royaltyBps: integer('royalty_bps').notNull().default(0),
+  /** COMPANY_OWNED | LICENSED | INDEPENDENT | CREATOR */
+  ownershipType: text('ownership_type').notNull().default('INDEPENDENT'),
+  ownerName: text('owner_name'),
+  operatingRights: text('operating_rights'),
+  /** regions the brand may be sold in; empty = anywhere */
+  territoryRegionIds: uuid('territory_region_ids').array().notNull().default([]),
+  contractStart: ts('contract_start'),
+  contractEnd: ts('contract_end'),
+  /** ACTIVE | SUSPENDED | EXPIRED — anything but ACTIVE stops sales */
+  rightsStatus: text('rights_status').notNull().default('ACTIVE'),
+  rightsNote: text('rights_note'),
+  /** channels the brand may be sold through; empty = all */
+  authorizedChannels: text('authorized_channels').array().notNull().default([]),
+  /** [{ type: 'BPS'|'PER_ITEM'|'TIERED', bps?, cents?, tiers?: [{ uptoCents, bps }], channel?, minGuaranteeCents? }] */
+  royaltyRules: jsonb('royalty_rules').notNull().default([]),
+  presentationStandards: text('presentation_standards'),
+  /** [{ kind: 'LOGO'|'PHOTO'|'GUIDELINE'|'OTHER', url, label, approved }] */
+  assets: jsonb('assets').notNull().default([]),
   createdAt: createdAt(),
 });
 
@@ -86,6 +104,22 @@ export const locations = pgTable(
     country: text('country').notNull().default('US'),
     /** operating region (admin hierarchy); `region` above is the postal state/province */
     regionId: uuid('region_id'),
+    /** named contacts: [{ name, role, phone, email }] */
+    contacts: jsonb('contacts').notNull().default([]),
+    acceptsKiosk: boolean('accepts_kiosk').notNull().default(false),
+    pickupInstructions: text('pickup_instructions'),
+    parkingInfo: text('parking_info'),
+    courierInstructions: text('courier_instructions'),
+    courierPointLat: doublePrecision('courier_point_lat'),
+    courierPointLng: doublePrecision('courier_point_lng'),
+    autoAccept: boolean('auto_accept').notNull().default(false),
+    /** minutes before an unaccepted order escalates; auto-reject happens at 4× this */
+    acceptTimeoutMinutes: integer('accept_timeout_minutes').notNull().default(5),
+    /** controlled restart: temporary throttle until this time */
+    rampThrottlePer15m: integer('ramp_throttle_per_15m'),
+    rampUntil: ts('ramp_until'),
+    readinessApprovedAt: ts('readiness_approved_at'),
+    readinessApprovedById: uuid('readiness_approved_by_id'),
     lat: doublePrecision('lat'),
     lng: doublePrecision('lng'),
     timezone: text('timezone').notNull().default('America/New_York'),

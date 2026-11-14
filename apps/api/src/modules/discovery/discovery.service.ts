@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
-import { brands, deliveryZones, experiences, locations, menus, openingHours, publications, shifts, sponsoredPlacements } from '../../db/schema';
+import { brands, deliveryZones, experiences, locations, menus, openingHours, publications, shifts, sponsoredPlacements, locationClosures } from '../../db/schema';
 import { RedisService } from '../../core/redis.service';
 import { haversineKm, isWithin, localParts, pointInPolygon } from '../../common/utils';
 import { can, EntitlementsService, type Entitlements } from '../entitlements/entitlements.service';
@@ -61,10 +61,11 @@ export class DiscoveryService {
     const now = new Date();
     const sponsored = await this.activeSponsored(p.city, p.q);
 
+    const closedIds = new Set(ids.length ? (await this.db.select({ id: locationClosures.locationId }).from(locationClosures).where(and(inArray(locationClosures.locationId, ids), sql`${locationClosures.startsAt} <= now()`, sql`${locationClosures.endsAt} > now()`, eq(locationClosures.kind, 'CLOSED')))).map((c) => c.id) : []);
     let items = rows.map((loc) => {
       const lp = localParts(now, loc.timezone);
       const todays = hours.filter((h) => h.locationId === loc.id && h.dayOfWeek === lp.dayOfWeek);
-      const isOpenNow = !loc.isPaused && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
+      const isOpenNow = !loc.isPaused && !closedIds.has(loc.id) && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
       const distanceKm = p.lat !== undefined && p.lng !== undefined && loc.lat !== null && loc.lng !== null ? haversineKm(p.lat, p.lng, loc.lat, loc.lng) : null;
       const sp = sponsored.find((s) => s.locationId === loc.id);
       const e = ents.get(loc.id);
@@ -182,7 +183,8 @@ export class DiscoveryService {
     const pubs = await this.db.select().from(publications).where(and(eq(publications.locationId, loc.id), eq(publications.isActive, true)));
     const lp = localParts(new Date(), loc.timezone);
     const todays = hours.filter((h) => h.dayOfWeek === lp.dayOfWeek);
-    const isOpenNow = !loc.isPaused && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
+    const [closedNow] = await this.db.select({ kind: locationClosures.kind }).from(locationClosures).where(and(eq(locationClosures.locationId, loc.id), sql`${locationClosures.startsAt} <= now()`, sql`${locationClosures.endsAt} > now()`, eq(locationClosures.kind, 'CLOSED'))).limit(1);
+    const isOpenNow = !loc.isPaused && !closedNow && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
     const e = await this.entitlements.forLocation(loc.id);
     const result = {
       ...this.masked(this.summary(loc), e),
@@ -193,6 +195,10 @@ export class DiscoveryService {
       diningShifts: (can(e, 'reservations') ? shiftRows : []).map((s) => ({ id: s.id, name: s.name, daysOfWeek: s.daysOfWeek, startTime: s.startTime, endTime: s.endTime, maxPartySize: s.maxPartySize })),
       experiences: (can(e, 'experiences') ? exps : []).map((e) => ({ id: e.id, name: e.name, description: e.description, pricingMode: e.pricingMode, priceCents: e.priceCents, imageUrl: e.imageUrl })),
       partnerLinks: pubs.filter((p) => p.kind === 'PARTNER_LINK').map((p) => ({ id: p.id, partnerName: p.partnerName })),
+      pickupInstructions: loc.pickupInstructions,
+      parkingInfo: loc.parkingInfo,
+      acceptsKiosk: loc.acceptsKiosk,
+      closures: await this.db.select({ kind: locationClosures.kind, startsAt: locationClosures.startsAt, endsAt: locationClosures.endsAt, opens: locationClosures.opens, closes: locationClosures.closes, service: locationClosures.service, reason: locationClosures.reason }).from(locationClosures).where(and(eq(locationClosures.locationId, loc.id), sql`${locationClosures.endsAt} > now()`, sql`${locationClosures.startsAt} < now() + interval '30 days'`)).orderBy(locationClosures.startsAt),
     };
     await this.redis.setJson(`loc:${slugOrId}`, result, 30);
     return result;

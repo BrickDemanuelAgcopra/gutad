@@ -40,6 +40,7 @@ const docColumns = {
   status: merchantDocuments.status,
   reviewNote: merchantDocuments.reviewNote,
   reviewedAt: merchantDocuments.reviewedAt,
+  expiresAt: merchantDocuments.expiresAt,
   createdAt: merchantDocuments.createdAt,
 };
 
@@ -83,7 +84,7 @@ export class OnboardingService {
     if (!c) out.push('no Order Form assigned (Admin > Commercial: assign contract)');
     else if (!c.signedAt) out.push('Order Form not signed by the merchant');
     const req = this.requiredStatus(await this.documents(orgId)).filter((r) => r.required && r.status !== 'APPROVED');
-    for (const r of req) out.push(`${r.label}: ${r.status === 'MISSING' ? 'not uploaded' : r.status === 'SUBMITTED' ? 'awaiting review' : 'rejected, re-upload needed'}`);
+    for (const r of req) out.push(`${r.label}: ${r.status === 'MISSING' ? 'not uploaded' : r.status === 'SUBMITTED' ? 'awaiting review' : r.status === 'EXPIRED' ? 'expired, upload a current one' : 'rejected, re-upload needed'}`);
     return out;
   }
 
@@ -163,10 +164,10 @@ export class OnboardingService {
     return d;
   }
 
-  async review(user: JwtPayload, docId: string, status: 'APPROVED' | 'REJECTED', note?: string) {
+  async review(user: JwtPayload, docId: string, status: 'APPROVED' | 'REJECTED', note?: string, expiresAt?: Date | null) {
     if (!isPlatformStaff(user)) throw new ForbiddenException('Platform staff only');
     if (status === 'REJECTED' && !note) throw new BadRequestException('Tell the merchant why the document was rejected');
-    const [row] = await this.db.update(merchantDocuments).set({ status, reviewNote: note ?? null, reviewedById: user.sub, reviewedAt: new Date() }).where(eq(merchantDocuments.id, docId)).returning(docColumns);
+    const [row] = await this.db.update(merchantDocuments).set({ status, reviewNote: note ?? null, reviewedById: user.sub, reviewedAt: new Date(), expiresAt: status === 'APPROVED' ? expiresAt ?? null : null, expiryNotifiedAt: null }).where(eq(merchantDocuments.id, docId)).returning(docColumns);
     if (!row) throw new NotFoundException();
     await this.audit.log({ organizationId: row.organizationId, actorId: user.sub, action: `document.${status.toLowerCase()}`, entityType: 'merchant_document', entityId: docId, after: { status, note } });
     return row;

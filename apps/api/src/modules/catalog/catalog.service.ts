@@ -1,12 +1,14 @@
 import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, eq, inArray } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
-import { brands, itemModifierGroups, locations, menuCategories, menuItems, menus, modifierGroups, modifierOptions } from '../../db/schema';
-import { assertOrgAccess, JwtPayload, MANAGER_ROLES } from '../../common/auth';
+import { brands, changeRequests, itemModifierGroups, locations, menuCategories, menuItems, menus, modifierGroups, modifierOptions } from '../../db/schema';
+import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
 import { localParts } from '../../common/utils';
 import { ApprovalsService } from '../security/approvals.service';
+import { SettingsService } from '../../core/settings.service';
+import { brandSellable } from '../../common/brand-rules';
 
 type Channel = (typeof menus.channels.enumValues)[number];
 
@@ -28,7 +30,7 @@ export interface ResolvedItem {
 
 @Injectable()
 export class CatalogService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly approvals: ApprovalsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly approvals: ApprovalsService, private readonly settings: SettingsService) {}
 
   onModuleInit() {
     this.approvals.register('PRICE_CHANGE', {
@@ -56,8 +58,11 @@ export class CatalogService implements OnModuleInit {
         (!m.availableFrom || lp.hhmm >= m.availableFrom) &&
         (!m.availableUntil || lp.hhmm < m.availableUntil),
     );
+    const brandIds = [...new Set(visible.map((m) => m.brandId).filter((x): x is string => !!x))];
+    const brandRows = brandIds.length ? await this.db.select().from(brands).where(inArray(brands.id, brandIds)) : [];
+    const sellable = visible.filter((m) => { const b = brandRows.find((x) => x.id === m.brandId); return !b || brandSellable(b, loc.regionId, channel, at); });
     const out = [];
-    for (const m of visible) out.push(await this.buildMenu(m, channel));
+    for (const m of sellable) out.push(await this.buildMenu(m, channel));
     return out;
   }
 
@@ -207,6 +212,17 @@ export class CatalogService implements OnModuleInit {
     assertOrgAccess(user, found.menu.organizationId, found.menu.locationId, MANAGER_ROLES);
     const { id: _i, categoryId: _c, reason, ...safe } = input as typeof input & { reason?: string };
     let approval = null;
+    // 5.2 — when review is on, merchant edits to customer-facing content wait for Gutad review
+    let changeRequest = null;
+    const review = await this.settings.getObject('merchants.review_changes', { menu: false, business: false });
+    if (review.menu && !isPlatformStaff(user)) {
+      const keys = (['name', 'description', 'imageUrl', 'allergens', 'dietaryTags', 'priceCents'] as const).filter((k) => safe[k] !== undefined && JSON.stringify(safe[k]) !== JSON.stringify(found.item[k]));
+      if (keys.length) {
+        const changes = Object.fromEntries(keys.map((k) => [k, safe[k]]));
+        [changeRequest] = await this.db.insert(changeRequests).values({ organizationId: found.menu.organizationId, locationId: found.menu.locationId, kind: 'MENU_ITEM', targetId: itemId, summary: `${found.item.name}: ${keys.join(', ')}`, changes, before: Object.fromEntries(keys.map((k) => [k, found.item[k]])), requestedById: user.sub }).returning();
+        for (const k of keys) delete safe[k];
+      }
+    }
     if (safe.priceCents !== undefined && safe.priceCents !== found.item.priceCents) {
       const t = await this.approvals.thresholds();
       const changeBps = found.item.priceCents ? Math.abs(safe.priceCents - found.item.priceCents) * 10000 / found.item.priceCents : 10000;
@@ -219,7 +235,7 @@ export class CatalogService implements OnModuleInit {
     const [item] = Object.keys(safe).length ? await this.db.update(menuItems).set(safe).where(eq(menuItems.id, itemId)).returning() : [found.item];
     await this.audit.log({ organizationId: found.menu.organizationId, actorId: user.sub, action: 'menu_item.update', entityType: 'menu_item', entityId: itemId, before: Object.fromEntries(Object.keys(safe).map((k) => [k, (found.item as Record<string, unknown>)[k]])), after: safe });
     await this.invalidate(found.menu.locationId);
-    return approval ? { ...item, approval } : item;
+    return approval || changeRequest ? { ...item, approval, changeRequest } : item;
   }
 
   /** Sold-out controls — any staff member can flip these from the tablet. */

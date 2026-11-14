@@ -83,6 +83,12 @@ export function render(template: string, p: Record<string, unknown>): Rendered {
       return sub(`About your order ${p.number}`, String(p.body || ''));
     case 'ops.alert':
       return sub(`[${p.severity}] ${p.title}`, `${p.title}${p.detail ? `\n${p.detail}` : ''}${p.escalated ? `\nEscalated (level ${p.level}).` : ''}`);
+    case 'document.expiring':
+      return sub(p.expired ? `Your ${p.docType} has expired` : `Your ${p.docType} expires soon`, p.expired ? `Your ${p.docType} on file with Gutad has expired. Upload a current one in Onboarding to keep selling.` : `Your ${p.docType} expires on ${when(p.expiresAt)}. Upload the renewed document in Onboarding before then.`);
+    case 'change.reviewed':
+      return sub(p.approved ? 'Your change is live' : 'Your change was not approved', p.approved ? `Gutad approved: ${p.summary}.` : `Gutad did not approve: ${p.summary}. ${p.note || ''}`);
+    case 'case.reply':
+      return sub('Gutad support replied', `About your ${String(p.category).toLowerCase().replace(/_/g, ' ')} case: ${p.body}`);
     case 'approval.requested':
       return sub(`Approval needed: ${p.summary}`, `${p.requester} asked for approval: ${p.summary}${p.amountCents ? ` (${money(p.amountCents as number)})` : ''}. Reason: ${p.reason}. Review it in Admin → Approvals.`);
     case 'approval.decided':

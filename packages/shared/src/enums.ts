@@ -11,6 +11,7 @@ export const Channel = {
   CAMPUS: 'CAMPUS',
   CORPORATE: 'CORPORATE',
   API: 'API',
+  KIOSK: 'KIOSK',
 } as const;
 export type Channel = (typeof Channel)[keyof typeof Channel];
 

@@ -1,7 +1,8 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, inArray, lte } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { locations, openingHours, platformSettings, quotes } from '../../db/schema';
+import { brands, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
+import { brandSellable } from '../../common/brand-rules';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
 import { DeliveryService } from '../delivery/delivery.service';
@@ -89,6 +90,8 @@ export class QuoteService {
     // items & modifiers
     const items = await this.catalog.resolveItems(loc.id, input.channel, input.lines.map((l) => l.menuItemId));
     const eligibleBrands = await this.kitchen.eligibleBrands(loc.id, tx);
+    const brandIds = [...new Set([...items.values()].map((i) => i.brandId).filter((x): x is string => !!x))];
+    const brandRows = new Map((brandIds.length ? await tx.select().from(brands).where(inArray(brands.id, brandIds)) : []).map((b) => [b.id, b]));
     const snapLines: QuoteSnapshotLine[] = [];
     for (const l of input.lines) {
       const item = items.get(l.menuItemId);
@@ -96,6 +99,10 @@ export class QuoteService {
       if (item.soldOut) throw new BadRequestException(`${item.name} is sold out`);
       if (l.quantity < 1 || l.quantity > 50) throw new BadRequestException('Quantity must be 1–50');
       if (item.brandId && eligibleBrands.length && !eligibleBrands.some((b) => b.id === item.brandId)) throw new BadRequestException(`${item.name} is from a brand not served at this kitchen`);
+      if (item.brandId) {
+        const b = brandRows.get(item.brandId);
+        if (b && !brandSellable(b, loc.regionId, input.channel)) throw new BadRequestException({ message: `${item.name} (${b.name}) is not available here right now`, code: 'BRAND_NOT_AVAILABLE' });
+      }
       const mods = this.resolveModifiers(item, l.modifierOptionIds || []);
       const modifiersCents = mods.reduce((a, m) => a + m.priceCents, 0);
       snapLines.push({ menuItemId: item.id, name: item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions });
@@ -262,6 +269,10 @@ export class QuoteService {
   }
 
   private async openAt(loc: typeof locations.$inferSelect, at: Date, tx: DbOrTx): Promise<boolean> {
+    // holiday closures, temporary closures and special hours override regular hours
+    const closure = (await tx.select().from(locationClosures).where(and(eq(locationClosures.locationId, loc.id), lte(locationClosures.startsAt, at), gt(locationClosures.endsAt, at), inArray(locationClosures.service, ['ALL', 'ORDERING']))).orderBy(locationClosures.createdAt))[0];
+    if (closure?.kind === 'CLOSED') return false;
+    if (closure?.kind === 'SPECIAL_HOURS' && closure.opens && closure.closes) return isWithin(localParts(at, loc.timezone).hhmm, closure.opens, closure.closes);
     const hours = await tx.select().from(openingHours).where(and(eq(openingHours.locationId, loc.id)));
     if (!hours.length) return true; // no hours configured = always open (pilot default)
     const lp = localParts(at, loc.timezone);

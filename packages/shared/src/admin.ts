@@ -107,7 +107,13 @@ export const ADMIN_MODULES: AdminModule[] = [
   { key: 'live', group: 'Operations', label: 'Live operations', description: 'Orders by stage, overdue orders, kitchen capacity, couriers, stockouts and outages', permission: 'ops.read', web: '/admin/live', mobile: '/ops/live' },
   { key: 'alerts', group: 'Operations', label: 'Alerts', description: 'Owned alerts with escalation deadlines and history', permission: 'ops.read', web: '/admin/alerts', mobile: '/ops/alerts' },
   { key: 'orders', group: 'Operations', label: 'Orders', description: 'Search every order; timeline, payments, kitchen, delivery, notes and remedies', permission: 'orders.read', web: '/admin/orders', mobile: '/ops/orders' },
-  { key: 'merchants', group: 'Merchants', label: 'Merchants & verification', description: 'Tenants, verification queues, documents and contracts', permission: 'merchants.read', web: '/admin/merchants' },
+  { key: 'merchants', group: 'Merchants', label: 'Merchants & verification', description: 'Tenants, verification queues, documents and contracts', permission: 'merchants.read', web: '/admin/merchants', mobile: '/ops/merchants' },
+  { key: 'pipeline', group: 'Merchants', label: 'Pipeline & onboarding', description: 'Applications, sales pipeline, onboarding progress and account managers', permission: 'merchants.read', web: '/admin/pipeline' },
+  { key: 'locations', group: 'Operations', label: 'Locations', description: 'Hours, closures, channels, stations, launch checklist, emergency pause and restart', permission: 'merchants.read', web: '/admin/locations', mobile: '/ops/locations' },
+  { key: 'availability', group: 'Operations', label: 'Availability', description: 'Sold-out items, paused stores and stations down across merchants', permission: 'ops.read', web: '/admin/availability' },
+  { key: 'changes', group: 'Merchants', label: 'Change requests', description: 'Merchant menu and business-information changes waiting for review', permission: 'merchants.read', web: '/admin/changes' },
+  { key: 'performance', group: 'Merchants', label: 'Merchant performance', description: 'Acceptance, cancellations, prep time, lateness and errors by location', permission: 'merchants.read', web: '/admin/performance' },
+  { key: 'brands', group: 'Merchants', label: 'Brands & partners', description: 'Ownership, rights, territories, channels, royalties, assets, reviews and statements', permission: 'catalog.read', web: '/admin/brands', mobile: '/ops/brands' },
   { key: 'approvals', group: 'Overview', label: 'Approvals', description: 'Refunds, bank changes, payouts and settings waiting for a decision', permission: 'approvals.decide', web: '/admin/approvals', mobile: '/ops/approvals' },
   { key: 'plans', group: 'Merchants', label: 'Plans & pricing', description: 'Plan catalog, add-ons, subscriptions, promotions, revenue', permission: 'finance.read', web: '/admin/plans' },
   { key: 'finance', group: 'Finance', label: 'Settlement', description: 'Close periods, payouts, reconciliation', permission: 'finance.read', web: '/admin/finance' },
@@ -131,6 +137,7 @@ export const MERCHANT_PAGE_ROLES: Record<string, Role[]> = {
   '/merchant/host': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'HOST'],
   '/merchant/dispatch': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'DISPATCHER'],
   '/merchant/shift': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF'],
+  '/merchant/support': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF'],
 };
 /** Pages not listed above are for owners and managers only. */
 export function merchantPageAllowed(path: string, roles: readonly string[]): boolean {

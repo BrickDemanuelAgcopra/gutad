@@ -13,3 +13,4 @@ export * from './onboarding';
 export * from './plans';
 export * from './security';
 export * from './ops';
+export * from './merchant-admin';

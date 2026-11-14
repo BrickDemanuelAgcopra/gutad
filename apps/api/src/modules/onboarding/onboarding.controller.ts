@@ -9,7 +9,7 @@ import { DOCUMENT_TYPES, MAX_DOCUMENT_BYTES, MERCHANT_AGREEMENT_VERSION, Onboard
 
 const AcceptDto = z.object({ agreementVersion: z.string(), signatureName: z.string().min(2).max(120), signatureTitle: z.string().max(120).optional(), contractId: z.string().uuid().optional() });
 const UploadDto = z.object({ docType: z.string(), locationId: z.string().uuid().optional().or(z.literal('').transform(() => undefined)) });
-const ReviewDto = z.object({ status: z.enum(['APPROVED', 'REJECTED']), note: z.string().max(1000).optional() });
+const ReviewDto = z.object({ status: z.enum(['APPROVED', 'REJECTED']), note: z.string().max(1000).optional(), expiresAt: z.string().datetime().nullable().optional() });
 
 @ApiTags('02 Merchant onboarding')
 @ApiBearerAuth()
@@ -42,7 +42,7 @@ export class OnboardingController {
     res.send(d.content);
   }
 
-  @Post('documents/:id/review') review(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ReviewDto)) b: z.infer<typeof ReviewDto>) { return this.svc.review(u, id, b.status, b.note); }
+  @Post('documents/:id/review') review(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ReviewDto)) b: z.infer<typeof ReviewDto>) { return this.svc.review(u, id, b.status, b.note, b.expiresAt ? new Date(b.expiresAt) : null); }
 
   @Get('admin/onboarding/documents') queue(@CurrentUser() u: JwtPayload) { return this.svc.reviewQueue(u); }
 }

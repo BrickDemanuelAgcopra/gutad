@@ -36,7 +36,9 @@ export class SupportService implements OnModuleInit {
       if (o.userId !== user.sub) assertOrgAccess(user, o.organizationId, o.locationId);
     }
     const defaultOwner = input.category === 'LATE' || input.category === 'NO_HANDOFF' || input.category === 'WRONG_ADDRESS' ? 'PROVIDER' : input.category === 'MISSING_ITEM' || input.category === 'DAMAGED' ? 'MERCHANT' : 'PLATFORM';
-    const [i] = await this.db.insert(incidents).values({ orderId: input.orderId ?? null, reservationId: input.reservationId ?? null, deliveryJobId: input.deliveryJobId ?? null, reporterId: user.sub, category: input.category, description: input.description, evidence: input.evidence || [], owner: defaultOwner }).returning();
+    const [ord] = input.orderId ? await this.db.select({ organizationId: orders.organizationId, userId: orders.userId }).from(orders).where(eq(orders.id, input.orderId)).limit(1) : [null];
+    const reporterType = ord && ord.userId === user.sub ? 'CUSTOMER' : ord && user.orgs?.[ord.organizationId] ? 'MERCHANT' : isPlatformStaff(user) ? 'STAFF' : user.roles.includes('DRIVER') ? 'DRIVER' : 'CUSTOMER';
+    const [i] = await this.db.insert(incidents).values({ orderId: input.orderId ?? null, reservationId: input.reservationId ?? null, deliveryJobId: input.deliveryJobId ?? null, organizationId: ord?.organizationId ?? null, reporterId: user.sub, reporterType, category: input.category, description: input.description, evidence: input.evidence || [], owner: defaultOwner }).returning();
     return i;
   }
 

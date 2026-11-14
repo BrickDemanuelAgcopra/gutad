@@ -6,6 +6,7 @@ import { FeeList, planPrice } from '@/components/plan-ui';
 import { api, money, session } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input } from '@/components/ui';
+import { ApplyForm } from '@/components/merchant-extras';
 
 /** Self-service merchant onboarding: account → organization → first location (claim or create). */
 export default function ForRestaurants() {
@@ -39,6 +40,7 @@ export default function ForRestaurants() {
         ))}</div>
         <Link className="mt-3 inline-block text-sm font-medium text-brand-600 underline" href="/pricing">Compare plans and features</Link>
         <p className="mt-3 text-xs text-ink-300">Published benchmarks for pilots; commercial terms are set per contract by Gutad.</p>
+        <div className="mt-6"><ApplyForm /></div>
       </div>
       <Card title="Claim or create your listing">
         <div className="space-y-2">

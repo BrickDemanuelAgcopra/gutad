@@ -24,6 +24,11 @@ export default function RootLayout() {
         <Stack.Screen name="ops/alerts" options={{ title: 'Alerts' }} />
         <Stack.Screen name="ops/orders" options={{ title: 'Orders' }} />
         <Stack.Screen name="ops/order/[id]" options={{ title: 'Order' }} />
+        <Stack.Screen name="ops/locations" options={{ title: 'Locations' }} />
+        <Stack.Screen name="ops/merchants" options={{ title: 'Merchants' }} />
+        <Stack.Screen name="ops/brands" options={{ title: 'Brands & partners' }} />
+        <Stack.Screen name="merchant/support" options={{ title: 'Support' }} />
+        <Stack.Screen name="merchant/location" options={{ title: 'Location & launch' }} />
         <Stack.Screen name="ops/approvals" options={{ title: 'Approvals' }} />
         <Stack.Screen name="ops/security" options={{ title: 'Staff & access' }} />
         <Stack.Screen name="ops/audit" options={{ title: 'Audit history' }} />

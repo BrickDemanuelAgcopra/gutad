@@ -12,11 +12,13 @@ import {
   referralEvents,
   reservationPolicies,
   users,
+  changeRequests,
 } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES, RoleName, staffCovers } from '../../common/auth';
 import { isStaffRole } from '@gutad/shared';
 import { ApprovalsService } from '../security/approvals.service';
+import { SettingsService } from '../../core/settings.service';
 import { shortCode, slugify, token } from '../../common/utils';
 import { loadConfig } from '../../config/config';
 import { RedisService } from '../../core/redis.service';
@@ -27,7 +29,7 @@ type Fleet = 'MERCHANT' | 'PARTNER' | 'PLATFORM';
 
 @Injectable()
 export class MerchantsService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly onboarding: OnboardingService, private readonly entitlements: EntitlementsService, private readonly approvals: ApprovalsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly onboarding: OnboardingService, private readonly entitlements: EntitlementsService, private readonly approvals: ApprovalsService, private readonly settings: SettingsService) {}
 
   onModuleInit() {
     this.approvals.register('BANK_ACCOUNT_CHANGE', {
@@ -237,11 +239,22 @@ export class MerchantsService implements OnModuleInit {
       delete safe.deliveryFleet;
       delete safe.platformOperated;
     }
+    let changeRequest = null;
+    const review = await this.settings.getObject('merchants.review_changes', { menu: false, business: false });
+    if (review.business && !isPlatformStaff(user)) {
+      const keys = (['name', 'description', 'addressLine1', 'addressLine2', 'city', 'region', 'postalCode', 'phone', 'email', 'heroImageUrl', 'cuisine'] as const).filter((k) => safe[k] !== undefined && JSON.stringify(safe[k]) !== JSON.stringify(loc[k]));
+      if (keys.length) {
+        const changes = Object.fromEntries(keys.map((k) => [k, safe[k]]));
+        [changeRequest] = await this.db.insert(changeRequests).values({ organizationId: loc.organizationId, locationId, kind: 'LOCATION_INFO', targetId: locationId, summary: `${loc.name}: ${keys.join(', ')}`, changes, before: Object.fromEntries(keys.map((k) => [k, loc[k]])), requestedById: user.sub }).returning();
+        for (const k of keys) delete safe[k];
+      }
+    }
+    if (!Object.keys(safe).length) return { ...loc, changeRequest };
     const [row] = await this.db.update(locations).set(safe).where(eq(locations.id, locationId)).returning();
     await this.redis.del(`loc:${loc.slug}`);
     await this.redis.del(`loc:${loc.id}`);
     await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: 'location.update', entityType: 'location', entityId: locationId, before: loc, after: row });
-    return row;
+    return changeRequest ? { ...row, changeRequest } : row;
   }
 
   // ───── delivery option approval (who delivers) ─────
@@ -301,6 +314,10 @@ export class MerchantsService implements OnModuleInit {
     if (status === 'SUSPENDED' || status === 'OFFBOARDED') {
       if (!isPlatformStaff(user)) throw new ForbiddenException('Platform staff only');
     } else assertOrgAccess(user, loc.organizationId, locationId, MANAGER_ROLES);
+    // first launch needs the launch checklist signed off (3.6); reopening a location that was live before does not
+    if (status === 'LIVE' && ['VERIFIED', 'CLAIMED', 'ONBOARDING'].includes(loc.status) && !loc.readinessApprovedAt && (await this.settings.get<boolean>('launch.require_readiness', true))) {
+      throw new BadRequestException({ message: 'Launch readiness has not been approved yet (Admin → Locations → Launch checklist)', code: 'READINESS_REQUIRED' });
+    }
     if (status === 'LIVE' && !loc.verifiedAt) throw new BadRequestException('Location must be verified before going live');
     const [row] = await this.db
       .update(locations)

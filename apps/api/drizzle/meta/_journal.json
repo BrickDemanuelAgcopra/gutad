@@ -57,6 +57,13 @@
       "when": 1794612803567,
       "tag": "0007_ops_alerts_notes",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794614367402,
+      "tag": "0008_merchant_admin",
+      "breakpoints": true
     }
   ]
 }

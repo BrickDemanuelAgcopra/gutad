@@ -31,44 +31,10 @@ Phase B shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase C: locations, merchants, brands
 
-### 3. Food hall & location management
-- [ ] 3.1 [improve] Location contacts (named list), coordinates, timezone and operating status editable in admin · API W M
-- [ ] 3.2 [new] Holiday schedules and special hours for ordering (not only reservations), temporary closures with a scheduled reopening time · API W M
-- [ ] 3.3 [improve] Channel availability: delivery, pickup, dine-in, **kiosk** flags · API W M
-- [ ] 3.4 [improve] Brands and menus offered per location (assignment view) · API W M
-- [ ] 3.5 [new] Station capacity (concurrent tickets), equipment availability, maximum orders per 15 minutes · API W M
-- [ ] 3.6 [new] Launch checklist (configurable items) with sign-offs and a readiness approval before LIVE · API W M
-- [ ] 3.7 [new] Pickup instructions, parking details, courier collection point (shown to customers and couriers) · API W M
-- [ ] 3.8 [improve] Emergency pause from admin (single location or region) and a controlled restart (checklist, throttle ramp-up) · API W M
-
-### 4. Merchant onboarding & lifecycle
-- [ ] 4.1 [new] Merchant applications and a sales pipeline (lead → contacted → applied → approved → onboarding → live, or lost) · API W M
-- [ ] 4.2 [improve] Business identity, owners/beneficial owners, contacts, payout-information collection · API W
-- [ ] 4.3 [improve] Document expiry dates, an expiry reminder job, an outstanding-requirements list · API W M
-- [ ] 4.4 [improve] Contract version history and negotiated terms view, acceptance records in admin · W
-- [ ] 4.5 [improve] Participating locations and designated merchant admins managed from admin · API W
-- [ ] 4.6 [new] Onboarding checklist: menu import, operational setup, training, test order (with an automatic test-order check) · API W M
-- [ ] 4.7 [improve] Workflows for approve, activate, suspend, terminate and **reinstate**, with reasons and history · API W M
-- [ ] 4.8 [new] Onboarding progress percentage and account-manager assignment · API W M
-
-### 5. Merchant portal administration
-- [ ] 5.1 [improve] Admin creates merchant accounts and assigns location access (members screen in admin) · API W
-- [ ] 5.2 [new] Change-request review: merchant-submitted menu and business-information changes wait for approval when the setting is on · API W M
-- [ ] 5.3 [improve] Order acceptance settings (auto-accept, acceptance timeout) and prep-time settings · API W M
-- [ ] 5.4 [improve] Admin view of temporary item unavailability and store pauses across merchants · API W M
-- [ ] 5.5 [improve] Order, fee, refund and settlement statement lines per order for merchants · API W
-- [ ] 5.6 [new] Merchant support cases: merchants open cases, see complaints and disputes about them, and respond · API W M
-- [ ] 5.7 [new] Merchant performance ranking: acceptance rate, cancellation rate, average prep time, error rate · API W M
-
-### 6. Brand ownership & culinary partnerships
-- [ ] 6.1 [new] Brand ownership type: COMPANY_OWNED, LICENSED, INDEPENDENT, CREATOR · API W M
-- [ ] 6.2 [new] Brand rights: owner, operating rights, territories (regions), contract start and end dates · API W
-- [ ] 6.3 [improve] Royalty and revenue-share rules (bps, per-item cents, tiers, minimum guarantee) instead of a flat bps · API W
-- [ ] 6.4 [improve] Brand → authorized kitchens and distribution channels · API W
-- [ ] 6.5 [new] Brand asset library (logo, photos, guidelines) and presentation standards · API W
-- [ ] 6.6 [new] Partner recipe approvals and quality reviews (score, notes, pass/fail) · API W M
-- [ ] 6.7 [new] Partner performance and earnings statements · API W M
-- [ ] 6.8 [improve] Automatic stop-sell when rights expire or are suspended (job + quote check) · API W M
+Phase C shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 5.1-L [improve] Location picker and approval limit when inviting merchant staff from the admin merchant page; the API accepts them, the admin form does not show them yet · W
+- [ ] 6.3-S [improve] Settlement royalty accrual (`ProgramsService.accrueRoyalties`) uses the brand royalty rules instead of the flat bps (with 19.3) · API
+- [ ] 4.3-T [verify] Smoke check for document expiry (needs a document upload in the smoke run) · API
 
 ---
 

@@ -56,6 +56,11 @@ export const incidents = pgTable('incidents', {
   orderId: uuid('order_id').references(() => orders.id),
   reservationId: uuid('reservation_id').references(() => reservations.id),
   deliveryJobId: uuid('delivery_job_id'),
+  /** merchant the case is about or raised by (merchant support cases) */
+  organizationId: uuid('organization_id'),
+  paymentId: uuid('payment_id'),
+  /** CUSTOMER | MERCHANT | DRIVER | STAFF */
+  reporterType: text('reporter_type').notNull().default('CUSTOMER'),
   reporterId: uuid('reporter_id').references(() => users.id),
   category: text('category').notNull(), // MISSING_ITEM | LATE | DAMAGED | NO_HANDOFF | WRONG_ADDRESS | CHARGEBACK | NO_SHOW_DISPUTE | OTHER
   description: text('description').notNull(),

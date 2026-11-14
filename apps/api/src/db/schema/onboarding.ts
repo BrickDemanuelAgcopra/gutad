@@ -43,7 +43,9 @@ export const merchantDocuments = pgTable(
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     content: bytea('content').notNull(),
-    status: text('status').notNull().default('SUBMITTED'), // SUBMITTED | APPROVED | REJECTED
+    status: text('status').notNull().default('SUBMITTED'), // SUBMITTED | APPROVED | REJECTED | EXPIRED
+    expiresAt: ts('expires_at'),
+    expiryNotifiedAt: ts('expiry_notified_at'),
     reviewNote: text('review_note'),
     reviewedById: uuid('reviewed_by_id').references(() => users.id),
     reviewedAt: ts('reviewed_at'),

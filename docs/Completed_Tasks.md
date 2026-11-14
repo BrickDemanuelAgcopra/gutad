@@ -141,3 +141,87 @@ Verification:
   - canceled with a courier still assigned
   - **API W M**
 - **12.9** Order notes (internal, or customer-visible, which sends the `order.message` notification) and approved response templates (`message_templates`, six seeded; `{{number}}` and `{{name}}` are filled in; editable via `POST /admin/message-templates`). The detail page lists the messages sent. **W M**
+
+## Phase C: locations, merchants, brands (shipped 2026-11-13)
+
+Verification:
+- Typecheck is clean for API, web and mobile.
+- `next build`: OK.
+- `npm run smoke` on a fresh database: **250/250 checks pass**, including 31 new Phase C checks in `scripts/smoke-admin-c.mjs`.
+- Migration `0008_merchant_admin.sql`:
+  - new tables `location_closures`, `location_launch_items`, `merchant_applications`, `change_requests`, `brand_reviews`, `incident_messages`
+  - new columns on locations, organizations, brands, stations, merchant documents and incidents
+  - `KIOSK` added to the channel enum
+- API module `modules/merchant-admin`: `LocationsAdminService`, `MerchantsAdminService`, `BrandsAdminService`.
+- New worker jobs: restart ramps, document expiry, brand rights expiry.
+
+### 3. Food hall & location management
+- **3.1** Named contacts (`locations.contacts`) alongside address, coordinates, timezone and status. The admin location page shows everything; merchants and staff edit through `PATCH /locations/:id`. **W M**
+- **3.2** `location_closures`: holiday closures, special hours and temporary closures with a reopening time, for ordering, reservations or both.
+  - Quotes refuse orders while closed and use special hours instead of regular hours.
+  - The public page shows upcoming closures, and "open now" respects them.
+  - Quick "close ordering for 1/2/4 h" buttons.
+  - **W** admin location page and merchant Location & launch. **M** merchant `location` screen and `ops/locations`.
+- **3.3** Channel availability flags: pickup, delivery, dine-in and the new **kiosk** flag (`KIOSK` channel added). **W M**
+- **3.4** Brands and menus offered at each location: menus with brand, channels, daypart, item and sold-out counts; brands with ownership, kitchen authorization and stop-sell reason. **W M**
+- **3.5** Stations get a ticket capacity (`max_concurrent`), equipment and an available/down state (`POST /kitchens/:id/stations`). The location's maximum throughput is the existing throttle. **W**
+- **3.6** Launch checklist with 14 items:
+  - Ten are computed automatically: agreement, Order Form, documents, payouts, verified, menu, hours, pickup info, team, test order.
+  - The rest are signed off by a person: training (by the merchant), equipment, photos and signage (by Gutad).
+  - Readiness approval (`POST /admin/locations/:id/readiness`) needs every required item done.
+  - A location cannot go LIVE for the first time until readiness is approved (setting `launch.require_readiness`, default on).
+  - **W M**
+- **3.7** Pickup instructions, parking details and courier collection point (instructions plus coordinates), shown on the public restaurant page. **W M**
+- **3.8** Emergency pause of selected locations or a whole region, with a required reason. It raises a CRITICAL alert, and only Gutad can restart afterwards.
+  - Controlled restart reopens with a temporary throttle (default: a third of the normal one) for a ramp period; a worker clears finished ramps.
+  - **W** `/admin/locations`, location page. **M** `ops/locations`, merchant `location`.
+
+### 4. Merchant onboarding & lifecycle
+- **4.1** `merchant_applications` pipeline: LEAD → CONTACTED → APPLIED → APPROVED → ONBOARDING → LIVE, or LOST (which needs a reason). It keeps a history and an owner.
+  - Public application form on For restaurants (`POST /public/merchant-applications`, deduplicated). Leads can also be added manually.
+  - "Approve & create merchant" provisions the tenant and invites the owner.
+  - **W** `/admin/pipeline`. **M** `ops/merchants`.
+- **4.2** Business identity: beneficial owners (validated to total at most 100%), contacts, website and tax id (`PATCH /organizations/:id/profile`). Payout details stay on the legal seller, and changing them still goes through two-person approval. **W** merchant Location & launch, admin merchant page.
+- **4.3** Document expiry:
+  - The reviewer sets an expiry date when approving (prompted in the admin document queue).
+  - A job marks expired documents EXPIRED and reminds owners once, 30 days before.
+  - Expired documents count as outstanding requirements.
+  - **API W** (test follow-up 4.3-T).
+- **4.4** Contract versions, plan, signature and effective dates, plus Merchant Agreement acceptance records (signer, title, time, IP), on the admin merchant page. **W**
+- **4.5** Participating locations and merchant admins: the team list with invite and remove on the admin merchant page (location-picker follow-up 5.1-L). **W**
+- **4.6** Menu import, operational setup, training and test-order items are part of the launch checklist (3.6). A test order is detected automatically from a completed order, or Gutad can sign it off manually. **W M**
+- **4.7** Lifecycle (`POST /admin/organizations/:id/lifecycle`), each with a reason and kept in history:
+  - Approve, activate.
+  - Suspend: saves each location's state and stops all of them.
+  - Reinstate: restores those states.
+  - Terminate: runs offboarding with commitment checks.
+  - **W M**
+- **4.8** Onboarding progress percentage per merchant, from the checklists, plus the outstanding requirements and account-manager assignment. **W** `/admin/pipeline` → Onboarding, merchant page. **M** `ops/merchants`.
+
+### 5. Merchant portal administration
+- **5.1** Gutad creates merchant accounts (pipeline convert or tenant provisioning) and invites admins and staff from the merchant page. **W**
+- **5.2** `change_requests`: when `merchants.review_changes` is on, merchant edits to menu items (name, description, photo, allergens, dietary tags, price) and business information wait for review.
+  - Approving applies the change through the normal path, so it is audited and the cache is cleared. Rejection needs a note. The merchant is notified either way.
+  - **W** `/admin/changes`. **M** `ops/merchants` → Changes.
+- **5.3** Order acceptance settings: auto-accept for immediate orders, and a per-location acceptance timeout (auto-reject at 4×) used by the escalation job, plus default prep time. **W M**
+- **5.4** Admin view of temporarily unavailable items, paused stores and stations down across merchants, with one-tap fixes. **W** `/admin/availability`. **M** `ops/locations` → Availability.
+- **5.5** Order-by-order statement lines: sales, tax + tip, merchant-funded discounts, commission, processing, merchant-funded refunds and net from the ledger, with totals and CSV export. **W** merchant Finance.
+- **5.6** Merchant support cases:
+  - Merchants open cases and see complaints and disputes about their orders.
+  - Each case has a conversation (`incident_messages`). Staff can reply to the parties or leave internal notes using templates.
+  - A merchant reply to a resolved case re-opens it as an appeal.
+  - **W** merchant Support, admin Support thread. **M** merchant `support`.
+- **5.7** Merchant performance per location: acceptance rate, timeouts, time to accept, cancellation and rejection rate, average prep, lateness and error rate, with red flags. **W** `/admin/performance`. **M** `ops/merchants` → Performance.
+
+### 6. Brand ownership & culinary partnerships
+- **6.1** Ownership type: company-owned, licensed, independent or creator, plus owner/licensor. **W M**
+- **6.2** Operating rights text, territories (regions), contract start and end, and rights status with a note. **W**
+- **6.3** Royalty and revenue-share rules: % of sales, per item, or tiered %, optionally per channel, with a minimum guarantee. Falls back to the flat rate. Computed by `computeRoyalty` (settlement follow-up 6.3-S). **W**
+- **6.4** Brand → authorized kitchens (authorize or revoke) and authorized channels. Quotes and public menus enforce the channel rule. **W**
+- **6.5** Brand asset library (logos and photos with approval) and presentation standards. The brand owner can edit these; rights are Gutad-only. **W**
+- **6.6** `brand_reviews`: recipe approvals, quality reviews and mystery shops with a score and PASS / NEEDS_WORK / FAIL, recorded by culinary or catalog staff only. **W**
+- **6.7** Partner statement per month: sales by channel and location, top items, royalty with its rule breakdown, and quality summary. **W M**
+- **6.8** Stop-sell: a brand stops selling at once when its rights are suspended or expired, its contract has ended, content rights are missing, it is outside its territory, or the channel isn't authorized.
+  - Enforced in public menus and quotes (`BRAND_NOT_AVAILABLE`).
+  - A job expires contracts and raises an alert.
+  - **API W M**

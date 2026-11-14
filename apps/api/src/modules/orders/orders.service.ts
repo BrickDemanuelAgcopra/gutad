@@ -27,6 +27,9 @@ export interface CheckoutInput {
   campusAccountId?: string | null;
 }
 
+/** Internal actor for automatic transitions (auto-accept). */
+const SYSTEM_ACTOR = { sub: null as unknown as string, email: 'system', roles: ['PLATFORM_ADMIN'], orgs: {} } as JwtPayload;
+
 @Injectable()
 export class OrdersService {
   private readonly log = new Logger(OrdersService.name);
@@ -66,9 +69,11 @@ export class OrdersService {
     if (!loc) throw new NotFoundException();
     if (loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new ConflictException(loc.pausedReason || 'Restaurant paused');
     // merchant throttle: max orders per 15 minutes
-    if (loc.orderThrottlePer15m) {
+    const ramp = loc.rampUntil && loc.rampUntil > new Date() && loc.rampThrottlePer15m ? loc.rampThrottlePer15m : null;
+    const throttle = ramp && loc.orderThrottlePer15m ? Math.min(ramp, loc.orderThrottlePer15m) : ramp || loc.orderThrottlePer15m;
+    if (throttle) {
       const n = await this.redis.incrWindow(`throttle:${loc.id}:${Math.floor(Date.now() / 900_000)}`, 900);
-      if (n > loc.orderThrottlePer15m) throw new ConflictException('Restaurant is at capacity; try scheduling for later');
+      if (n > throttle) throw new ConflictException(ramp ? 'Restaurant is reopening gradually; try scheduling for later' : 'Restaurant is at capacity; try scheduling for later');
     }
     const snap = q.snapshot as { lines: QuoteSnapshotLine[]; commissionCents: number; terms: { contractId: string | null; commissionBps: number }; couponId: string | null; creditsCents: number; loyaltyCents: number; deliveryFleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM'; deliveryProviderCostCents: number; platformDeliverySubsidyCents: number; deliveryAddress: Address | null };
     const userId = user?.sub ?? null;
@@ -135,6 +140,10 @@ export class OrdersService {
       await this.outbox.publish('order.submitted', o.id, { number, locationId: loc.id, userId, totalCents: o.totalCents }, tx);
       return o.id;
     });
+    // merchants can switch on auto-accept for immediate (not scheduled) orders
+    if (loc.autoAccept && !q.scheduledFor) {
+      await this.accept(SYSTEM_ACTOR, orderId).catch((e) => this.log.warn(`auto-accept ${orderId} failed: ${(e as Error).message}`));
+    }
     return this.present(orderId);
   }
 
@@ -411,7 +420,8 @@ export class OrdersService {
 
   /** Offline merchant escalation: SUBMITTED orders unacknowledged for > N minutes get escalated (and auto-rejected later). */
   async escalateUnacknowledged(now = new Date()) {
-    const stale = await this.db.select().from(orders).where(and(eq(orders.status, 'SUBMITTED'), lt(orders.createdAt, addMinutes(now, -5)), sql`${orders.scheduledFor} is null`));
+    // per-location acceptance timeout (default 5 min); auto-reject at 4× the timeout
+    const stale = await this.db.select({ o: orders, timeout: locations.acceptTimeoutMinutes }).from(orders).innerJoin(locations, eq(locations.id, orders.locationId)).where(and(eq(orders.status, 'SUBMITTED'), sql`${orders.createdAt} < ${now.toISOString()}::timestamptz - make_interval(mins => ${locations.acceptTimeoutMinutes})`, sql`${orders.scheduledFor} is null`)).then((r) => r.map((x) => Object.assign(x.o, { _timeout: x.timeout })));
     let escalated = 0;
     let rejected = 0;
     for (const o of stale) {
@@ -425,7 +435,7 @@ export class OrdersService {
         await this.outbox.publish('integration.failed', o.id, { kind: 'order.unacknowledged', orderId: o.id, number: o.number, locationId: o.locationId, fallbackPhone: loc?.tabletFallbackPhone, offline });
         escalated++;
       }
-      if (ageMin > 20) {
+      if (ageMin > (o as typeof o & { _timeout: number })._timeout * 4) {
         await this.db.transaction(async (tx) => {
           await tx.update(orders).set({ status: 'REJECTED', rejectReason: 'Restaurant did not respond', canceledAt: now }).where(eq(orders.id, o.id));
           await this.payments.voidForOrder(o.id, tx);
