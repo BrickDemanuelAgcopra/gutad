@@ -543,7 +543,7 @@ Verification:
 - `npm run smoke` on a fresh database: **481/481 checks pass**, including 75 new checks in `scripts/smoke-followups-{a,b,c,d}.mjs`.
 - Migration `0016_followups_all.sql`. New tables: `user_devices`, `location_load_settings`, `printers`, `print_jobs`, `stored_files`, `gl_connections`, `gl_push_batches`, `supplier_access_tokens`, `supplier_invoice_submissions`, `temperature_sensors`, `payroll_connections`, `payroll_export_batches`, `equipment_vendor_links`, `equipment_vendor_events`. New columns on customer restrictions (limit, period), courier documents (stored file), close periods (reopen), coupons (buy/get quantities), member subscriptions (pending plan).
 - External providers are optional adapters that keep today's behaviour until configured: Stripe Elements / hosted setup, TaxJar / Avalara, OSRM / Google / Mapbox routing, QuickBooks / Xero, Gusto / ADP, Rational / Welbilt, S3-compatible storage, ESC/POS network printers. Their real API calls were written against the public API shapes and **have not been run against those services**; the mock / default paths are what the smoke tests cover.
-- Production note: courier document uploads default to local disk inside the API container. Set `STORAGE_DRIVER=s3` with a bucket before relying on uploads in production.
+- Production: courier document uploads go to the bundled private MinIO bucket `gutad-files` (set up by `deploy.sh`, backed up nightly); full smoke 481/481 with `STORAGE_DRIVER=s3` against MinIO.
 - **Fixed:** campaign results no longer drop the newest orders when the database clock runs ahead of the app server; `GIFT_CARD_LIABILITY` was missing from the default GL map (unmapped in the CSV export).
 
 ### Phase A–E follow-ups
