@@ -260,5 +260,10 @@ export const devices = pgTable('devices', {
   isOnline: boolean('is_online').notNull().default(false),
   fallbackOwner: text('fallback_owner'),
   config: jsonb('config').notNull().default({}),
+  /** 23.7 device health */
+  firmwareVersion: text('firmware_version'),
+  appVersion: text('app_version'),
+  lastError: text('last_error'),
+  offlineAlertedAt: ts('offline_alerted_at'),
   createdAt: createdAt(),
 });

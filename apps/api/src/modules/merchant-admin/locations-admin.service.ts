@@ -120,11 +120,11 @@ export class LocationsAdminService {
 
   // ───── 3.5 stations ─────
 
-  async upsertStation(user: JwtPayload, kitchenId: string, input: { id?: string; code: string; name: string; maxConcurrent?: number | null; isAvailable?: boolean; equipment?: string[]; targetMinutes?: number }) {
+  async upsertStation(user: JwtPayload, kitchenId: string, input: { id?: string; code: string; name: string; maxConcurrent?: number | null; isAvailable?: boolean; equipment?: string[]; targetMinutes?: number; requiredSkill?: string | null }) {
     const [k] = await this.db.select().from(kitchens).where(eq(kitchens.id, kitchenId)).limit(1);
     if (!k) throw new NotFoundException('Kitchen not found');
     assertOrgAccess(user, k.organizationId, null, MANAGER_ROLES);
-    const v = { kitchenId, code: input.code.toUpperCase(), name: input.name, maxConcurrent: input.maxConcurrent ?? null, isAvailable: input.isAvailable ?? true, equipment: input.equipment || [], ...(input.targetMinutes ? { targetMinutes: input.targetMinutes } : {}) };
+    const v = { kitchenId, code: input.code.toUpperCase(), name: input.name, maxConcurrent: input.maxConcurrent ?? null, isAvailable: input.isAvailable ?? true, equipment: input.equipment || [], ...(input.targetMinutes ? { targetMinutes: input.targetMinutes } : {}), ...(input.requiredSkill !== undefined ? { requiredSkill: input.requiredSkill ? input.requiredSkill.toUpperCase() : null } : {}) };
     const [row] = input.id ? await this.db.update(stations).set(v).where(and(eq(stations.id, input.id), eq(stations.kitchenId, kitchenId))).returning() : await this.db.insert(stations).values(v).returning();
     await this.audit.log({ organizationId: k.organizationId, actorId: user.sub, action: 'station.upsert', entityType: 'station', entityId: row.id, after: row });
     return row;

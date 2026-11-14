@@ -114,8 +114,11 @@ export class IntegrationsService {
   }
 
   async heartbeat(deviceToken: string, status?: Record<string, unknown>) {
-    const [d] = await this.db.update(devices).set({ lastHeartbeatAt: new Date(), isOnline: true, config: status ? sql`${devices.config} || ${JSON.stringify({ lastStatus: status })}::jsonb` : undefined }).where(eq(devices.token, deviceToken)).returning();
+    const s = (status || {}) as { firmware?: string; firmwareVersion?: string; appVersion?: string; app?: string; error?: string };
+    const [d] = await this.db.update(devices).set({ lastHeartbeatAt: new Date(), isOnline: true, offlineAlertedAt: null, ...(s.firmware || s.firmwareVersion ? { firmwareVersion: s.firmware || s.firmwareVersion } : {}), ...(s.appVersion ? { appVersion: s.appVersion } : {}), lastError: s.error ?? null, config: status ? sql`${devices.config} || ${JSON.stringify({ lastStatus: status })}::jsonb` : undefined }).where(eq(devices.token, deviceToken)).returning();
     if (!d) throw new UnauthorizedException('Unknown device');
+    // 23.7 a device that comes back closes its offline alert
+    await this.db.execute(sql`update ops_alerts set status = 'RESOLVED', resolved_at = now(), resolution = 'Device back online', auto_resolved = true where dedupe_key = ${'device:' + d.id} and status <> 'RESOLVED'`);
     return { ok: true, deviceId: d.id, locationId: d.locationId };
   }
 

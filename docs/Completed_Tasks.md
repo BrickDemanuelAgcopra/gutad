@@ -455,3 +455,48 @@ Verification:
 - **20.7** 14-day cash forecast, bank reconciliation view, and a month-end close checklist with automatic checks that blocks closing until everything is done. **W**
 - **20.8** Budgets by cost center and category with budget vs actual, the approval limits in force, and a financial audit export (journal and finance-related audit log). **W**
 
+## Phase I: supply, safety, workforce (shipped 2026-11-13)
+
+Verification:
+- Typecheck is clean for API, web and mobile; `next build`: OK.
+- `npm run smoke` on a fresh database: **368/368 checks pass**, including 20 new Phase I checks in `scripts/smoke-admin-i.mjs`. The Phase E slot-capacity check now uses a midday slot two days out (it could collide with another test's order around midnight).
+- Migration `0014_supply_safety_workforce.sql`:
+  - new tables `storage_areas`, `stock_lots`, `stock_movements`, `suppliers`, `stock_transfers`, `temperature_logs`, `checklist_templates`, `checklist_runs`, `recalls`, `inspections`, `corrective_actions`, `staff_shifts`, `staff_skills`, `time_entries`, `equipment`, `equipment_tickets`
+  - new columns on ingredients (type, purchase unit and factor, supplier, shelf life, storage temperatures), ingredient stock (safety stock), purchase orders (supplier, expected date, invoice and match), purchase-order lines (discrepancy), menu items (sold-out source), stations (required skill) and devices (firmware, app version, last error, offline alert)
+- New `OperationsModule` (`InventoryService`, `SafetyService`, `WorkforceService`); the kitchen stock core (lots, first-expiring-first-out, movements, auto-restore) lives in `KitchenService`. Shared `packages/shared/src/operations.ts`.
+- New worker jobs: lot expiry (hourly), illness-cluster detection (every 15 minutes), device health (every 5 minutes), equipment service due (daily); manual trigger `POST /admin/jobs/operations-sweep`.
+- Also done here: 1.6-L (contribution uses actual labor hours where a kitchen records them) and 8.5-K (recipe batch limits lengthen cook time when an order exceeds the batch size).
+
+### 21. Inventory, procurement & warehouse
+- **21.1** Item masters: type (ingredient, prepared component, packaging, consumable), organization ownership (shared catalog stays Gutad-only). **W**
+- **21.2** Units and conversions (shared table) and purchase units (a "kg" buys 1000 g); expected consumption for planned portions from recipes. **API W**
+- **21.3** Storage areas (warehouse, dry, cold, freezer, kitchen) with temperature ranges; lots with lot code, supplier, storage area, quantity left and expiry. **W M**
+- **21.4** Stock movements ledger: receipts, consumption (per order), transfers out/in, counts, adjustments, spoilage, withdrawals; counts post the difference. **W M**
+- **21.5** First-expiring-first-out: orders, waste and transfers take the earliest-expiring available lots; expired lots leave stock as spoilage; pick suggestions. **W M**
+- **21.6** Demand forecast (average use by weekday over 4 weeks), safety stock (setting or 2 days of use), reorder point by supplier lead time, and replenishment proposals turned into draft purchase orders per approved supplier. **W M** (read)
+- **21.7** Supplier records (contact, lead time, delivery days, specifications), expected delivery dates, late deliveries, receiving discrepancies (short / over / damaged). **W M**
+- **21.8** Three-way match: purchase order ↔ goods received ↔ supplier invoice, per line and in total, within a tolerance (`procurement.matchTolerancePct`, 2%). **W**
+- **21.9** Transfers between a merchant's sites: request, pick (first expiring first out), ship, receive with lots and expiry carried over; differences recorded. **W M**
+- **21.10** An ingredient running out sells out the dishes that use it at that kitchen (marked STOCKOUT), and receipts, transfers and counts bring them back automatically. **API**
+- **21.11** Reports: forecast accuracy, waste by item and reason, supplier on-time / fill rate / invoice variances, inventory valuation, value expiring in 3 days. **W M**
+
+### 22. Food safety, quality & recalls
+- **22.1** Approved suppliers and product specifications; purchase orders to an unapproved supplier are refused; a specification change sends the supplier back for approval. **API W**
+- **22.2** Receiving and storage temperature logs against the storage area, ingredient spec or defaults; out of range raises an alert and a corrective action, and warm deliveries are quarantined. **W M**
+- **22.3** Checklist templates (defaults for opening, closing and allergen handling, plus custom) and signed completions; missed steps raise a corrective action. **W M**
+- **22.4** Allergen review queue for dishes flagged by recipe changes (8.8), with an audited sign-off of the allergen list. **W**
+- **22.5** Lot traceability: lot → orders and locations (including lots moved by transfer), and order → lots, suppliers and expiry. **W M**
+- **22.6** Recalls: quarantine lots, stop-sell every dish using the ingredient where those lots are, notify the customers of affected orders, withdraw the stock, close (dishes come back). **W M**
+- **22.7** Food-safety reports go to culinary with an immediate alert (Phase E), and two or more within 72 hours at one location or for one dish raise a possible-cluster alert; each report can be traced to the lots used. **W M**
+- **22.8** Inspections (internal, health department, third party) with findings that become corrective actions; completion needs evidence and a second person verifies. **W M**
+
+### 23. Workforce, training & equipment
+- **23.1** Staffing forecast per hour from the weekday's order volume (`workforce.config.ordersPerStaffHour`) against scheduled shifts; shift scheduling by location and station. **W**
+- **23.2** Skills and certifications with expiry; a station can require a skill and only takes shifts from people holding it. **W**
+- **23.3** Clock in/out (one open entry), manager approval by someone else, edits audited, payroll CSV with weekly overtime; clock-out hours also feed kitchen labor. **W M**
+- **23.4** Labor hours vs order volume per day: orders per labor hour and labor as a share of sales. **W**
+- **23.5** Equipment register with service intervals, service and fault tickets, service due alerts. **W M**
+- **23.6** Equipment down or in maintenance takes the dishes that need it off the menu and closes its station (or halves capacity when other equipment works there); back in service restores exactly what changed. **W M**
+- **23.7** Device health: heartbeats record firmware, app version and errors; devices silent for 10 minutes go offline with one alert, which closes when they return. **W M**
+- **23.8** Automated equipment: approved software versions (`equipment.approvedVersions`), a fault feed from the kitchen's device token, alerts to an operator. Record and escalate only; Gutad never sends commands to the machine. **API W M**
+

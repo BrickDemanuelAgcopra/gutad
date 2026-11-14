@@ -26,6 +26,16 @@ export const ingredients = pgTable('ingredients', {
   allergens: text('allergens').array().notNull().default([]),
   /** owner of a merchant-specific ingredient; null = shared catalog */
   organizationId: uuid('organization_id'),
+  /** 21.1 INGREDIENT | COMPONENT | PACKAGING | CONSUMABLE */
+  kind: text('kind').notNull().default('INGREDIENT'),
+  /** 21.2 purchase unit (case, kg, l…) and how many base units it holds */
+  purchaseUnit: text('purchase_unit'),
+  purchaseUnitFactor: doublePrecision('purchase_unit_factor').notNull().default(1),
+  supplierId: uuid('supplier_id'),
+  shelfLifeDays: integer('shelf_life_days'),
+  /** 22.1 storage spec */
+  minTempC: doublePrecision('min_temp_c'),
+  maxTempC: doublePrecision('max_temp_c'),
 });
 
 export const ingredientStock = pgTable(
@@ -39,6 +49,8 @@ export const ingredientStock = pgTable(
       .references(() => ingredients.id, { onDelete: 'cascade' }),
     onHand: doublePrecision('on_hand').notNull().default(0),
     parLevel: doublePrecision('par_level').notNull().default(0),
+    /** 21.6 minimum buffer kept on hand */
+    safetyStock: doublePrecision('safety_stock').notNull().default(0),
     updatedAt: updatedAt(),
   },
   (t) => [primaryKey({ columns: [t.kitchenId, t.ingredientId] })],
@@ -97,6 +109,15 @@ export const purchaseOrders = pgTable('purchase_orders', {
   /** 20.6 supplier bill: due date and payment */
   billDueAt: ts('bill_due_at'),
   billPaidAt: ts('bill_paid_at'),
+  /** 21.7 supplier record and delivery schedule */
+  supplierId: uuid('supplier_id'),
+  expectedAt: ts('expected_at'),
+  /** 21.8 supplier invoice and three-way match */
+  invoiceNumber: text('invoice_number'),
+  invoiceTotalCents: integer('invoice_total_cents'),
+  invoiceLines: jsonb('invoice_lines'),
+  matchStatus: text('match_status'), // MATCHED | VARIANCE
+  matchDetail: jsonb('match_detail'),
   createdAt: createdAt(),
 });
 
@@ -111,6 +132,8 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
   quantity: doublePrecision('quantity').notNull(),
   unitCostCents: integer('unit_cost_cents').notNull(),
   receivedQty: doublePrecision('received_qty'),
+  /** 21.7 receiving discrepancy note */
+  discrepancyNote: text('discrepancy_note'),
 });
 
 export const wasteEvents = pgTable('waste_events', {
@@ -180,6 +203,8 @@ export const menuItems = pgTable('menu_items', {
   dietaryTags: text('dietary_tags').array().notNull().default([]),
   soldOut: boolean('sold_out').notNull().default(false),
   soldOutUntil: ts('sold_out_until'),
+  /** 21.10 / 22.6 / 23.6 why it is sold out: MANUAL | STOCKOUT | RECALL | EQUIPMENT (only automatic reasons auto-restore) */
+  soldOutSource: text('sold_out_source'),
   isActive: boolean('is_active').notNull().default(true),
   posExternalId: text('pos_external_id'),
   /** per-channel price overrides, e.g. {"MARKETPLACE": 1299} */

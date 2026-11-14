@@ -33,6 +33,7 @@ import { OpsModule } from './modules/ops/ops.module';
 import { MerchantAdminModule } from './modules/merchant-admin/merchant-admin.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { FinanceModule } from './modules/finance/finance.module';
+import { OperationsModule } from './modules/operations/operations.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { JobsService } from './jobs/jobs.service';
@@ -69,6 +70,7 @@ export const DOMAIN_MODULES = [
   PricingModule,
   CustomersModule,
     FinanceModule,
+    OperationsModule,
 ];
 
 @Module({

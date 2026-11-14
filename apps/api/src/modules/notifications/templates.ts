@@ -21,6 +21,8 @@ export function render(template: string, p: Record<string, unknown>): Rendered {
       return sub(`Order ${p.number} could not be accepted`, `Sorry — order ${p.number} was not accepted (${p.reason}). Your payment hold has been released.`);
     case 'order.ready':
       return sub(`Order ${p.number} is ready`, `Your order ${p.number} is ready${p.shelfSlot ? ` on shelf ${p.shelfSlot}` : ''}${p.pickupCode ? ` — show code ${p.pickupCode} at the counter` : ''}.`);
+    case 'recall.notice':
+      return sub(`Important safety notice about order ${p.number}`, `${p.title}. ${p.message}`);
     case 'order.pickup_reminder':
       return sub(`Your order ${p.number} is waiting`, `Order ${p.number} has been ready since ${when(p.readyAt)}. Please pick it up by ${when(p.holdUntil)}; after that it is ${p.resolution === 'REFUND' ? 'canceled and refunded' : 'treated as collected and not refunded'}.`);
     case 'order.collected':

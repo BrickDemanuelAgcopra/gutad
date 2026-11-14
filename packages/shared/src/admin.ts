@@ -115,6 +115,9 @@ export const ADMIN_MODULES: AdminModule[] = [
   { key: 'performance', group: 'Merchants', label: 'Merchant performance', description: 'Acceptance, cancellations, prep time, lateness and errors by location', permission: 'merchants.read', web: '/admin/performance' },
   { key: 'delivery', group: 'Delivery', label: 'Delivery & dispatch', description: 'Live map, unassigned and late deliveries, manual assignment, zones, restrictions, providers and cost analysis', permission: 'delivery.read', web: '/admin/delivery', mobile: '/ops/delivery' },
   { key: 'couriers', group: 'Delivery', label: 'Couriers', description: 'Courier directory, documents, shifts, reliability, pay adjustments, suspensions and appeals', permission: 'delivery.read', web: '/admin/couriers', mobile: '/ops/couriers' },
+  { key: 'supply', group: 'Kitchens', label: 'Supply & inventory', description: 'Stock and lots, expiring stock, suppliers and approvals, purchase orders and matching, transfers, forecasts', permission: 'kitchens.read', web: '/admin/supply', mobile: '/ops/supply' },
+  { key: 'safety', group: 'Kitchens', label: 'Food safety', description: 'Temperatures, checklists, allergen reviews, recalls, illness clusters, inspections and corrective actions', permission: 'kitchens.read', web: '/admin/safety', mobile: '/ops/safety' },
+  { key: 'workforce', group: 'Kitchens', label: 'Workforce & equipment', description: 'Labor vs volume, attendance, equipment status and service, automated equipment faults, device health', permission: 'kitchens.read', web: '/admin/workforce', mobile: '/ops/workforce' },
   { key: 'kitchens', group: 'Kitchens', label: 'Kitchen operations', description: 'Load and auto-throttle, station queues, delays, remakes, packing backlog and food waiting at every kitchen', permission: 'kitchens.read', web: '/admin/kitchens', mobile: '/ops/kitchens' },
   { key: 'culinary', group: 'Kitchens', label: 'Menus & recipes review', description: 'Menu versions waiting for review, recipe releases and allergen flags across merchants', permission: 'catalog.read', web: '/admin/culinary', mobile: '/ops/culinary' },
   { key: 'pricing', group: 'Finance', label: 'Pricing, fees & tax', description: 'Customer fee rules, tax categories and rates, memberships, commission and royalty schedules, price simulator', permission: 'catalog.read', web: '/admin/pricing', mobile: '/ops/pricing' },
@@ -147,6 +150,9 @@ export const MERCHANT_PAGE_ROLES: Record<string, Role[]> = {
   '/merchant/shift': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF'],
   '/merchant/support': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF'],
   '/merchant/recipes': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'KITCHEN'],
+  '/merchant/inventory': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'KITCHEN'],
+  '/merchant/safety': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'KITCHEN', 'PACKER'],
+  '/merchant/ops': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'KITCHEN', 'PACKER', 'HOST', 'DISPATCHER'],
 };
 /** Pages not listed above are for owners and managers only. */
 export function merchantPageAllowed(path: string, roles: readonly string[]): boolean {

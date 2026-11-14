@@ -15,3 +15,4 @@ export * from './support';
 export * from './kitchen';
 export * from './delivery';
 export * from './finance';
+export * from './operations';

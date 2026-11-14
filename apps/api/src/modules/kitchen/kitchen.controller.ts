@@ -24,9 +24,9 @@ const RecipeFullDto = z.object({
   lines: z.array(z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive() })).optional(),
 });
 const RecipeDto = z.object({ name: z.string(), yieldPortions: z.number().positive().optional(), laborMinutes: z.number().min(0).optional(), lines: z.array(z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive() })), previousRecipeId: z.string().uuid().optional() });
-const PoDto = z.object({ supplier: z.string(), lines: z.array(z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive(), unitCostCents: z.number().int().min(0) })) });
-const ReceiveDto = z.object({ received: z.array(z.object({ lineId: z.string().uuid(), receivedQty: z.number().min(0) })).default([]) });
-const WasteDto = z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive(), reason: z.string().optional() });
+const PoDto = z.object({ supplierId: z.string().uuid().optional(), expectedAt: z.string().datetime().optional(), supplier: z.string(), lines: z.array(z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive(), unitCostCents: z.number().int().min(0) })) });
+const ReceiveDto = z.object({ received: z.array(z.object({ lineId: z.string().uuid(), receivedQty: z.number().min(0), lotCode: z.string().max(60).optional(), expiresAt: z.string().datetime().optional(), storageAreaId: z.string().uuid().optional(), note: z.string().max(300).optional() })).default([]) });
+const WasteDto = z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive(), reason: z.string().optional(), lotId: z.string().uuid().optional() });
 const KitchenEventDto = z.object({ orderId: z.string().uuid(), orderLineId: z.string().uuid().optional(), kind: z.enum(['REMAKE', 'MISSING', 'QUALITY_FAIL']), reasonCode: z.string(), note: z.string().max(500).optional(), refire: z.boolean().optional() });
 const LaborDto = z.object({ userId: z.string().uuid().optional(), hours: z.number().positive(), rateCents: z.number().int().positive(), date: z.coerce.date() });
 
@@ -36,6 +36,7 @@ const LaborDto = z.object({ userId: z.string().uuid().optional(), hours: z.numbe
 export class KitchenController {
   constructor(private readonly svc: KitchenService, private readonly recipes: RecipesService) {}
 
+  @Get('organizations/:id/kitchens') listKitchens(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.listKitchens(u, id); }
   @Post('organizations/:id/kitchens') create(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(KitchenDto)) b: z.infer<typeof KitchenDto>) { return this.svc.createKitchen(u, id, b); }
   @Get('kitchens/:id') overview(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.overview(u, id); }
   @Post('kitchens/:id/brands') link(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ brandId: z.string().uuid(), isActive: z.boolean().optional() }))) b: { brandId: string; isActive?: boolean }) { return this.svc.linkBrand(u, id, b.brandId, b.isActive ?? true); }

@@ -23,7 +23,6 @@ Phase A shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 ## Phase B: executive dashboard, live ops, central orders
 
 Phase B shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
-- [ ] 1.6-L [improve] Contribution: use actual labor hours (`labor_entries`, then 23.3 attendance) instead of recipe labor minutes × the hourly rate, wherever a kitchen records them · API W M
 - [ ] 1.V [verify] Look at the dashboard, live board and order pages in a browser and on a device. Only the build, HTTP checks and smoke have been run so far · W M
 
 ---
@@ -40,7 +39,6 @@ Phase C shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 Phase D shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 - [ ] 7.7-M [improve] Include modifier groups and options in versioned menu documents (today versions cover categories and items; modifier groups change directly) · API W
-- [ ] 8.5-K [improve] Enforce recipe batch limits and equipment requirements in kitchen sequencing (with 13.3) · API W M
 - [ ] 9.5-X [new] External tax provider adapter (Avalara or TaxJar) behind the tax calculation; today the built-in rate table is used · API
 
 ---
@@ -88,38 +86,12 @@ Phase H shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase I: supply, safety, workforce
 
-### 21. Inventory, procurement & warehouse
-- [ ] 21.1 [improve] Item masters: type (ingredient, prepared component, packaging, consumable), org ownership · API W
-- [ ] 21.2 [new] Units of measure and conversions; expected consumption from recipes · API W
-- [ ] 21.3 [new] Storage locations (warehouse, kitchen, storage area) and lots · API W M
-- [ ] 21.4 [new] Stock movements ledger: receiving, transfers, counts, adjustments, spoilage · API W M
-- [ ] 21.5 [new] Expiry dates and first-expiring-first-out picking suggestions · API W M
-- [ ] 21.6 [new] Demand forecast (moving average by weekday), safety stock, replenishment proposals → draft PO · API W
-- [ ] 21.7 [new] Supplier records, PO delivery schedules, receiving discrepancies · API W M
-- [ ] 21.8 [new] Three-way match: PO ↔ receipt ↔ supplier invoice, with variance tolerance · API W
-- [ ] 21.9 [new] Warehouse pick, pack, ship and receiving confirmation for inter-site transfers · API W M
-- [ ] 21.10 [improve] Stockout → menu availability, and **auto-restore** on receipt · API
-- [ ] 21.11 [new] Reports: forecast accuracy, waste, supplier performance, inventory valuation · API W M
-
-### 22. Food safety, quality & recalls
-- [ ] 22.1 [new] Approved suppliers and product specifications · API W
-- [ ] 22.2 [new] Receiving and storage temperature logs with out-of-range alerts · API W M
-- [ ] 22.3 [new] Checklist templates (cleaning, opening, closing, food handling) and signed completions · API W M
-- [ ] 22.4 [improve] Allergen controls: recipe-change review (with 8.8) · API W
-- [ ] 22.5 [new] Lot traceability: ingredient lot → kitchens/locations → orders · API W M
-- [ ] 22.6 [new] Quarantine, withdrawal and recall workflow (stop-sell affected items, notify affected customers) · API W M
-- [ ] 22.7 [new] Food-quality and illness incident escalation (FOOD_SAFETY category → food-safety owner, immediate alert) · API W M
-- [ ] 22.8 [new] Inspection records, corrective actions, completion evidence · API W M
-
-### 23. Workforce, training & equipment
-- [ ] 23.1 [new] Staffing forecast from order volume; shift schedules by station and location · API W M
-- [ ] 23.2 [new] Skills, training completion, role eligibility (a station requires a skill) · API W M
-- [ ] 23.3 [new] Attendance (clock in/out) and payroll export · API W M
-- [ ] 23.4 [new] Labor hours vs order volume report · API W M
-- [ ] 23.5 [new] Equipment register, maintenance schedules, service tickets · API W M
-- [ ] 23.6 [new] Equipment outage → affected menu items unavailable and station capacity reduced · API W M
-- [ ] 23.7 [improve] Device health: kiosks, KDS, printers, scanners (kinds, last seen, firmware, alerts) · API W M
-- [ ] 23.8 [new] Automated kitchens: approved software versions, fault alerts, maintenance, operator escalation (record/alert only; no actuation) · API W M
+Phase I shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 21.6-S [improve] Seasonality and promotions in the demand forecast (today: weekday moving average over 4 weeks) · API
+- [ ] 21.8-P [new] Supplier portal or EDI for invoices (today: staff enter the invoice lines to match) · API W
+- [ ] 22.2-S [new] Wireless temperature sensors feeding storage logs automatically (today: manual readings) · API W M
+- [ ] 23.3-P [new] Payroll provider integration (today: CSV export of approved hours with overtime) · API W
+- [ ] 23.8-V [improve] Equipment vendor integrations for automated kitchens beyond the fault/version feed (still record-and-alert only, no actuation) · API
 
 ---
 

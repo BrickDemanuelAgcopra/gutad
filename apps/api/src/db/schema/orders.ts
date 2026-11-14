@@ -158,6 +158,8 @@ export const stations = pgTable('stations', {
   equipment: text('equipment').array().notNull().default([]),
   /** 13.5 target minutes from fire to done */
   targetMinutes: integer('target_minutes').notNull().default(10),
+  /** 23.2 skill needed to work this station */
+  requiredSkill: text('required_skill'),
 });
 
 /** 13.2 routing: send an item, a category or a brand to a station. Most specific wins (item > category > brand). */

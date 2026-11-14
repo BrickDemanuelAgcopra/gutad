@@ -227,12 +227,17 @@ export class OpsService {
       ),
       dl as (select dj.order_id, sum(dj.provider_cost_cents)::bigint as provider, sum(coalesce(de.base_cents, 0))::bigint as driver from delivery_jobs dj join base b on b.id = dj.order_id left join driver_earnings de on de.delivery_job_id = dj.id group by dj.order_id),
       pm as (select p.order_id, sum(p.processing_fee_cents)::bigint as processing from payments p join base b on b.id = p.order_id group by p.order_id),
+      -- 1.6-L actual labor: a kitchen's recorded labor for the day spread over that day's orders there
+      ok as (select b.id, l.kitchen_id, date_trunc('day', b.created_at) as day from base b join locations l on l.id = b.location_id where l.kitchen_id is not null),
+      kd as (select kitchen_id, day, count(*) as n from ok group by 1, 2),
+      al as (select kitchen_id, date_trunc('day', date) as day, sum(hours * rate_cents) as cents from labor_entries group by 1, 2),
+      la as (select ok.id as order_id, al.cents / kd.n as cents from ok join kd on kd.kitchen_id = ok.kitchen_id and kd.day = ok.day join al on al.kitchen_id = ok.kitchen_id and al.day = ok.day),
       led as (select je.order_id, sum(case when je.account::text like 'PLATFORM_REVENUE_%' then je.credit_cents - je.debit_cents else 0 end)::bigint as plat_rev, sum(case when je.account::text like 'PLATFORM_EXPENSE_%' then je.debit_cents - je.credit_cents else 0 end)::bigint as plat_exp from journal_entries je join base b on b.id = je.order_id group by je.order_id)
       select b.id, b.number, b.location_id, b.channel, b.fulfillment_type, b.subtotal_cents, b.discount_cents, b.delivery_fee_cents, b.service_fee_cents,
-        coalesce(lc.food,0)::bigint as food, round(coalesce(lc.labor_min,0) * ${rate} / 60.0)::bigint as labor,
+        coalesce(lc.food,0)::bigint as food, coalesce(round(la.cents), round(coalesce(lc.labor_min,0) * ${rate} / 60.0))::bigint as labor, (la.cents is not null) as labor_actual,
         (coalesce(dl.provider,0) + coalesce(dl.driver,0))::bigint as delivery, coalesce(pm.processing,0)::bigint as processing,
         coalesce(led.plat_rev,0)::bigint as plat_rev, coalesce(led.plat_exp,0)::bigint as plat_exp
-      from base b left join lc on lc.order_id = b.id left join dl on dl.order_id = b.id left join pm on pm.order_id = b.id left join led on led.order_id = b.id
+      from base b left join lc on lc.order_id = b.id left join dl on dl.order_id = b.id left join pm on pm.order_id = b.id left join led on led.order_id = b.id left join la on la.order_id = b.id
       limit 5000`));
     const per = r.map((x) => {
       const revenue = n(x.subtotal_cents) + n(x.delivery_fee_cents) + n(x.service_fee_cents);
@@ -245,11 +250,12 @@ export class OpsService {
     return {
       orders: per.length,
       laborRateCentsPerHour: rate,
+      ordersWithActualLabor: r.filter((x) => x.labor_actual === true).length,
       average: { revenueCents: avg('revenueCents'), foodCents: avg('foodCents'), laborCents: avg('laborCents'), deliveryCents: avg('deliveryCents'), processingCents: avg('processingCents'), promotionsCents: avg('promotionsCents'), contributionCents: avg('contributionCents'), platformContributionCents: avg('platformContributionCents') },
       marginPct: per.length ? per.reduce((a, p) => a + p.contributionCents, 0) / Math.max(1, per.reduce((a, p) => a + p.revenueCents, 0)) : 0,
       negative: per.filter((p) => p.contributionCents < 0).length,
       worst: [...per].sort((a, b) => a.contributionCents - b.contributionCents).slice(0, 25),
-      note: 'Food and labor come from recipe costs (ingredients at last purchase price, labor at the configured hourly rate); items without a recipe count as zero food cost.',
+      note: 'Food comes from recipe costs (ingredients at last purchase price). Labor uses the hours a kitchen actually recorded (attendance or labor entries) spread over that day’s orders; where none are recorded it falls back to recipe labor minutes at the configured hourly rate.',
     };
   }
 

@@ -25,15 +25,17 @@ export async function adminPhaseE({ call, check, A, O, C, locId, demoOrgId }) {
 
   // 11.5 scheduled slot capacity
   const page = (await call('GET', `/public/locations/${locId}`)).json;
-  const day = page.pickupTimes.find((d, i) => i > 0 && d.slots.length);
-  const slotIso = (await call('GET', `/public/locations/${locId}/local-time?date=${day.date}&time=${day.slots[0]}`)).json.iso;
+  // a midday slot two days out never collides with orders other tests schedule a few hours ahead
+  const day = page.pickupTimes.find((d, i) => i > 1 && d.slots.length);
+  const slotTime = day.slots[Math.floor(day.slots.length / 2)];
+  const slotIso = (await call('GET', `/public/locations/${locId}/local-time?date=${day.date}&time=${slotTime}`)).json.iso;
   await call('PATCH', `/locations/${locId}`, { scheduledSlotCapacity: 1 }, O);
   const s1 = (await q(C, { scheduledFor: slotIso })).json;
   const o1 = (await call('POST', '/orders', { quoteId: s1.id }, C, { 'Idempotency-Key': globalThis.crypto.randomUUID() })).json;
   const s2 = await q(C, { scheduledFor: slotIso });
   const page2 = (await call('GET', `/public/locations/${locId}`)).json;
   await call('PATCH', `/locations/${locId}`, { scheduledSlotCapacity: null }, O);
-  check('scheduled slots have a capacity; full slots disappear from the picker', o1.id && s2.status === 400 && s2.json.code === 'SLOT_FULL' && !page2.pickupTimes.find((d) => d.date === day.date).slots.includes(day.slots[0]), s2.json);
+  check('scheduled slots have a capacity; full slots disappear from the picker', o1.id && s2.status === 400 && s2.json.code === 'SLOT_FULL' && !page2.pickupTimes.find((d) => d.date === day.date).slots.includes(slotTime), s2.json);
 
   // 11.7 declined card keeps the quote for a retry; 10.3 saved card
   const qd = (await q(C)).json;

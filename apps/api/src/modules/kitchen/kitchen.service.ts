@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import { DEFAULT_AUTO_THROTTLE, DEFAULT_PICKUP_POLICY, fireAt as computeFireAt, KITCHEN_REASONS, mentionsAllergy, suggestBags, type AutoThrottle, type PickupPolicy } from '@gutad/shared';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { brands, ingredientStock, ingredients, kitchenBrands, kitchenEvents, kitchenTickets, kitchens, laborEntries, locations, menuCategories, menuItems, opsAlerts, organizations, orderLines, orders, packingTasks, purchaseOrderLines, purchaseOrders, recipeLines, recipes, stationRoutes, stations, wasteEvents } from '../../db/schema';
+import { brands, ingredientStock, ingredients, kitchenBrands, kitchenEvents, kitchenTickets, kitchens, laborEntries, locations, menuCategories, menuItems, opsAlerts, organizations, orderLines, orders, packingTasks, purchaseOrderLines, purchaseOrders, recipeLines, recipes, stationRoutes, stations, stockLots, stockMovements, suppliers, wasteEvents } from '../../db/schema';
 import { assertCan, assertOrgAccess, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
 import { shortCode } from '../../common/utils';
@@ -38,6 +38,11 @@ export class KitchenService implements OnModuleInit {
     });
   }
 
+  async listKitchens(user: JwtPayload, orgId: string) {
+    assertOrgAccess(user, orgId);
+    return this.db.select({ id: kitchens.id, name: kitchens.name, city: kitchens.city, loadLevel: kitchens.loadLevel }).from(kitchens).where(eq(kitchens.organizationId, orgId)).orderBy(kitchens.name);
+  }
+
   async linkBrand(user: JwtPayload, kitchenId: string, brandId: string, isActive = true) {
     const k = await this.requireKitchen(user, kitchenId);
     const [b] = await this.db.select().from(brands).where(eq(brands.id, brandId)).limit(1);
@@ -46,7 +51,7 @@ export class KitchenService implements OnModuleInit {
     return { ok: true };
   }
 
-  private async requireKitchen(user: JwtPayload, kitchenId: string) {
+  async requireKitchen(user: JwtPayload, kitchenId: string) {
     const [k] = await this.db.select().from(kitchens).where(eq(kitchens.id, kitchenId)).limit(1);
     if (!k) throw new NotFoundException('Kitchen not found');
     assertOrgAccess(user, k.organizationId);
@@ -96,7 +101,10 @@ export class KitchenService implements OnModuleInit {
     const itemIds = lines.map((l) => l.menuItemId).filter((x): x is string => !!x);
     const items = itemIds.length ? await tx.select({ id: menuItems.id, categoryId: menuItems.categoryId, cookMinutes: menuItems.cookMinutes, handling: menuItems.handling, recipeId: menuItems.recipeId, kind: menuItems.kind }).from(menuItems).where(inArray(menuItems.id, itemIds)) : [];
     const recipeIds = items.map((i) => i.recipeId).filter((x): x is string => !!x);
-    const recipePrep = new Map((recipeIds.length ? await tx.select({ id: recipes.id, prep: recipes.prepMinutes }).from(recipes).where(inArray(recipes.id, recipeIds)) : []).map((r) => [r.id, r.prep]));
+    const recipeRows = recipeIds.length ? await tx.select({ id: recipes.id, prep: recipes.prepMinutes, batch: recipes.batchMaxPortions }).from(recipes).where(inArray(recipes.id, recipeIds)) : [];
+    const recipePrep = new Map(recipeRows.map((r) => [r.id, r.prep]));
+    // 8.5-K a line above the recipe's batch size cooks in several batches
+    const batchesFor = (it: { recipeId: string | null } | undefined, qty: number) => { const b = it?.recipeId ? recipeRows.find((r) => r.id === it.recipeId)?.batch : null; return b && qty > b ? Math.ceil(qty / b) : 1; };
     const known = new Set(stationRows.map((s) => s.code));
     const stationFor = (l: typeof lines[number]) => {
       const it = items.find((i) => i.id === l.menuItemId);
@@ -115,7 +123,7 @@ export class KitchenService implements OnModuleInit {
     }
     const values = Array.from(groups.entries()).map(([code, ls]) => {
       const station = stationRows.find((s) => s.code === code);
-      const cook = Math.max(...ls.map((l) => { const it = items.find((i) => i.id === l.menuItemId); return it?.cookMinutes ?? (it?.recipeId ? Math.round(recipePrep.get(it.recipeId) || 0) || null : null) ?? station?.targetMinutes ?? 10; }));
+      const cook = Math.max(...ls.map((l) => { const it = items.find((i) => i.id === l.menuItemId); return (it?.cookMinutes ?? (it?.recipeId ? Math.round(recipePrep.get(it.recipeId) || 0) || null : null) ?? station?.targetMinutes ?? 10) * batchesFor(it, l.quantity); }));
       return { orderId, stationCode: code, stationId: station?.id ?? null, lineIds: ls.map((l) => l.id), cookMinutes: cook, readyBy, fireAt: computeFireAt(readyBy, cook, now) };
     });
     const tickets = await tx.insert(kitchenTickets).values(values).returning();
@@ -664,39 +672,62 @@ export class KitchenService implements OnModuleInit {
     return { ok: true };
   }
 
-  async createPurchaseOrder(user: JwtPayload, kitchenId: string, input: { supplier: string; reason?: string; lines: { ingredientId: string; quantity: number; unitCostCents: number }[] }) {
+  async createPurchaseOrder(user: JwtPayload, kitchenId: string, input: { supplier: string; supplierId?: string; expectedAt?: string; reason?: string; draft?: boolean; lines: { ingredientId: string; quantity: number; unitCostCents: number }[] }) {
     const k = await this.requireKitchen(user, kitchenId);
+    // 22.1 only approved suppliers can be ordered from
+    let expectedAt = input.expectedAt ? new Date(input.expectedAt) : null;
+    if (input.supplierId) {
+      const [sup] = await this.db.select().from(suppliers).where(eq(suppliers.id, input.supplierId)).limit(1);
+      if (!sup) throw new NotFoundException('Supplier not found');
+      if (!sup.approved) throw new BadRequestException({ message: `${sup.name} is not an approved supplier yet`, code: 'SUPPLIER_NOT_APPROVED' });
+      input.supplier = sup.name;
+      expectedAt = expectedAt ?? new Date(Date.now() + sup.leadTimeDays * 86400_000);
+    }
     const t = await this.approvals.thresholds();
     const total = Math.round(input.lines.reduce((a, l) => a + l.quantity * l.unitCostCents, 0));
     const owner = !!user.orgs?.[k.organizationId]?.roles.includes('MERCHANT_OWNER') || user.roles.includes('PLATFORM_ADMIN');
     const needsApproval = t.purchaseOrderCents > 0 && total > t.purchaseOrderCents && !owner;
     const po = await this.db.transaction(async (tx) => {
-      const [row] = await tx.insert(purchaseOrders).values({ kitchenId, supplier: input.supplier, status: needsApproval ? 'PENDING_APPROVAL' : 'ORDERED', totalCents: total }).returning();
+      const [row] = await tx.insert(purchaseOrders).values({ kitchenId, supplier: input.supplier, supplierId: input.supplierId ?? null, expectedAt, status: input.draft ? 'DRAFT' : needsApproval ? 'PENDING_APPROVAL' : 'ORDERED', totalCents: total }).returning();
       await tx.insert(purchaseOrderLines).values(input.lines.map((l) => ({ ...l, purchaseOrderId: row.id })));
       await this.audit.log({ organizationId: k.organizationId, actorId: user.sub, action: 'po.create', entityType: 'purchase_order', entityId: row.id, after: row }, tx);
       return row;
     });
-    if (!needsApproval) return po;
+    if (!needsApproval || input.draft) return po;
     const r = await this.approvals.submit(user, { kind: 'PURCHASE_ORDER', summary: `Purchase order $${(total / 100).toFixed(2)} from ${po.supplier} for ${k.name}`, organizationId: k.organizationId, subjectType: 'purchase_order', subjectId: po.id, amountCents: total, payload: { kitchenId }, reason: input.reason || `Supplier order over the $${(t.purchaseOrderCents / 100).toFixed(0)} approval limit`, dedupeKey: `po:${po.id}` });
     return { ...po, approval: r.approval };
   }
 
-  /** Receiving increases on-hand stock and refreshes ingredient cost (last price). */
-  async receivePurchaseOrder(user: JwtPayload, poId: string, received: { lineId: string; receivedQty: number }[]) {
+  /**
+   * Receive a purchase order: each line becomes a lot (lot code, expiry from the line or the ingredient's shelf
+   * life, storage area) with a RECEIPT movement; short or over deliveries are recorded as discrepancies (21.7);
+   * items sold out for lack of stock come back automatically (21.10).
+   */
+  async receivePurchaseOrder(user: JwtPayload, poId: string, received: { lineId: string; receivedQty: number; lotCode?: string; expiresAt?: string; storageAreaId?: string; note?: string }[]) {
     const [po] = await this.db.select().from(purchaseOrders).where(eq(purchaseOrders.id, poId)).limit(1);
     if (!po) throw new NotFoundException();
     await this.requireKitchen(user, po.kitchenId);
     if (po.status === 'RECEIVED') throw new ConflictException('Already received');
     if (po.status === 'PENDING_APPROVAL') throw new ConflictException('This purchase order is waiting for approval');
-    return this.db.transaction(async (tx) => {
+    const res = await this.db.transaction(async (tx) => {
       const lines = await tx.select().from(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, poId));
+      const ings = lines.length ? await tx.select().from(ingredients).where(inArray(ingredients.id, lines.map((l) => l.ingredientId))) : [];
+      const now = new Date();
       for (const l of lines) {
-        const qty = received.find((r) => r.lineId === l.id)?.receivedQty ?? l.quantity;
-        await tx.update(purchaseOrderLines).set({ receivedQty: qty }).where(eq(purchaseOrderLines.id, l.id));
-        await tx.insert(ingredientStock).values({ kitchenId: po.kitchenId, ingredientId: l.ingredientId, onHand: qty }).onConflictDoUpdate({ target: [ingredientStock.kitchenId, ingredientStock.ingredientId], set: { onHand: sql`${ingredientStock.onHand} + ${qty}` } });
-        await tx.update(ingredients).set({ costCentsPerUnit: l.unitCostCents }).where(eq(ingredients.id, l.ingredientId));
+        const r = received.find((x) => x.lineId === l.id);
+        const qty = r?.receivedQty ?? l.quantity;
+        const ing = ings.find((i) => i.id === l.ingredientId);
+        const base = qty * (ing?.purchaseUnitFactor || 1);
+        const discrepancy = qty !== l.quantity ? `${qty < l.quantity ? 'Short' : 'Over'} by ${Math.abs(l.quantity - qty)}${r?.note ? `: ${r.note}` : ''}` : r?.note ?? null;
+        await tx.update(purchaseOrderLines).set({ receivedQty: qty, discrepancyNote: discrepancy }).where(eq(purchaseOrderLines.id, l.id));
+        if (base > 0) {
+          const expiresAt = r?.expiresAt ? new Date(r.expiresAt) : ing?.shelfLifeDays ? new Date(now.getTime() + ing.shelfLifeDays * 86400_000) : null;
+          const unitCost = Math.round(l.unitCostCents / (ing?.purchaseUnitFactor || 1));
+          await this.addLot(tx, { kitchenId: po.kitchenId, ingredientId: l.ingredientId, quantity: base, unitCostCents: unitCost, lotCode: r?.lotCode || `PO-${po.id.slice(0, 6)}-${l.id.slice(0, 4)}`, expiresAt, storageAreaId: r?.storageAreaId ?? null, supplierId: po.supplierId, purchaseOrderId: po.id }, user.sub);
+        }
+        await tx.update(ingredients).set({ costCentsPerUnit: Math.round(l.unitCostCents / (ing?.purchaseUnitFactor || 1)) }).where(eq(ingredients.id, l.ingredientId));
       }
-      const [u] = await tx.update(purchaseOrders).set({ status: 'RECEIVED', receivedAt: new Date(), billDueAt: po.billDueAt ?? new Date(Date.now() + 30 * 86400_000) }).where(eq(purchaseOrders.id, poId)).returning();
+      const [u] = await tx.update(purchaseOrders).set({ status: 'RECEIVED', receivedAt: now, billDueAt: po.billDueAt ?? new Date(Date.now() + 30 * 86400_000) }).where(eq(purchaseOrders.id, poId)).returning();
       // 20.6 Gutad-operated kitchens: the supplier bill becomes a payable (inventory in, accounts payable)
       const [own] = await tx.select({ id: locations.id }).from(locations).where(and(eq(locations.kitchenId, po.kitchenId), eq(locations.platformOperated, true))).limit(1);
       if (own) {
@@ -705,13 +736,16 @@ export class KitchenService implements OnModuleInit {
       }
       return u;
     });
+    await this.restoreStockouts(po.kitchenId);
+    return res;
   }
 
-  async recordWaste(user: JwtPayload, kitchenId: string, input: { ingredientId: string; quantity: number; reason?: string }) {
+  /** 21.4 spoilage / waste, taken from the earliest-expiring lots (or a named lot). */
+  async recordWaste(user: JwtPayload, kitchenId: string, input: { ingredientId: string; quantity: number; reason?: string; lotId?: string }) {
     await this.requireKitchen(user, kitchenId);
     await this.db.transaction(async (tx) => {
-      await tx.insert(wasteEvents).values({ ...input, kitchenId });
-      await tx.update(ingredientStock).set({ onHand: sql`greatest(0, ${ingredientStock.onHand} - ${input.quantity})` }).where(and(eq(ingredientStock.kitchenId, kitchenId), eq(ingredientStock.ingredientId, input.ingredientId)));
+      await tx.insert(wasteEvents).values({ kitchenId, ingredientId: input.ingredientId, quantity: input.quantity, reason: input.reason ?? null });
+      await this.takeFromLots(tx, { kitchenId, ingredientId: input.ingredientId, quantity: input.quantity, kind: 'SPOILAGE', reason: input.reason ?? 'Waste', lotId: input.lotId, createdById: user.sub });
     });
     return { ok: true };
   }
@@ -722,7 +756,57 @@ export class KitchenService implements OnModuleInit {
     return r;
   }
 
-  /** Deduct recipe ingredients for prepared lines; a sold-out ingredient flags all affected items across brands. */
+  // ───── stock core (21.3–21.5, 21.10) — shared with the operations module ─────
+
+  async addLot(tx: DbOrTx, input: { kitchenId: string; ingredientId: string; quantity: number; unitCostCents: number; lotCode: string; expiresAt: Date | null; storageAreaId?: string | null; supplierId?: string | null; purchaseOrderId?: string | null; transferId?: string | null; kind?: 'RECEIPT' | 'TRANSFER_IN' | 'ADJUSTMENT' | 'COUNT' }, actorId: string | null) {
+    const [lot] = await tx.insert(stockLots).values({ kitchenId: input.kitchenId, ingredientId: input.ingredientId, storageAreaId: input.storageAreaId ?? null, supplierId: input.supplierId ?? null, purchaseOrderId: input.purchaseOrderId ?? null, transferId: input.transferId ?? null, lotCode: input.lotCode, receivedQty: input.quantity, quantity: input.quantity, unitCostCents: input.unitCostCents, receivedAt: new Date(), expiresAt: input.expiresAt }).returning();
+    await tx.insert(stockMovements).values({ kitchenId: input.kitchenId, ingredientId: input.ingredientId, lotId: lot.id, kind: input.kind ?? 'RECEIPT', quantity: input.quantity, unitCostCents: input.unitCostCents, referenceId: input.purchaseOrderId ?? input.transferId ?? null, createdById: actorId });
+    await tx.insert(ingredientStock).values({ kitchenId: input.kitchenId, ingredientId: input.ingredientId, onHand: input.quantity }).onConflictDoUpdate({ target: [ingredientStock.kitchenId, ingredientStock.ingredientId], set: { onHand: sql`${ingredientStock.onHand} + ${input.quantity}` } });
+    return lot;
+  }
+
+  /**
+   * 21.5 first-expiring-first-out: take a quantity from the available lots that expire first (expired lots are
+   * skipped; quarantined ones are never used). Each lot touched gets a movement, so a lot can be traced to orders.
+   * Stock without lots (legacy) is taken without a lot. On-hand is always reduced by the full quantity.
+   */
+  async takeFromLots(tx: DbOrTx, input: { kitchenId: string; ingredientId: string; quantity: number; kind: 'CONSUMPTION' | 'SPOILAGE' | 'TRANSFER_OUT' | 'WITHDRAWAL' | 'ADJUSTMENT' | 'COUNT'; reason?: string; orderId?: string | null; referenceId?: string | null; lotId?: string; createdById?: string | null }) {
+    let left = input.quantity;
+    const taken: { lotId: string; quantity: number }[] = [];
+    const lots = input.lotId
+      ? await tx.select().from(stockLots).where(and(eq(stockLots.id, input.lotId), eq(stockLots.kitchenId, input.kitchenId)))
+      : await tx.select().from(stockLots).where(and(eq(stockLots.kitchenId, input.kitchenId), eq(stockLots.ingredientId, input.ingredientId), eq(stockLots.status, 'AVAILABLE'), sql`${stockLots.quantity} > 0`, sql`(${stockLots.expiresAt} is null or ${stockLots.expiresAt} > now())`)).orderBy(sql`${stockLots.expiresAt} asc nulls last`, stockLots.receivedAt);
+    for (const lot of lots) {
+      if (left <= 0) break;
+      const q = Math.min(lot.quantity, left);
+      await tx.update(stockLots).set({ quantity: lot.quantity - q, status: lot.quantity - q <= 0 && input.kind !== 'WITHDRAWAL' ? 'DEPLETED' : lot.status }).where(eq(stockLots.id, lot.id));
+      await tx.insert(stockMovements).values({ kitchenId: input.kitchenId, ingredientId: input.ingredientId, lotId: lot.id, kind: input.kind, quantity: -q, unitCostCents: lot.unitCostCents, reason: input.reason ?? null, orderId: input.orderId ?? null, referenceId: input.referenceId ?? null, createdById: input.createdById ?? null });
+      taken.push({ lotId: lot.id, quantity: q });
+      left -= q;
+    }
+    if (left > 0) await tx.insert(stockMovements).values({ kitchenId: input.kitchenId, ingredientId: input.ingredientId, kind: input.kind, quantity: -left, reason: input.reason ?? 'Unlotted stock', orderId: input.orderId ?? null, referenceId: input.referenceId ?? null, createdById: input.createdById ?? null });
+    const [row] = await tx.update(ingredientStock).set({ onHand: sql`greatest(0, ${ingredientStock.onHand} - ${input.quantity})` }).where(and(eq(ingredientStock.kitchenId, input.kitchenId), eq(ingredientStock.ingredientId, input.ingredientId))).returning();
+    return { taken, onHand: row?.onHand ?? 0 };
+  }
+
+  /** Menu items served from this kitchen whose recipe uses an ingredient. */
+  async itemsUsingIngredient(tx: DbOrTx, kitchenId: string | null, ingredientIds: string[]) {
+    if (!ingredientIds.length) return [] as string[];
+    const r = await tx.execute(sql`select distinct mi.id from menu_items mi join recipe_lines rl on rl.recipe_id = mi.recipe_id join menu_categories c on c.id = mi.category_id join menus m on m.id = c.menu_id join locations l on l.id = m.location_id
+      where rl.ingredient_id = any(${'{' + ingredientIds.join(',') + '}'}::uuid[]) ${kitchenId ? sql`and l.kitchen_id = ${kitchenId}` : sql``}`);
+    return (r as unknown as { rows: { id: string }[] }).rows.map((x) => x.id);
+  }
+
+  /** 21.10 bring back items sold out for lack of stock once every recipe ingredient is back on hand. */
+  async restoreStockouts(kitchenId: string) {
+    const r = await this.db.execute(sql`update menu_items mi set sold_out = false, sold_out_source = null from menu_categories c, menus m, locations l
+      where mi.category_id = c.id and c.menu_id = m.id and m.location_id = l.id and l.kitchen_id = ${kitchenId} and mi.sold_out and mi.sold_out_source = 'STOCKOUT'
+      and not exists (select 1 from recipe_lines rl left join ingredient_stock s on s.ingredient_id = rl.ingredient_id and s.kitchen_id = ${kitchenId} where rl.recipe_id = mi.recipe_id and coalesce(s.on_hand, 0) <= 0)
+      returning mi.id`);
+    return (r as unknown as { rows: unknown[] }).rows.length;
+  }
+
+  /** Deduct recipe ingredients for prepared lines (FEFO lots, traced to the order); an ingredient that runs out sells out the items that use it at this kitchen. */
   private async consumeIngredients(lines: (typeof orderLines.$inferSelect)[], kitchenId: string | null, tx: DbOrTx) {
     if (!kitchenId) return;
     const itemIds = lines.map((l) => l.menuItemId).filter((x): x is string => !!x);
@@ -739,13 +823,17 @@ export class KitchenService implements OnModuleInit {
       if (!r) continue;
       for (const line of rl.filter((x) => x.recipeId === r.id)) usage.set(line.ingredientId, (usage.get(line.ingredientId) || 0) + (line.quantity / r.yieldPortions) * l.quantity);
     }
+    const orderId = lines[0]?.orderId ?? null;
+    const out: string[] = [];
     for (const [ingredientId, qty] of usage) {
-      const [row] = await tx.update(ingredientStock).set({ onHand: sql`${ingredientStock.onHand} - ${qty}` }).where(and(eq(ingredientStock.kitchenId, kitchenId), eq(ingredientStock.ingredientId, ingredientId))).returning();
-      if (row && row.onHand <= 0) {
-        // sold-out ingredient affects every item (any brand) whose recipe uses it
-        const affectedRecipes = (await tx.select({ recipeId: recipeLines.recipeId }).from(recipeLines).where(eq(recipeLines.ingredientId, ingredientId))).map((x) => x.recipeId);
-        if (affectedRecipes.length) await tx.update(menuItems).set({ soldOut: true, soldOutUntil: null }).where(inArray(menuItems.recipeId, affectedRecipes));
-      }
+      const [has] = await tx.select({ onHand: ingredientStock.onHand }).from(ingredientStock).where(and(eq(ingredientStock.kitchenId, kitchenId), eq(ingredientStock.ingredientId, ingredientId))).limit(1);
+      if (!has) continue; // ingredient not stocked at this kitchen
+      const r = await this.takeFromLots(tx, { kitchenId, ingredientId, quantity: qty, kind: 'CONSUMPTION', orderId, reason: 'Order' });
+      if (r.onHand <= 0) out.push(ingredientId);
+    }
+    if (out.length) {
+      const affected = await this.itemsUsingIngredient(tx, kitchenId, out);
+      if (affected.length) await tx.update(menuItems).set({ soldOut: true, soldOutUntil: null, soldOutSource: 'STOCKOUT' }).where(and(inArray(menuItems.id, affected), eq(menuItems.soldOut, false)));
     }
   }
 

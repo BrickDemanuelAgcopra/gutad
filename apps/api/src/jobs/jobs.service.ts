@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression, Interval } from '@nestjs/schedule';
 import { RedisService } from '../core/redis.service';
 import { NotificationsService } from '../modules/notifications/notifications.service';
+import { InventoryService } from '../modules/operations/inventory.service';
+import { SafetyService } from '../modules/operations/safety.service';
+import { WorkforceService } from '../modules/operations/workforce.service';
 import { AccountingService } from '../modules/finance/accounting.service';
 import { KitchenService } from '../modules/kitchen/kitchen.service';
 import { OrdersService } from '../modules/orders/orders.service';
@@ -39,6 +42,9 @@ export class JobsService {
     private readonly orders: OrdersService,
     private readonly kitchen: KitchenService,
     private readonly accounting: AccountingService,
+    private readonly inventory: InventoryService,
+    private readonly safety: SafetyService,
+    private readonly workforce: WorkforceService,
     private readonly delivery: DeliveryService,
     private readonly reservations: ReservationsService,
     private readonly events: EventsService,
@@ -83,6 +89,10 @@ export class JobsService {
   @Interval(60_000) priceChanges() { return this.locked('price-changes', 60_000, () => this.menuAdmin.applyDue()); }
   @Interval(60_000) supportSla() { return this.locked('support-sla', 60_000, () => this.support.slaSweep()); }
   @Interval(3_600_000) deliveryHousekeepingDaily() { return this.locked('delivery-docs-proofs', 600_000, async () => ({ docs: await this.delivery.expireCourierDocs(), proofs: await this.delivery.purgeProofs() })); }
+  @Interval(3_600_000) inventoryExpiry() { return this.locked('lot-expiry', 600_000, () => this.inventory.expireLots()); }
+  @Interval(900_000) foodSafetyClusters() { return this.locked('fs-clusters', 300_000, () => this.safety.clusterSweep()); }
+  @Interval(300_000) deviceHealth() { return this.locked('device-health', 120_000, () => this.workforce.deviceSweep()); }
+  @Interval(86_400_000) equipmentService() { return this.locked('equipment-service', 600_000, () => this.workforce.maintenanceSweep()); }
   @Interval(60_000) kitchenLoad() { return this.locked('kitchen-load', 60_000, () => this.kitchen.loadSweep()); }
   @Interval(60_000) pickupNoShow() { return this.locked('pickup-no-show', 60_000, () => this.orders.noShowSweep()); }
   @Interval(3_600_000) privacySweep() { return this.locked('privacy', 600_000, () => this.customers.privacySweep()); }

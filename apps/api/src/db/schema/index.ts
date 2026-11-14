@@ -18,3 +18,4 @@ export * from './menu-admin';
 export * from './customers';
 export * from './delivery-admin';
 export * from './finance-admin';
+export * from './operations';
