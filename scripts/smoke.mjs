@@ -12,6 +12,7 @@ import { adminPhaseC } from './smoke-admin-c.mjs';
 import { adminPhaseD } from './smoke-admin-d.mjs';
 import { adminPhaseE } from './smoke-admin-e.mjs';
 import { adminPhaseF } from './smoke-admin-f.mjs';
+import { adminPhaseG } from './smoke-admin-g.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -120,7 +121,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   const dAcc = (await call('POST', `/orders/${d1.id}/accept`, {}, O)).json;
   check('accept dispatches courier', dAcc.delivery?.status === 'REQUESTED', dAcc.delivery);
   const track = (await call('GET', `/public/delivery/${d1.id}/track`)).json;
-  check('public tracking', track.status === 'REQUESTED', track);
+  check('public tracking (no proof of delivery exposed)', track.status === 'REQUESTED' && !('proofPhotoUrl' in track), track);
   const dispatch = (await call('GET', `/locations/${locId}/dispatch`, undefined, O)).json;
   check('dispatcher queue shows job', dispatch.some((j) => j.orderId === d1.id), dispatch.length);
   const ext = (await call('POST', `/locations/${locId}/delivery-jobs/external`, { externalOrderId: 'POS-1001', dropoff: { line1: '55 W 9th St', city: 'New York', region: 'NY', postalCode: '10011', lat: 40.7346, lng: -73.9975 }, orderValueCents: 3000 }, O)).json;
@@ -484,6 +485,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await adminPhaseD({ call, check, A, O, C, locId, demoOrgId });
   await adminPhaseE({ call, check, A, O, C, locId, demoOrgId });
   await adminPhaseF({ call, check, A, O, C, locId, owner });
+  await adminPhaseG({ call, check, A, O, C });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

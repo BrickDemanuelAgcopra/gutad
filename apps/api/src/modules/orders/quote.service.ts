@@ -180,7 +180,10 @@ export class QuoteService {
     if (load?.level === 'BUSY') warnings.push(`The kitchen is busy: about ${load.extraMinutes} extra minutes`);
     if (input.fulfillmentType === 'DELIVERY') {
       if (!input.deliveryAddress) throw new BadRequestException('Delivery address required');
-      const q = await this.delivery.quoteForLocation(loc.id, input.deliveryAddress, subtotalCents, input.tipCents || 0, tx).catch((e: Error) => { throw new BadRequestException({ message: e.message, code: 'DELIVERY_UNAVAILABLE' }); });
+      if (scheduledFor && !sim) await this.delivery.assertWindow(loc, scheduledFor, tx);
+      const q = await this.delivery.quoteForLocation(loc.id, input.deliveryAddress, subtotalCents, input.tipCents || 0, tx, scheduledFor).catch((e: Error) => { const r = (e as { getResponse?: () => unknown }).getResponse?.() as { code?: string } | undefined; throw new BadRequestException({ message: e.message, code: r?.code || 'DELIVERY_UNAVAILABLE' }); });
+      if (q.etaParts.courierWait >= 10) warnings.push('Couriers are busy nearby; delivery may take a little longer');
+      if (q.etaParts.restriction) warnings.push(`Delivery times are extended by ${q.etaParts.restriction} minutes right now`);
       deliveryFeeCents = q.retailFeeCents;
       deliveryProviderCostCents = q.providerCostCents;
       deliveryQuoteId = q.providerQuoteId;

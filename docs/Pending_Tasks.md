@@ -69,37 +69,12 @@ Phase F shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase G: delivery
 
-### 15. Delivery areas, promises & capacity
-- [ ] 15.1 [improve] Map-drawn zones with exclusion polygons (web map editor; mobile read-only map) · API W M
-- [ ] 15.2 [new] Zone → kitchen and merchant assignments (a zone can serve several locations) · API W
-- [ ] 15.3 [improve] Travel-time estimate, zone capacity and zone opening hours · API W
-- [ ] 15.4 [improve] ETA uses kitchen load (prep) and courier availability · API W M
-- [ ] 15.5 [new] Weather and disruption restrictions (shrink radius, add minutes, pause zone) with expiry · API W M
-- [ ] 15.6 [new] Scheduled delivery windows with capacity per window · API W M
-- [ ] 15.7 [improve] Fee and minimum-order rules by zone (tiered by distance) · API W
-- [ ] 15.8 [new] Coverage simulation for a new location (grid sample → % covered, ETA, overlap with existing zones) · API W
-
-### 16. Courier & delivery-partner management
-- [ ] 16.1 [improve] Courier directory and profile, service areas (regions/zones), operational status · API W M
-- [ ] 16.2 [new] Courier onboarding documents (license, insurance, background check) with review and expiry · API W M
-- [ ] 16.3 [improve] Vehicle type enum and capabilities (alcohol, large orders, cold bag) used by dispatch · API W M
-- [ ] 16.4 [new] Courier shifts and availability blocks; third-party provider connections listed per region · API W M
-- [ ] 16.5 [new] Reliability metrics: acceptance, completion, cancellation, on-time rate · API W M
-- [ ] 16.6 [new] Courier incidents, training records, support history · API W M
-- [ ] 16.7 [improve] Compensation adjustments (bonus or deduction with reason), tips, payout records · API W M
-- [ ] 16.8 [new] Suspension with reason, appeal, and a human review decision · API W M
-
-### 17. Dispatch & last-mile
-- [ ] 17.1 [new] Live dispatch map: couriers, pickup points, active deliveries (web map; mobile list + map) · API W M
-- [ ] 17.2 [improve] Auto-assignment scoring by readiness, proximity, capacity and vehicle capability · API
-- [ ] 17.3 [improve] Manual assignment to a chosen courier, with an audited reason · API W M
-- [ ] 17.4 [new] Batching rules (same pickup, max 2 orders, direction and ready-time window, food-quality cap) · API W
-- [ ] 17.5 [improve] Configurable acceptance timeout; escalate after N failed offers · API W
-- [ ] 17.6 [improve] Courier arrival at pickup, route progress pings, delivery confirmation timestamps · API W M
-- [ ] 17.7 [new] Customer-unreachable, wrong-address and failed-delivery workflows (contact attempts, wait timer, return or dispose) · API W M
-- [ ] 17.8 [fix+improve] Proof of delivery: removed from the public tracking endpoint; staff-only access with audit; retention job · API W M
-- [ ] 17.9 [new] Third-party provider failover order (own fleet → provider A → B) · API W
-- [ ] 17.10 [new] Courier waiting time and delivery cost analysis (per zone, per provider) · API W M
+Phase G shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 15.3-R [improve] Road-network travel times from a routing provider (today: straight-line distance × minutes per km per zone) · API
+- [ ] 16.2-U [improve] Direct file upload for courier documents to storage (today: a link to the scanned file) · API W M
+- [ ] 16.7-P [improve] Courier payout runs from the payable balance (with 19.4 payout release) · API W M
+- [ ] 17.1-R [new] Push-based live map updates (today: polling every 10–15 seconds) · API W M
+- [ ] 17.9-M [improve] More than one partner provider at a time: failover between two configured third-party providers (today: own fleet → the configured provider) · API
 
 ---
 

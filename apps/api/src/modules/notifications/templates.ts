@@ -40,7 +40,11 @@ export function render(template: string, p: Record<string, unknown>): Rendered {
     case 'delivery.picked_up':
       return sub('Your order is on the way', `Your courier has picked up the order. ETA ${when(p.etaAt)}.`);
     case 'delivery.delivered':
-      return sub('Delivered', `Your order has been delivered${p.proofPhotoUrl ? ` — proof: ${p.proofPhotoUrl}` : ''}.`);
+      return sub('Delivered', `Your order has been delivered${p.proofPhotoUrl || p.proofSignature ? ' (proof of delivery recorded)' : ''}.`);
+    case 'delivery.arrived':
+      return sub('Your courier is here', 'Your courier has arrived with your order.');
+    case 'delivery.attempt':
+      return sub('Your courier is trying to reach you', `Your courier can’t complete the delivery (${String(p.kind || '').toLowerCase().replace(/_/g, ' ')}). Please answer your phone or reply before ${when(p.waitUntil)}, or the order may be returned.`);
     case 'delivery.failed':
       return sub('Delivery problem', `We hit a problem delivering your order (${p.reason || 'unassigned'}). Support is on it.`);
     case 'delivery.late':

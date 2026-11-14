@@ -13,7 +13,7 @@ interface Incident {
   priority: string; queue: string | null; assigneeId: string | null; firstResponseDueAt: string | null; resolveDueAt: string | null; firstRespondedAt: string | null; slaBreachedAt: string | null;
   responsibilityDispute: { role?: string; reason?: string; status?: string; at?: string } | null;
 }
-interface Detail { incident: Incident; order: { order: { id: string; number: string; status: string; totalCents: number; guestEmail: string | null; userId: string | null }; events: { type: string; createdAt: string; actorRole: string | null }[]; payment: { status: string; capturedCents: number; refundedCents: number } | null; delivery: { status: string; proofPhotoUrl: string | null } | null } | null; priorIncidents: Incident[] }
+interface Detail { incident: Incident; order: { order: { id: string; number: string; status: string; totalCents: number; guestEmail: string | null; userId: string | null }; events: { type: string; createdAt: string; actorRole: string | null }[]; payment: { status: string; capturedCents: number; refundedCents: number } | null; delivery: { id: string; status: string; hasProof?: boolean } | null } | null; priorIncidents: Incident[] }
 interface Preview { refundableCents: number; refundFits: boolean; orderTotalCents: number | null; priorCompensation: { id: string; remedy: string; cents: number }[]; goodwill: { count90d: number; cents90d: number } | null; restrictions: string[]; needsApproval: boolean; reasons: string[]; willIssue: string }
 
 const label = (k: string) => (SUPPORT_CATEGORIES as Record<string, { label?: string }>)[k]?.label || k.toLowerCase().replace(/_/g, ' ');
@@ -97,7 +97,7 @@ function CasePanel({ d, onClose, onChange }: { d: Detail; onClose: () => void; o
         <div className="mt-2 rounded-lg bg-ink-50 p-3 text-xs">
           <div>Order <Link className="underline" href={`/admin/orders/${d.order.order.id}`}>{d.order.order.number}</Link> · {d.order.order.status} · {money(d.order.order.totalCents)}{d.order.order.userId && <> · <Link className="underline" href={`/admin/customers/${d.order.order.userId}`}>customer profile</Link></>}</div>
           <div>Payment {d.order.payment?.status} captured {money(d.order.payment?.capturedCents || 0)} refunded {money(d.order.payment?.refundedCents || 0)}</div>
-          {d.order.delivery && <div>Delivery {d.order.delivery.status} {d.order.delivery.proofPhotoUrl && <a className="underline" href={d.order.delivery.proofPhotoUrl} target="_blank" rel="noreferrer">proof</a>}</div>}
+          {d.order.delivery && <div>Delivery {d.order.delivery.status} {d.order.delivery.hasProof && <button className="underline" onClick={() => run(async () => { const pr = await api.get<{ proofPhotoUrl: string | null; proofSignature: string | null; purgedAt: string | null }>(`/delivery-jobs/${d.order!.delivery!.id}/proof`); if (pr.proofPhotoUrl) window.open(pr.proofPhotoUrl, '_blank'); else setNotice(pr.purgedAt ? 'Proof was removed under the retention policy.' : `Signed by ${pr.proofSignature}`); })}>view proof (audited)</button>}</div>}
           <div className="mt-1">Timeline: {d.order.events.map((e) => `${e.type}(${e.actorRole || 'sys'}) ${new Date(e.createdAt).toLocaleTimeString()}`).join(' → ')}</div>
           {d.priorIncidents.length > 0 && <div className="mt-1">Other tickets on this order: {d.priorIncidents.map((p) => `${label(p.category)} (${p.status.toLowerCase()}${p.remedyCents ? `, ${money(p.remedyCents)}` : ''})`).join('; ')}</div>}
         </div>

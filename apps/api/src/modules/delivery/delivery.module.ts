@@ -3,6 +3,7 @@ import { loadConfig } from '../../config/config';
 import { DELIVERY_PROVIDER } from './delivery.constants';
 import { DeliveryController } from './delivery.controller';
 import { DeliveryService } from './delivery.service';
+import { DeliveryAdminService } from './delivery-admin.service';
 import { DoorDashDriveProvider } from './providers/doordash-drive.provider';
 import { MockDeliveryProvider } from './providers/mock-delivery.provider';
 import { UberDirectProvider } from './providers/uber-direct.provider';
@@ -25,7 +26,8 @@ import { UberDirectProvider } from './providers/uber-direct.provider';
       inject: [MockDeliveryProvider, DoorDashDriveProvider, UberDirectProvider],
     },
     DeliveryService,
+    DeliveryAdminService,
   ],
-  exports: [DeliveryService],
+  exports: [DeliveryService, DeliveryAdminService],
 })
 export class DeliveryModule {}

@@ -65,6 +65,8 @@ export class NotificationsService {
       case 'delivery.picked_up':
       case 'delivery.delivered':
       case 'delivery.failed':
+      case 'delivery.arrived':
+      case 'delivery.attempt':
       case 'ticket.confirmed':
       case 'reservation.held':
       case 'reservation.confirmed':

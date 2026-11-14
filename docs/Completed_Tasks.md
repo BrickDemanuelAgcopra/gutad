@@ -366,3 +366,47 @@ Verification:
 - **14.7** Pickup no-shows: the customer is reminded after 20 minutes, then the order is resolved by policy after 60 minutes (default: charged and closed as a no-show; or canceled with a merchant-funded refund). **API**
 - **14.8** KIOSK channel for quotes and orders (where the location accepts kiosk orders), dine-in table numbers (checkout "Dine in" for QR/`?table=` links), and a runner view to serve orders to tables. **API W M**
 
+## Phase G: delivery areas, couriers, dispatch (shipped 2026-11-13)
+
+Verification:
+- Typecheck is clean for API, web and mobile; `next build`: OK.
+- `npm run smoke` on a fresh database: **329/329 checks pass**, including 17 new Phase G checks in `scripts/smoke-admin-g.mjs`; the main suite now also checks that public tracking carries no proof of delivery.
+- Migration `0012_delivery_couriers.sql`:
+  - new tables `delivery_restrictions`, `courier_documents`, `courier_shifts`, `courier_records`, `provider_connections`
+  - new columns on delivery zones (kind, shared locations, kitchen, region, travel minutes per km, capacity per hour, hours, fee tiers), drivers (vehicle type, capabilities, region and zones, orders at once, suspension and appeal), delivery jobs (arrival times, batch, offer rounds, requirements, exception, provider chain, zone, distance, proof purge), driver offers (score and detail), driver earnings (kind, reason, created by) and locations (delivery window length and capacity)
+- New `DeliveryAdminService`; shared `packages/shared/src/delivery.ts` (vehicle types, capabilities, document kinds, exceptions, dispatch and batching defaults, distance/bearing, map projection and OSM tiles).
+- New worker job for courier document expiry and proof retention (hourly), with a manual trigger `POST /admin/jobs/delivery-housekeeping`.
+- Web and mobile maps use OpenStreetMap tiles with attribution; no map library was added.
+
+### 15. Delivery areas, promises & capacity
+- **15.1** Zones are drawn by clicking on a map. Exclusion polygons carve areas out of service. **W** (merchant Settings → Delivery, admin Delivery → Zones). **M** read-only map in Ops → Delivery.
+- **15.2** A zone can also serve other locations of the same merchant, or every location of a kitchen. **API W**
+- **15.3** Travel time from distance × minutes per km (per zone), a deliveries-per-hour cap (`ZONE_AT_CAPACITY`), and zone opening hours (`ZONE_CLOSED`). **API W**
+- **15.4** Delivery ETA = kitchen prep (including the Phase F busy-kitchen minutes) + travel + courier wait, which grows when few couriers are near the pickup; checkout warns when couriers are busy. **API W M**
+- **15.5** Restrictions (pause, shrink radius, add minutes) for a zone, location, region or everywhere, with an end time (at most 7 days) and lift; checkout explains them (`DELIVERY_PAUSED`, `DELIVERY_RESTRICTED`). **API W M**
+- **15.6** Scheduled delivery windows with a capacity per window (`WINDOW_FULL`) and a public windows endpoint. **API W**
+- **15.7** Distance-tiered fees and minimum orders per zone. **API W**
+- **15.8** Coverage simulation for a proposed location: deliverable share, excluded share, share already covered (with overlapping locations) and average/worst ETA. **W** (map).
+
+### 16. Courier & delivery-partner management
+- **16.1** Courier directory and profile: operational status (online, on delivery, offline, suspended), vehicle, capabilities, service zones, orders at once. **W M**
+- **16.2** Onboarding documents (licence, insurance, background check, registration, ID) with review, rejection notes and expiry. Approval needs the required documents; an expired one takes the courier offline and blocks going online. **API W M**
+- **16.3** Vehicle types and capabilities; dispatch only offers alcohol and large orders to capable couriers, and prefers a cold bag for chilled items. **API W M**
+- **16.4** Courier shifts (no overlaps, up to 12 hours) with a staff shift board; delivery providers connected per region in failover order. **API W M**
+- **16.5** Acceptance, completion, cancellation and on-time rates, and average wait at pickup, per courier. **W M**
+- **16.6** Incidents, training records and notes, plus support tickets on the courier's deliveries. **W M**
+- **16.7** Bonuses and deductions with a reason, posted to the courier's payable balance in the ledger; earnings history shows payout ids. **W M**
+- **16.8** Suspension with a reason (withdraws offers; refused while the courier has active deliveries); the courier appeals; someone other than the person who suspended decides. **API W M**
+
+### 17. Dispatch & last-mile
+- **17.1** Live dispatch map: couriers by status, pickup points, drop-offs, problem and late deliveries. **W** map + table, **M** map + list.
+- **17.2** Assignment scoring: distance to pickup, gap between travel time and food-ready time, current load, vehicle fit, cold bag; the score and its parts are stored on each offer. **API**
+- **17.3** Manual assignment to a chosen courier with a required, audited reason. **W M**
+- **17.4** Batching (setting `delivery.batching`): same pickup, not yet picked up, ready within 10 minutes, same direction (within 45°), small detour, at most 2 orders; batched jobs share a batch id. **API W M**
+- **17.5** Offer time, offers per round, rounds and radius are configurable (setting `delivery.dispatch`); after the last round the job fails over or raises a dispatcher alert. **API W**
+- **17.6** Arrival at pickup and at the drop-off, route pings that refresh the ETA once the order is on its way, and delivery timestamps; the customer sees "Your courier has arrived". **API W M**
+- **17.7** Customer unreachable, wrong address (with correction), access problem, unsafe location: each contact attempt is logged, the customer is notified, a wait timer must run out (staff can resolve early), then return, dispose (customer bears the cost) or leave safely with a photo. **API W M**
+- **17.8** **Fixed:** proof of delivery is no longer on public tracking, the customer's order view, or delivery emails. Staff and the merchant view it through `GET /delivery-jobs/:id/proof`, and every view is audited (support's chargeback evidence too). Proof is removed after `proofRetentionDays` (90) unless the order has an open support ticket. **API W M**
+- **17.9** Provider failover: own fleet → the configured partner provider (per region, by priority), with the provider chain recorded on the job. **API W**
+- **17.10** Analysis by zone, provider or location: on-time share, courier wait at pickup, drive time, distance, cost per delivery, total cost, fees and subsidy. **W**
+

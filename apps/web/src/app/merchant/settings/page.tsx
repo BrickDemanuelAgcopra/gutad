@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { api } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Tabs, Textarea, statusTone } from '@/components/ui';
+import { DeliveryAreaEditor } from '@/components/delivery-area';
 import { useMerchant } from '../context';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -21,7 +22,7 @@ export default function SettingsPage() {
       {tab === 'publish' && <PublishTab locId={loc.id} />}
       {tab === 'floor' && <FloorTab locId={loc.id} />}
       {tab === 'policy' && <PolicyTab locId={loc.id} />}
-      {tab === 'delivery' && <><FleetCard loc={loc} reload={reload} /><ZonesTab locId={loc.id} /></>}
+      {tab === 'delivery' && <><FleetCard loc={loc} reload={reload} /><ZonesTab locId={loc.id} siblings={org.locations.map((l) => ({ id: l.id, name: l.name }))} /></>}
       {tab === 'team' && <TeamTab orgId={org.id} members={org.members} locations={org.locations} reload={reload} />}
       {tab === 'devices' && <DevicesTab locId={loc.id} orgId={org.id} />}
       {tab === 'brands' && <BrandsTab orgId={org.id} brands={org.brands} kitchenId={loc.kitchenId} reload={reload} />}
@@ -160,18 +161,11 @@ function FleetCard({ loc, reload }: { loc: { id: string; deliveryFleet: string; 
   );
 }
 
-function ZonesTab({ locId }: { locId: string }) {
-  const { data, reload } = useApi<{ id: string; name: string; feeCents: number; minOrderCents: number; etaMinutes: number; isActive: boolean }[]>(`/locations/${locId}/delivery-zones`);
-  const [z, setZ] = useState({ name: '', fee: '3.99', min: '15', eta: '40', polygon: '' });
-  const { run, error } = useAction();
+function ZonesTab({ locId, siblings }: { locId: string; siblings: { id: string; name: string }[] }) {
   return (
-    <Card title="Delivery zones (polygon or radius fallback)">
-      <p className="mb-2 text-xs text-ink-500">Zones set where you deliver and the minimum order. Customers currently pay a $0 delivery fee on Gutad; the zone fee is kept as your list price.</p>
-      <ul className="text-sm">{data?.map((x) => <li key={x.id}>{x.name} · ${(x.feeCents / 100).toFixed(2)} · min ${(x.minOrderCents / 100).toFixed(2)} · {x.etaMinutes} min {!x.isActive && <Badge tone="bad">off</Badge>}</li>)}</ul>
-      <div className="mt-2 grid gap-2 sm:grid-cols-4"><Input label="Name" value={z.name} onChange={(e) => setZ({ ...z, name: e.target.value })} /><Input label="Fee (USD)" value={z.fee} onChange={(e) => setZ({ ...z, fee: e.target.value })} /><Input label="Min order (USD)" value={z.min} onChange={(e) => setZ({ ...z, min: e.target.value })} /><Input label="ETA minutes" value={z.eta} onChange={(e) => setZ({ ...z, eta: e.target.value })} /></div>
-      <Textarea className="mt-2" label="GeoJSON polygon (optional; leave blank to use the location radius)" value={z.polygon} onChange={(e) => setZ({ ...z, polygon: e.target.value })} rows={2} />
-      {error && <Alert>{error}</Alert>}
-      <Button className="mt-2" disabled={!z.name} onClick={() => run(async () => { await api.post(`/locations/${locId}/delivery-zones`, { name: z.name, feeCents: Math.round(Number(z.fee) * 100), minOrderCents: Math.round(Number(z.min) * 100), etaMinutes: Number(z.eta), polygon: z.polygon ? JSON.parse(z.polygon) : undefined }); reload(); })}>Add zone</Button>
+    <Card title="Delivery zones">
+      <p className="mb-2 text-xs text-ink-500">Draw where you deliver. Exclusion zones carve out areas you can’t reach; a zone can also serve your other locations. Customers currently pay a $0 delivery fee on Gutad; the zone fee is kept as your list price.</p>
+      <DeliveryAreaEditor locationId={locId} siblings={siblings} />
     </Card>
   );
 }

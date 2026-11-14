@@ -130,6 +130,9 @@ export const locations = pgTable(
     packingExtras: text('packing_extras').array().notNull().default([]),
     /** 14.4 null = required for kitchen-backed locations, optional otherwise */
     requirePackVerification: boolean('require_pack_verification'),
+    /** 15.6 scheduled delivery windows: window length and orders per window (null = no limit) */
+    deliveryWindowMinutes: integer('delivery_window_minutes'),
+    deliveryWindowCapacity: integer('delivery_window_capacity'),
     /** per-order packaging fee charged to the customer and paid to the merchant; null = platform rule */
     packagingFeeCents: integer('packaging_fee_cents'),
     /** minutes before an unaccepted order escalates; auto-reject happens at 4× this */

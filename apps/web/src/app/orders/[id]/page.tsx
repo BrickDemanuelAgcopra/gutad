@@ -12,7 +12,7 @@ interface Order {
   id: string; number: string; status: string; fulfillmentType: string; locationName: string; locationSlug: string; locationPhone: string | null; totalCents: number; subtotalCents: number; taxCents: number; tipCents: number; deliveryFeeCents: number; serviceFeeCents: number; discountCents: number; promiseAt: string | null; readyAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; createdAt: string;
   lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null; modifiers: { name: string }[] }[];
   payment: { status: string; capturedCents: number; refundedCents: number } | null;
-  delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; proofPhotoUrl: string | null } | null;
+  delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
 
 
@@ -102,7 +102,9 @@ export default function OrderPage() {
           <div className="flex items-center justify-between text-sm"><span>Courier</span><Badge tone={statusTone(track?.status || o.delivery.status)}>{courierLabel(track?.status || o.delivery.status)}</Badge></div>
           {track?.etaAt && <p className="mt-1 text-sm">ETA {when(track.etaAt)}</p>}
           {track?.courierLocation && <p className="text-xs text-ink-500">Courier at {track.courierLocation.lat.toFixed(4)}, {track.courierLocation.lng.toFixed(4)}</p>}
-          {o.delivery.proofPhotoUrl && <a className="mt-2 inline-block text-sm text-brand-600 underline" href={o.delivery.proofPhotoUrl} target="_blank" rel="noreferrer">Proof of delivery photo</a>}
+          {o.delivery.exception && !o.delivery.exception.resolution && <div className="mt-2"><Alert>Your courier is at the address and trying to reach you{o.delivery.exception.waitUntil ? ` until ${new Date(o.delivery.exception.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}. Please answer your phone or call {o.locationPhone || 'the restaurant'}.</Alert></div>}
+          {o.delivery.arrivedAt && !o.delivery.exception && track?.status !== 'DELIVERED' && <p className="mt-1 text-sm font-medium">Your courier has arrived.</p>}
+          {o.delivery.hasProof && <p className="mt-2 text-xs text-ink-500">Proof of delivery was recorded. If something is wrong, report a problem and support will review it.</p>}
           {o.delivery.trackingUrl && <a className="ml-3 text-sm text-brand-600 underline" href={o.delivery.trackingUrl} target="_blank" rel="noreferrer">Provider tracking</a>}
           <ul className="mt-2 text-xs text-ink-500">{track?.events.slice(-5).map((e, i) => <li key={i}>{courierLabel(e.type)} · {when(e.at)}</li>)}</ul>
         </Card>

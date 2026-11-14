@@ -303,7 +303,10 @@ export class SupportService implements OnModuleInit {
     const [p] = await this.db.select().from(payments).where(eq(payments.id, paymentId)).limit(1);
     if (!p) throw new NotFoundException();
     const order = p.orderId ? await this.orders.timeline(user, p.orderId) : null;
-    return { paymentId: p.id, disputeId: p.disputeId, amountCents: p.capturedCents, evidence: { orderNumber: order?.order.number, acceptedAt: order?.order.acceptedAt, readyAt: order?.order.readyAt, collectedAt: order?.order.collectedAt, deliveryProof: order?.delivery?.proofPhotoUrl, events: order?.events, customerEmail: order?.order.guestEmail } };
+    // 17.8 proof is read from the job (staff only) and the access is audited
+    const [job] = p.orderId ? await this.db.select({ id: deliveryJobs.id, proof: deliveryJobs.proofPhotoUrl }).from(deliveryJobs).where(eq(deliveryJobs.orderId, p.orderId)).limit(1) : [null];
+    if (job?.proof) await this.audit.log({ actorId: user.sub, action: 'delivery.proof_view', entityType: 'delivery_job', entityId: job.id, reason: 'chargeback evidence' });
+    return { paymentId: p.id, disputeId: p.disputeId, amountCents: p.capturedCents, evidence: { orderNumber: order?.order.number, acceptedAt: order?.order.acceptedAt, readyAt: order?.order.readyAt, collectedAt: order?.order.collectedAt, deliveryProof: job?.proof ?? null, events: order?.events, customerEmail: order?.order.guestEmail } };
   }
 
   /** Policy enforcement: strikes accumulate; 3+ high-severity strikes auto-suspend the subject. */

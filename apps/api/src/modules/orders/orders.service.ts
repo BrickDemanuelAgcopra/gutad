@@ -423,7 +423,7 @@ export class OrdersService {
       locationPhone: loc?.phone,
       lines: lines.map((l) => ({ id: l.id, menuItemId: l.menuItemId, handling: l.handling, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions, status: l.status, replacementNote: l.replacementNote, brandId: l.brandId })),
       payment: p ? { status: p.status, amountCents: p.amountCents, capturedCents: p.capturedCents, refundedCents: p.refundedCents, clientSecret: p.status === 'REQUIRES_ACTION' ? p.clientSecret : undefined } : null,
-      delivery: job ? { id: job.id, status: job.status, etaAt: job.etaAt, trackingUrl: job.trackingUrl, proofPhotoUrl: job.proofPhotoUrl, fleet: job.fleet } : null,
+      delivery: job ? { id: job.id, status: job.status, etaAt: job.etaAt, trackingUrl: job.trackingUrl, hasProof: !!(job.proofPhotoUrl || job.proofSignature), fleet: job.fleet, arrivedAt: job.arrivedDropoffAt, exception: job.exception ? { kind: (job.exception as { kind: string }).kind, waitUntil: (job.exception as { waitUntil?: string }).waitUntil, resolution: (job.exception as { resolution?: string }).resolution ?? null } : null } : null,
       canCancel: o.status === 'SUBMITTED',
     };
   }

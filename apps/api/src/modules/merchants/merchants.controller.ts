@@ -67,6 +67,8 @@ const LocationDto = z.object({
   pickupShelves: z.array(z.string().min(1).max(10)).max(100).optional(),
   packingExtras: z.array(z.string().min(1).max(60)).max(20).optional(),
   requirePackVerification: z.boolean().nullable().optional(),
+  deliveryWindowMinutes: z.number().int().min(10).max(240).nullable().optional(),
+  deliveryWindowCapacity: z.number().int().min(1).nullable().optional(),
 });
 const HoursDto = z.object({ hours: z.array(z.object({ dayOfWeek: z.number().int().min(0).max(6), opens: z.string().regex(/^\d{2}:\d{2}$/), closes: z.string().regex(/^\d{2}:\d{2}$/), service: z.string().optional() })) });
 const StatusDto = z.object({ status: z.enum(['LIVE', 'PAUSED', 'SUSPENDED', 'OFFBOARDED']), reason: z.string().optional() });
