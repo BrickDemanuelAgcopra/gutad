@@ -3,6 +3,7 @@ import { useParams } from 'next/navigation';
 import { HANDLING_LABELS, type HandlingFlag } from '@gutad/shared';
 import { useApi } from '@/lib/hooks';
 import { Button } from '@/components/ui';
+import { PrintButton } from '@/components/capacity-printers';
 
 interface Labels { locationName: string; orderNumber: string; customer: string | null; fulfillmentType: string; tableNumber: string | null; promiseAt: string | null; shelfSlot: string | null; bags: { n: number; of: number; code: string; handling: string[] }[]; allergyNotes: string[]; items: { name: string; quantity: number; handling: string[] }[] }
 
@@ -13,7 +14,7 @@ export default function BagLabels() {
   if (!data) return null;
   return (
     <div className="space-y-4">
-      <div className="print:hidden"><Button onClick={() => window.print()}>Print {data.bags.length} label{data.bags.length > 1 ? 's' : ''}</Button></div>
+      <div className="flex flex-wrap items-center gap-2 print:hidden"><Button onClick={() => window.print()}>Print {data.bags.length} label{data.bags.length > 1 ? 's' : ''}</Button><PrintButton path={`/packing/${id}/print-labels`} label="Send to label printer" size="md" /></div>
       {data.bags.map((b) => (
         <div key={b.n} className="w-[4in] break-after-page rounded border-2 border-black bg-white p-3 font-mono text-black">
           <div className="flex justify-between text-xs"><span>{data.locationName}</span><span>{data.fulfillmentType}{data.tableNumber ? ` · TABLE ${data.tableNumber}` : ''}</span></div>

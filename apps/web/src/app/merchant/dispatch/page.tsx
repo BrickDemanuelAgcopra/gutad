@@ -4,20 +4,24 @@ import { api, money, when, ago } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, statusTone } from '@/components/ui';
 import { useMerchant } from '../context';
+import { useDebounced, useLiveDelivery } from '@/lib/live';
 
 interface Job { id: string; orderId: string | null; externalOrderId: string | null; status: string; fleet: string; provider: string; etaAt: string | null; retailFeeCents: number; providerCostCents: number; tipCents: number; dropoffAddress: { line1: string; city: string }; isLate: boolean; needsAttention: boolean; createdAt: string; cancelReason: string | null }
 
 /** Dispatcher: late/unassigned jobs, merchant-fleet status updates, delivery-only dispatch for outside orders. */
 export default function DispatchPage() {
   const { loc } = useMerchant();
-  const { data: jobs, reload } = useApi<Job[]>(loc ? `/locations/${loc.id}/dispatch` : null, { poll: 5000, deps: [loc?.id] });
+  // 17.1-R pushed job changes for this location; polling is the fallback while the stream is down
+  const { connected } = useLiveDelivery({ locationId: loc?.id, enabled: !!loc, onEvent: () => refetch() });
+  const { data: jobs, reload } = useApi<Job[]>(loc ? `/locations/${loc.id}/dispatch` : null, { poll: connected ? 60000 : 5000, deps: [loc?.id] });
+  const refetch = useDebounced(() => void reload(), 1000);
   const { run, error } = useAction();
   const [ext, setExt] = useState({ externalOrderId: '', line1: '', city: '', region: '', postalCode: '', value: '' });
   if (!loc) return null;
   const act = (fn: () => Promise<unknown>) => run(async () => { await fn(); await reload(); });
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Delivery dispatch <span className="text-sm font-normal text-ink-500">fleet: {loc.acceptsDelivery ? 'enabled' : 'off'}</span></h1>
+      <h1 className="text-2xl font-bold">Delivery dispatch <span className="text-sm font-normal text-ink-500">fleet: {loc.acceptsDelivery ? 'enabled' : 'off'} · {connected ? 'live' : 'refreshing every 5 s'}</span></h1>
       {error && <Alert>{error}</Alert>}
       <div className="space-y-2">
         {jobs?.map((j) => (

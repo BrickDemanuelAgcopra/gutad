@@ -16,6 +16,10 @@ import { adminPhaseG } from './smoke-admin-g.mjs';
 import { adminPhaseH } from './smoke-admin-h.mjs';
 import { adminPhaseI } from './smoke-admin-i.mjs';
 import { adminPhaseJ } from './smoke-admin-j.mjs';
+import { followupsA } from './smoke-followups-a.mjs';
+import { followupsB } from './smoke-followups-b.mjs';
+import { followupsC } from './smoke-followups-c.mjs';
+import { followupsD } from './smoke-followups-d.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -492,6 +496,11 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await adminPhaseH({ call, check, A, O, C, locId, demoOrgId, API: process.env.API_URL || 'http://localhost:4000' });
   await adminPhaseI({ call, check, A, O, C, owner });
   await adminPhaseJ({ call, check, A, O, C, locId, demoOrgId });
+  const FAPI = process.env.API_URL || 'http://localhost:4000';
+  await followupsA({ call, check, A, O, C, locId, demoOrgId, API: FAPI });
+  await followupsB({ call, check, A, O, C, locId, demoOrgId, owner, API: FAPI });
+  await followupsC({ call, check, A, O, C, locId, demoOrgId, owner, API: FAPI });
+  await followupsD({ call, check, A, O, C, locId, demoOrgId, API: FAPI });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

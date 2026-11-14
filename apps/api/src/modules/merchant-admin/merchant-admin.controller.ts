@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res } from '@
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { z } from 'zod';
-import { CurrentUser, JwtPayload, Public, RequiresReason } from '../../common/auth';
+import { assertCan, CurrentUser, JwtPayload, Public, RequiresReason } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { BrandsAdminService } from './brands-admin.service';
 import { LocationsAdminService } from './locations-admin.service';
@@ -27,6 +27,9 @@ const ReviewDto = z.object({ kind: z.enum(['RECIPE_APPROVAL', 'QUALITY_REVIEW', 
 @Controller()
 export class MerchantAdminController {
   constructor(private readonly locs: LocationsAdminService, private readonly merch: MerchantsAdminService, private readonly brandsSvc: BrandsAdminService) {}
+
+  /** 4.3 document expiry sweep on demand (the worker runs it hourly). */
+  @Post('admin/jobs/document-expiry') docExpiry(@CurrentUser() u: JwtPayload) { assertCan(u, 'merchants.manage'); return this.merch.documentExpiry(); }
 
   // 3 locations
   @Get('admin/locations') list(@CurrentUser() u: JwtPayload, @Query() q: Record<string, string>) { return this.locs.list(u, q); }

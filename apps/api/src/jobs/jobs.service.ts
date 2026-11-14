@@ -28,6 +28,9 @@ import { BrandsAdminService } from '../modules/merchant-admin/brands-admin.servi
 import { MenuAdminService } from '../modules/catalog/menu-admin.service';
 import { CustomersService } from '../modules/customers/customers.service';
 import { SupportService } from '../modules/support/support.service';
+import { SensorsService } from '../modules/operations/sensors.service';
+import { EquipmentVendorService } from '../modules/operations/equipment-vendor.service';
+import { GlPushService } from '../modules/finance/gl-push.service';
 
 /**
  * Background jobs. Every job takes a Redis lock so several worker replicas never double-run,
@@ -65,6 +68,9 @@ export class JobsService {
     private readonly menuAdmin: MenuAdminService,
     private readonly customers: CustomersService,
     private readonly support: SupportService,
+    private readonly sensors: SensorsService,
+    private readonly equipmentVendors: EquipmentVendorService,
+    private readonly glPush: GlPushService,
   ) {}
 
   private async locked(name: string, ttlMs: number, fn: () => Promise<unknown>) {
@@ -109,6 +115,9 @@ export class JobsService {
   @Interval(5 * 60_000) reminders() { return this.locked('reminders', 5 * 60_000, () => this.reservations.sendReminders()); }
   @Interval(10 * 60_000) noShows() { return this.locked('no-shows', 5 * 60_000, () => this.reservations.autoNoShow()); }
   @Interval(60_000) devices() { return this.locked('devices', 60_000, () => this.integrations.sweepOffline()); }
+  @Interval(120_000) sensorOffline() { return this.locked('sensor-offline', 120_000, () => this.sensors.offlineSweep()); }
+  @Interval(60_000) equipmentVendorPoll() { return this.locked('equipment-vendor-poll', 300_000, () => this.equipmentVendors.pollSweep()); }
+  @Interval(300_000) glPushRetry() { return this.locked('gl-push-retry', 300_000, () => this.glPush.retryDue()); }
   @Interval(10 * 60_000) retryNotifications() { return this.locked('retry-notify', 60_000, () => this.notifications.retryFailed()); }
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM) daily() {

@@ -15,7 +15,7 @@ async function bootstrap() {
   app.set('trust proxy', 1);
   app.use(requestContextMiddleware);
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-  app.enableCors({ origin: [cfg.PUBLIC_WEB_URL, /\.gutad\.io$/, /localhost:\d+$/, /^exp:\/\//], credentials: true, allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Device-Token', 'X-Signature', 'X-Audit-Reason', 'X-Request-Id'] });
+  app.enableCors({ origin: [cfg.PUBLIC_WEB_URL, /\.gutad\.io$/, /localhost:\d+$/, /^exp:\/\//], credentials: true, allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Device-Token', 'X-Signature', 'X-Audit-Reason', 'X-Request-Id', 'X-Device-Id', 'X-Client'] });
   app.useGlobalFilters(new AllExceptionsFilter());
   app.enableShutdownHooks();
 

@@ -65,7 +65,7 @@ export class FinanceController {
   @Get('accounting/bank-reconciliation') bankRec(@CurrentUser() u: JwtPayload) { return this.acc.bankReconciliation(u); }
   @Get('accounting/close/:period') close(@CurrentUser() u: JwtPayload, @Param('period') p: string) { return this.acc.closeStatus(u, p); }
   @Post('accounting/close/:period/tick') tick(@CurrentUser() u: JwtPayload, @Param('period') p: string, @Body(zod(z.object({ key: z.string(), done: z.boolean() }))) b: { key: string; done: boolean }) { return this.acc.tickClose(u, p, b.key, b.done); }
-  @Post('accounting/close/:period') closeMonth(@CurrentUser() u: JwtPayload, @Param('period') p: string) { return this.acc.closeMonth(u, p); }
+  @Post('accounting/close/:period') closeMonth(@CurrentUser() u: JwtPayload, @Param('period') p: string, @Body(zod(z.object({ force: z.boolean().optional(), reason: z.string().optional() }).optional())) b?: { force?: boolean; reason?: string }) { return this.acc.closeMonth(u, p, b || {}); }
   @Get('accounting/budgets/:period') budgets(@CurrentUser() u: JwtPayload, @Param('period') p: string) { return this.acc.budgetVsActual(u, p); }
   @Post('accounting/budgets') setBudget(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ costCenter: z.string().min(1), period: z.string().regex(/^\d{4}-\d{2}$/), category: z.enum(['REVENUE', 'COGS', 'LABOR', 'DELIVERY', 'PROCESSING', 'PROMOTION', 'REFUNDS', 'OTHER']), amountCents: z.number().int() }))) b: { costCenter: string; period: string; category: string; amountCents: number }) { return this.acc.setBudget(u, b); }
   @Get('accounting/approval-limits') limits(@CurrentUser() u: JwtPayload) { return this.acc.approvalLimits(u); }

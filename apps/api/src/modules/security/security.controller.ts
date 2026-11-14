@@ -15,7 +15,7 @@ const EmergencyDto = z.object({ roles: z.array(z.enum(STAFF_ROLES)).min(1), minu
 const SupportDto = z.object({ organizationId: z.string().uuid(), minutes: z.number().int().min(5).max(240).optional(), reason: z.string().min(5), readOnly: z.boolean().optional() });
 const RegionDto = z.object({ id: z.string().uuid().optional(), code: z.string().min(2).max(20), name: z.string().min(2), parentId: z.string().uuid().nullable().optional(), timezone: z.string().optional() });
 const SettingsDto = z.object({
-  sso: z.object({ enabled: z.boolean().optional(), issuer: z.string().optional(), clientId: z.string().optional(), clientSecret: z.string().optional(), redirectUri: z.string().optional(), allowedDomains: z.array(z.string()).optional(), label: z.string().optional() }).optional(),
+  sso: z.object({ enabled: z.boolean().optional(), issuer: z.string().optional(), clientId: z.string().optional(), clientSecret: z.string().optional(), redirectUri: z.string().optional(), mobileRedirectUri: z.string().regex(/^(gutad:\/\/[A-Za-z0-9/_-]*)?$/).optional(), allowedDomains: z.array(z.string()).optional(), label: z.string().optional() }).optional(),
   mfaRequiredRoles: z.array(z.string()).optional(),
   sessions: z.object({ staffTokenMinutes: z.number().int().min(5).max(1440).optional(), staffIdleMinutes: z.number().int().min(5).max(10080).optional(), staffMaxHours: z.number().int().min(1).max(720).optional() }).optional(),
   emergency: z.object({ maxMinutes: z.number().int().min(5).max(1440).optional(), grantableRoles: z.array(z.string()).optional() }).optional(),

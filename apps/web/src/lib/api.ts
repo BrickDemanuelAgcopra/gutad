@@ -40,10 +40,27 @@ async function refreshSession() {
   }
 }
 
+/** 10.4-D a random id this browser keeps, sent on sign-in calls as a duplicate-account signal. */
+const DEVICE_KEY = 'gutad.device';
+export function deviceId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    let d = localStorage.getItem(DEVICE_KEY);
+    if (!d) {
+      d = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID().replace(/-/g, '') : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(DEVICE_KEY, d);
+    }
+    return d;
+  } catch {
+    return null;
+  }
+}
+
 export const api = new GutadClient({
   baseUrl: API_URL,
   getToken: () => session.token(),
   onUnauthorized: refreshSession,
+  extraHeaders: (path): Record<string, string> => { const d = path.startsWith('/auth/') ? deviceId() : null; return d ? { 'X-Device-Id': d, 'X-Client': 'web' } : {}; },
 });
 
 export { newIdempotencyKey };

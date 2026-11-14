@@ -5,6 +5,7 @@ import { useAction, useApi } from '@/hooks';
 import { useMerchantLocation } from '@/merchant';
 import { Badge, Button, C, Card, ErrorText, Input, Muted, s, tone } from '@/ui';
 import { Pills, WorkspaceGate } from '@/ops';
+import { ResponsibilityDisputes } from '@/responsibility';
 
 interface Case { id: string; category: string; description: string; status: string; orderNumber: string | null; aboutMerchant: boolean; reporterType: string; createdAt: string }
 interface Msg { id: string; authorRole: string; authorEmail: string | null; body: string; createdAt: string }
@@ -27,6 +28,7 @@ function Support() {
         <ErrorText msg={error} />
         <Button title="Send to Gutad" disabled={!orgId || desc.length < 5} onPress={() => run(async () => { await api.post(`/organizations/${orgId}/cases`, { category: cat, description: desc }); setDesc(''); reload(); })} />
       </Card>
+      {orgId && <ResponsibilityDisputes role="MERCHANT" organizationId={orgId} />}
       {data?.map((c) => (
         <Card key={c.id}>
           <Pressable onPress={() => setOpen(open === c.id ? null : c.id)}>

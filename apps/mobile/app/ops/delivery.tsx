@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { api, when } from '@/api';
 import { useAction, useApi, useSession } from '@/hooks';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
 import { Pills } from '@/ops';
 import { TileMap } from '@/tile-map';
+import { useLiveDelivery } from '@/live';
 
 interface Live { couriers: { id: string; name: string | null; lat: number | null; lng: number | null; status: string; activeJobs: number; vehicleType: string }[]; pickups: { id: string; name: string; lat: number | null; lng: number | null; jobs: number }[]; deliveries: { id: string; status: string; fleet: string; provider: string; location: string; locationId: string; driverId: string | null; etaAt: string | null; late: boolean; dropoff: { lat: number | null; lng: number | null; line1: string }; exception: string | null; needsAttention: boolean; requirements: string[] }[] }
 interface Restr { id: string; kind: string; value: number | null; reason: string; locationId: string | null; zoneId: string | null; endsAt: string }
@@ -13,7 +14,10 @@ interface Restr { id: string; kind: string; value: number | null; reason: string
 export default function OpsDelivery() {
   const { can } = useSession();
   const [tab, setTab] = useState<'live' | 'restrictions'>('live');
-  const { data, reload } = useApi<Live>('/admin/delivery/live', { poll: 15000 });
+  // 17.1-R pushed courier positions and job changes (refetch at most every 2 s); polling is the fallback
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { connected } = useLiveDelivery({ onEvent: () => { if (!pending.current) pending.current = setTimeout(() => { pending.current = null; void reload(); }, 2000); } });
+  const { data, reload } = useApi<Live>('/admin/delivery/live', { poll: connected ? 60000 : 15000 });
   const { data: couriers } = useApi<{ id: string; name: string | null; operational: string; capabilities: string[] }[]>(tab === 'live' ? '/admin/couriers?status=APPROVED' : null, { deps: [tab] });
   const { data: restr, reload: reloadR } = useApi<Restr[]>(tab === 'restrictions' ? '/admin/delivery/restrictions' : null, { deps: [tab] });
   const { run, error } = useAction();
@@ -35,7 +39,7 @@ export default function OpsDelivery() {
             ...data.couriers.filter((c) => c.lat).map((c) => ({ id: `c${c.id}`, lat: c.lat!, lng: c.lng!, color: c.status === 'ON_DELIVERY' ? C.warn : c.status === 'ONLINE' ? C.good : C.ink3 })),
             ...data.deliveries.filter((d) => d.dropoff.lat).map((d) => ({ id: `d${d.id}`, lat: d.dropoff.lat!, lng: d.dropoff.lng!, color: d.needsAttention || d.late ? C.bad : C.info, size: 8 })),
           ]} />
-          <Muted>{data.couriers.filter((c) => c.status !== 'OFFLINE').length} couriers online · {data.deliveries.length} active · {problems.length} need attention</Muted>
+          <Muted>{connected ? '● live · ' : 'refreshing every 15 s · '}{data.couriers.filter((c) => c.status !== 'OFFLINE').length} couriers online · {data.deliveries.length} active · {problems.length} need attention</Muted>
           {(problems.length ? problems : data.deliveries).map((d) => (
             <Card key={d.id}>
               <Pressable onPress={() => setOpen(open === d.id ? null : d.id)}>

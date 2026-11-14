@@ -141,20 +141,27 @@ export class WorkforceService {
 
   /** Payroll export: hours per person and ISO week, overtime above the weekly threshold, gross pay. Only approved entries. */
   async payrollCsv(user: JwtPayload, locationId: string, from: Date, to: Date) {
+    const rows = await this.payrollRows(user, locationId, from, to);
+    const head = ['Employee', 'Email', 'Week', 'RegularHours', 'OvertimeHours', 'Rate', 'GrossPay', 'UnapprovedHours'];
+    const lines = rows.map((g) => [g.name, g.email, g.week, g.regularHours.toFixed(2), g.overtimeHours.toFixed(2), (g.rateCents / 100).toFixed(2), (g.grossCents / 100).toFixed(2), g.unapprovedHours.toFixed(2)]);
+    return [head, ...lines].map((r) => r.map(csvCell).join(',')).join('\n');
+  }
+
+  /** Approved hours per person and ISO week with overtime above the weekly threshold (CSV export and payroll push, 23.3-P). */
+  async payrollRows(user: JwtPayload, locationId: string, from: Date, to: Date) {
     await this.loc(user, locationId, ['MERCHANT_OWNER', 'MERCHANT_MANAGER']);
     const cfg = await this.cfg();
     const list = await this.timesheet(user, locationId, from, to);
-    const by = new Map<string, { name: string; email: string; week: string; hours: number; rateCents: number; unapproved: number }>();
+    const by = new Map<string, { userId: string; name: string; email: string; week: string; hours: number; rateCents: number; unapproved: number }>();
     for (const e of list) {
       const k = `${e.userId}|${isoWeek(e.clockInAt)}`;
-      const g = by.get(k) || { name: e.name || '', email: e.email, week: isoWeek(e.clockInAt), hours: 0, rateCents: e.rateCents, unapproved: 0 };
+      const g = by.get(k) || { userId: e.userId, name: e.name || '', email: e.email, week: isoWeek(e.clockInAt), hours: 0, rateCents: e.rateCents, unapproved: 0 };
       if (e.approvedById) g.hours += e.hours; else g.unapproved += e.hours;
       g.rateCents = e.rateCents;
       by.set(k, g);
     }
-    const head = ['Employee', 'Email', 'Week', 'RegularHours', 'OvertimeHours', 'Rate', 'GrossPay', 'UnapprovedHours'];
-    const lines = [...by.values()].map((g) => { const reg = Math.min(g.hours, cfg.overtimeWeeklyHours), ot = Math.max(0, g.hours - cfg.overtimeWeeklyHours); const gross = (reg * g.rateCents + ot * g.rateCents * cfg.overtimeMultiplier) / 100; return [g.name, g.email, g.week, reg.toFixed(2), ot.toFixed(2), (g.rateCents / 100).toFixed(2), gross.toFixed(2), g.unapproved.toFixed(2)]; });
-    return [head, ...lines].map((r) => r.map(csvCell).join(',')).join('\n');
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    return [...by.values()].map((g) => { const reg = Math.min(g.hours, cfg.overtimeWeeklyHours), ot = Math.max(0, g.hours - cfg.overtimeWeeklyHours); const gross = Math.round(reg * g.rateCents + ot * g.rateCents * cfg.overtimeMultiplier); return { userId: g.userId, name: g.name, email: g.email, week: g.week, regularHours: r2(reg), overtimeHours: r2(ot), rateCents: g.rateCents, overtimeMultiplier: cfg.overtimeMultiplier, grossCents: gross, unapprovedHours: r2(g.unapproved) }; });
   }
 
   /** 23.4 labor hours vs order volume per day. */
@@ -185,7 +192,7 @@ export class WorkforceService {
     return r;
   }
 
-  private async checkVersion(e: typeof equipment.$inferSelect) {
+  async checkVersion(e: typeof equipment.$inferSelect) {
     if (!e.isAutomated || !e.softwareVersion) return;
     const approved = await this.settings.getObject<Record<string, string[]>>('equipment.approvedVersions', {});
     if (approved[e.kind] && !approved[e.kind].includes(e.softwareVersion)) {

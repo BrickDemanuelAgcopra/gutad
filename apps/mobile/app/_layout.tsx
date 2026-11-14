@@ -18,6 +18,7 @@ export default function RootLayout() {
         <Stack.Screen name="merchant/host" options={{ title: 'Host stand' }} />
         <Stack.Screen name="merchant/kitchen" options={{ title: 'Kitchen' }} />
         <Stack.Screen name="driver/index" options={{ title: 'Driver' }} />
+        <Stack.Screen name="kiosk/[slug]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="ops/index" options={{ title: 'Gutad Ops' }} />
         <Stack.Screen name="ops/executive" options={{ title: 'Executive dashboard' }} />
         <Stack.Screen name="ops/live" options={{ title: 'Live operations' }} />

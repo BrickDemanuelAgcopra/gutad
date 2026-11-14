@@ -4,6 +4,7 @@ import { api, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Stat, Table, Tabs } from '@/components/ui';
 import { SectionTitle } from '@/components/admin-ui';
+import { GlPushCard, LedgerLockCard } from '@/components/followups-c';
 
 const monthAgo = () => new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -132,7 +133,10 @@ function Close() {
       <Card title="Checklist">
         {data?.checklist.map((c) => <label key={c.key} className="flex items-center gap-2 py-1 text-sm"><input type="checkbox" checked={c.done} disabled={c.auto || data.status === 'CLOSED' || !can('finance.manage')} onChange={(e) => run(async () => { await api.post(`/accounting/close/${period}/tick`, { key: c.key, done: e.target.checked }); await reload(); })} />{c.label}{c.auto && <span className="text-xs text-ink-500">(checked automatically)</span>}</label>)}
         {can('finance.manage') && data?.status !== 'CLOSED' && <Button className="mt-2" disabled={!data?.ready} onClick={() => run(async () => { await api.post(`/accounting/close/${period}`, {}); await reload(); })}>Close {period}</Button>}
+        {can('finance.manage') && data?.status === 'CLOSED' && <Button className="mt-2" variant="danger" onClick={() => { const reason = window.prompt(`Why reopen ${period}? (audited)`); if (reason && reason.length >= 5) run(async () => { await api.post(`/accounting/close/${period}/reopen`, { reason }); await reload(); }); }}>Reopen {period}</Button>}
+        <p className="mt-1 text-xs text-ink-500">Only finished months can be closed. Once closed, postings dated in the month land in the current month with a memo naming the original date.</p>
       </Card>
+      <LedgerLockCard canManage={can('finance.manage')} />
     </div>
   );
 }
@@ -166,8 +170,9 @@ function Coa() {
       {error && <Alert>{error}</Alert>}
       <Card title="Exports">
         <div className="flex flex-wrap items-end gap-2"><Range v={r} set={setR} /><Button onClick={() => run(() => downloadFile(`/accounting/journal.csv?from=${r.from}&to=${r.to}T23:59:59Z`, `gutad-journal-${r.from}-${r.to}.csv`))}>Journal (CSV)</Button><Button variant="secondary" onClick={() => run(async () => { const x = await api.get<{ journalCsv: string; auditCsv: string }>(`/accounting/audit-export?from=${r.from}&to=${r.to}T23:59:59Z`); for (const [name, body] of [['journal', x.journalCsv], ['audit', x.auditCsv]] as const) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([body], { type: 'text/csv' })); a.download = `gutad-${name}-${r.from}-${r.to}.csv`; a.click(); } })}>Financial audit export</Button></div>
-        <p className="mt-1 text-xs text-ink-500">General-journal layout (date, journal no., account code/name, debit, credit, description, class). Import it into the general ledger; there is no live push.</p>
+        <p className="mt-1 text-xs text-ink-500">General-journal layout (date, journal no., account code/name, debit, credit, description, class). Import it into the general ledger, or connect QuickBooks Online / Xero below to push each month.</p>
       </Card>
+      <GlPushCard canManage={can('finance.manage')} />
       <Table rows={data || []} cols={[
         { key: 'a', label: 'Ledger account', render: (g) => <span className="text-xs">{g.ledgerAccount}</span> }, { key: 't', label: 'Type', render: (g) => g.type.toLowerCase() },
         { key: 'c', label: 'GL code', render: (g) => can('finance.manage') ? <Input className="w-24" value={edit[g.ledgerAccount]?.glCode ?? g.glCode} onChange={(e) => setEdit({ ...edit, [g.ledgerAccount]: { glCode: e.target.value, glName: edit[g.ledgerAccount]?.glName ?? g.glName } })} /> : g.glCode },

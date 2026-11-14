@@ -6,6 +6,7 @@ import { api, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { useCachedApi, useOfflineActions } from '@/lib/offline';
 import { Alert, Badge, Button, Card, Input, Modal, Select, statusTone, Table } from '@/components/ui';
+import { PrintButton } from '@/components/capacity-printers';
 
 export interface KLine { id: string; menuItemId: string | null; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null; status: string; handling: string[]; brandId?: string | null }
 export interface Ticket { id: string; orderId: string; stationCode: string | null; status: string; kind: string; orderNumber: string; promiseAt: string | null; fireAt: string | null; readyBy: string | null; cookMinutes: number | null; targetMinutes: number; fireState: 'HOLD' | 'FIRE'; minutesInProgress: number; delayed: boolean; fulfillmentType: string; tableNumber: string | null; lines: KLine[] }
@@ -70,6 +71,7 @@ export function StationsBoard({ kitchenId, stations }: { kitchenId: string; stat
             <div className="mt-2 flex flex-wrap gap-1 print:hidden">
               {t.status === 'QUEUED' && <Button size="sm" variant={t.fireState === 'HOLD' ? 'secondary' : 'primary'} onClick={() => act(`/tickets/${t.id}/transition`, { status: 'IN_PROGRESS' })}>{t.fireState === 'HOLD' ? 'Fire early' : 'Start'}</Button>}
               {t.status === 'IN_PROGRESS' && <Button size="sm" onClick={() => act(`/tickets/${t.id}/transition`, { status: 'DONE' })}>All done</Button>}
+              <PrintButton path={`/tickets/${t.id}/print`} label="Print ticket" />
               {t.lines.filter((l) => !['UNAVAILABLE', 'READY'].includes(l.status)).map((l) => <Button key={l.id} size="sm" variant="ghost" onClick={() => act(`/order-lines/${l.id}/unavailable`, { note: 'Out of stock — replacement offered' })}>86 {l.name}</Button>)}
             </div>
           </Card>
@@ -119,7 +121,7 @@ export function PackingBoard({ path }: { path: string }) {
               <ul className="mt-2 space-y-1 text-sm">{p.lines.map((l) => <li key={l.id} className="flex items-center justify-between"><span className={l.status === 'UNAVAILABLE' ? 'text-red-600 line-through' : ''}>{l.quantity}× {l.name} <Flags flags={l.handling || []} /> <Badge tone={statusTone(l.status)}>{l.status}</Badge></span><span className="flex gap-1">{!p.verifiedLineIds.includes(l.id) && l.status === 'READY' && <Button size="sm" variant="secondary" onClick={() => act(() => api.post(`/packing/${p.id}/verify`, { lineId: l.id }))}>In bag ✓</Button>}{p.verifiedLineIds.includes(l.id) && <span className="text-xs text-emerald-700">verified</span>}<button className="text-xs text-ink-500 underline" onClick={() => setEv({ orderId: p.orderId, line: l })}>problem</button></span></li>)}</ul>
               <div className="mt-2 text-xs font-semibold text-ink-500">Checklist</div>
               <div className="flex flex-wrap gap-3">{p.checklist.map((c) => <label key={c.key} className="flex items-center gap-1 text-sm"><input type="checkbox" checked={c.done} onChange={(e) => act(() => api.post(`/packing/${p.id}/checklist`, { key: c.key, done: e.target.checked }))} />{c.label}</label>)}</div>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">Bags <Select value={String(p.bagCount)} onChange={(e) => act(() => api.post(`/packing/${p.id}/bags`, { count: Number(e.target.value) }))}>{[1, 2, 3, 4, 5, 6].map((n) => <option key={n}>{n}</option>)}</Select>{p.bags.map((b) => <span key={b.n} className="text-xs">#{b.n} <Flags flags={b.handling} /></span>)}<Link className="text-xs underline" href={`/merchant/kitchen/labels/${p.id}`} target="_blank">Print labels</Link></div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">Bags <Select value={String(p.bagCount)} onChange={(e) => act(() => api.post(`/packing/${p.id}/bags`, { count: Number(e.target.value) }))}>{[1, 2, 3, 4, 5, 6].map((n) => <option key={n}>{n}</option>)}</Select>{p.bags.map((b) => <span key={b.n} className="text-xs">#{b.n} <Flags flags={b.handling} /></span>)}<Link className="text-xs underline" href={`/merchant/kitchen/labels/${p.id}`} target="_blank">Print labels</Link><PrintButton path={`/packing/${p.id}/print-labels`} label="Send labels to printer" /></div>
               <Button className="mt-3 w-full" disabled={p.status === 'BLOCKED' || !done} onClick={() => act(async () => { const r = await api.post<{ shelfSlot?: string | null }>(`/packing/${p.id}/release`, {}); setOk(`${p.orderNumber} released${r.shelfSlot ? ` → shelf ${r.shelfSlot}` : ''}.`); })}>{done ? 'Release bag' : 'Verify every item and the checklist'}</Button>
             </Card>
           );

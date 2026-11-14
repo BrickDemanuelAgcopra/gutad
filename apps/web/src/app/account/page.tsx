@@ -205,7 +205,7 @@ function Payments() {
       </Card>
       <Card title="Add a card">
         <div className="space-y-2">
-          <CardField value={card} onChange={setCard} />
+          <CardField value={card} onChange={setCard} purpose="save" />
           {err && <Alert>{err}</Alert>}
           <Button onClick={add}>Save card</Button>
           <p className="text-xs text-ink-500">Your card is stored by our payment processor. Gutad keeps only a token and the last 4 digits.</p>

@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
-import { Alert, Badge, Button, Card, Select, statusTone, Table } from '@/components/ui';
+import { Alert, Badge, Button, Card, Input, Select, statusTone, Table } from '@/components/ui';
 import { askReason } from '@/components/admin-ui';
 
 interface P {
@@ -20,10 +20,11 @@ interface P {
   memberships: { id: string; planName: string; status: string; currentPeriodEnd: string }[];
   reservations: { id: string; status: string; startAt: string; partySize: number }[];
   paymentMethods: { id: string; brand: string | null; last4: string | null; expMonth: number | null; expYear: number | null; isDefault: boolean }[];
-  restrictions: { id: string; kind: string; reason: string; expiresAt: string | null; liftedAt: string | null; appealStatus: string; appealNote: string | null; createdAt: string }[];
+  restrictions: { id: string; kind: string; reason: string; limitCents?: number | null; periodDays?: number | null; expiresAt: string | null; liftedAt: string | null; appealStatus: string; appealNote: string | null; createdAt: string }[];
   privacyRequests: { id: string; kind: string; status: string; scheduledFor: string | null; createdAt: string }[];
   goodwill: { count90d: number; cents90d: number; maxCount90d: number; maxCents90d: number; overCount: boolean; overCents: boolean };
   duplicates: { id: string; email: string; name: string | null; why: string[]; createdAt: string }[];
+  devices?: { id: string; client: string | null; userAgent: string | null; signIns: number; firstSeenAt: string; lastSeenAt: string; sharedWith: number }[];
 }
 
 /** Customer 360: profile and preferences, orders, complaints, refunds, credits, memberships, cards, restrictions, privacy, duplicates. */
@@ -34,6 +35,8 @@ export default function Customer() {
   const { run, error } = useAction();
   const [kind, setKind] = useState('ORDERING_BLOCKED');
   const [ok, setOk] = useState<string | null>(null);
+  const [limit, setLimit] = useState('');
+  const [period, setPeriod] = useState('');
   if (!p) return null;
   const c = p.customer;
   return (
@@ -69,8 +72,10 @@ export default function Customer() {
           {p.memberships.map((m) => <div key={m.id} className="mt-1 text-sm">{m.planName} · {m.status.toLowerCase()} · renews {when(m.currentPeriodEnd)}</div>)}
         </Card>
         <Card title="Restrictions">
-          {p.restrictions.map((r) => <div key={r.id} className="border-b border-ink-50 py-1 text-sm"><div className="flex justify-between"><span>{r.kind.toLowerCase().replace(/_/g, ' ')}</span>{r.liftedAt ? <span className="text-xs text-emerald-700">lifted</span> : can('support.manage') && <button className="text-xs underline" onClick={() => { const note = window.prompt('Why lift it?'); if (note) run(async () => { await api.post(`/admin/restrictions/${r.id}/lift`, { note }); reload(); }); }}>Lift</button>}</div><div className="text-xs text-ink-500">{r.reason}{r.appealStatus !== 'NONE' ? ` · appeal ${r.appealStatus.toLowerCase()}: ${r.appealNote}` : ''}</div></div>)}
-          {can('support.manage') && <div className="mt-2 flex gap-2"><Select value={kind} onChange={(e) => setKind(e.target.value)}><option value="ORDERING_BLOCKED">Block ordering</option><option value="PROMOTIONS_BLOCKED">Block promotions</option><option value="REFUND_REVIEW">Review refunds</option></Select><Button size="sm" variant="secondary" onClick={() => { const reason = askReason('restricting this account'); if (reason) run(async () => { await api.post(`/admin/customers/${id}/restrictions`, { kind, reason }); reload(); }); }}>Add</Button></div>}
+          {p.restrictions.map((r) => <div key={r.id} className="border-b border-ink-50 py-1 text-sm"><div className="flex justify-between"><span>{r.kind.toLowerCase().replace(/_/g, ' ')}{r.limitCents !== null && r.limitCents !== undefined && <b> {money(r.limitCents)}{r.periodDays ? ` / ${r.periodDays} days` : ' per order'}</b>}</span>{r.liftedAt ? <span className="text-xs text-emerald-700">lifted</span> : can('support.manage') && <button className="text-xs underline" onClick={() => { const note = window.prompt('Why lift it?'); if (note) run(async () => { await api.post(`/admin/restrictions/${r.id}/lift`, { note }); reload(); }); }}>Lift</button>}</div><div className="text-xs text-ink-500">{r.reason}{r.appealStatus !== 'NONE' ? ` · appeal ${r.appealStatus.toLowerCase()}: ${r.appealNote}` : ''}</div></div>)}
+          {can('support.manage') && <div className="mt-2 space-y-2"><div className="flex gap-2"><Select value={kind} onChange={(e) => setKind(e.target.value)}><option value="ORDERING_BLOCKED">Block ordering</option><option value="PROMOTIONS_BLOCKED">Block promotions</option><option value="REFUND_REVIEW">Review refunds</option><option value="CASH_LIMIT">Cash / pay-later limit</option><option value="CREDIT_LIMIT">Credit usage limit</option></Select><Button size="sm" variant="secondary" onClick={() => { const isLimit = kind === 'CASH_LIMIT' || kind === 'CREDIT_LIMIT'; const limitCents = Math.round(Number(limit || 0) * 100); if (isLimit && !(limitCents >= 0 && limit)) { setOk(null); return run(async () => { throw new Error('Enter the limit amount'); }); } const reason = askReason(isLimit ? 'setting this limit' : 'restricting this account'); if (reason) run(async () => { await api.post(`/admin/customers/${id}/restrictions`, { kind, reason, ...(isLimit ? { limitCents, periodDays: period ? Number(period) : undefined } : {}) }); setLimit(''); setPeriod(''); reload(); }); }}>Add</Button></div>
+            {(kind === 'CASH_LIMIT' || kind === 'CREDIT_LIMIT') && <div className="flex gap-2"><Input label={kind === 'CASH_LIMIT' ? 'Max owed per order (USD)' : 'Max credits per order (USD)'} inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} /><Input label="Rolling window (days, optional)" inputMode="numeric" value={period} onChange={(e) => setPeriod(e.target.value.replace(/\D/g, ''))} /></div>}
+            {(kind === 'CASH_LIMIT' || kind === 'CREDIT_LIMIT') && <p className="text-xs text-ink-500">{kind === 'CASH_LIMIT' ? 'Checkout is refused when what the customer owes after credits, points and gift balance goes over the limit (per order, or summed over the window).' : 'Credits applied at checkout are capped at this amount (per order, or summed over the window). Setting a new limit replaces the current one.'}</p>}</div>}
         </Card>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
@@ -78,7 +83,10 @@ export default function Customer() {
           {can('customers.pii') && <Button size="sm" variant="secondary" onClick={() => { const reason = askReason('sending a password reset'); if (reason) run(async () => { await api.post(`/admin/customers/${id}/send-recovery`, { reason }); setOk('Recovery link sent to the customer’s email.'); }); }}>Send recovery link</Button>}
           <div className="mt-2 text-xs font-semibold text-ink-500">Possible duplicates</div>
           {p.duplicates.map((d) => <div key={d.id} className="flex items-center justify-between py-1 text-sm"><span><Link className="underline" href={`/admin/customers/${d.id}`}>{d.email}</Link> <span className="text-xs text-ink-500">{d.why.join(', ')}</span></span>{can('customers.pii') && can('support.manage') && <Button size="sm" variant="ghost" onClick={() => { const reason = askReason(`merging ${d.email} into this account`); if (reason) run(async () => { await api.post(`/admin/customers/${d.id}/merge`, { intoUserId: id, reason }); setOk('Merged.'); reload(); }); }}>Merge into this</Button>}</div>)}
-          {!p.duplicates.length && <p className="text-sm text-ink-500">None found (same email, phone or address).</p>}
+          {!p.duplicates.length && <p className="text-sm text-ink-500">None found (same email, phone, address or device).</p>}
+          <div className="mt-2 text-xs font-semibold text-ink-500">Sign-in devices</div>
+          {(p.devices || []).map((d) => <div key={d.id} className="flex justify-between py-0.5 text-xs"><span title={d.userAgent || ''}>{d.client || 'unknown client'} · {d.signIns} sign-in{d.signIns === 1 ? '' : 's'} · last {when(d.lastSeenAt)}</span>{d.sharedWith > 0 ? <Badge tone="warn">shared with {d.sharedWith} other account{d.sharedWith === 1 ? '' : 's'}</Badge> : <span className="text-ink-500">only this account</span>}</div>)}
+          {!(p.devices || []).length && <p className="text-xs text-ink-500">No device recorded yet (devices are recorded at sign-in and registration).</p>}
         </Card>
         <Card title="Privacy">
           {p.privacyRequests.map((r) => <div key={r.id} className="text-sm">{r.kind.toLowerCase()} · {r.status.toLowerCase()} · {when(r.createdAt)}{r.scheduledFor ? ` · runs ${when(r.scheduledFor)}` : ''}</div>)}

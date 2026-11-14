@@ -5,6 +5,8 @@ import type { AuthResponse, MfaChallenge } from '@gutad/shared';
 import { api, session } from '@/api';
 import { Button, Card, ErrorText, Input, Muted, s } from '@/ui';
 import { BrandLogo } from '@/brand';
+import { useApi } from '@/hooks';
+import { signInWithSso } from '@/sso';
 
 export default function Login() {
   const router = useRouter();
@@ -13,6 +15,13 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [challenge, setChallenge] = useState<string | null>(null);
   const [code, setCode] = useState('');
+  // 2.4c-M SSO in the system browser (OpenID Connect), same identity provider as the web
+  const { data: sso } = useApi<{ enabled: boolean; label: string }>('/auth/sso/config');
+  const [ssoBusy, setSsoBusy] = useState(false);
+  const startSso = async () => {
+    setError(null); setSsoBusy(true);
+    try { if (await signInWithSso()) router.back(); } catch (e) { setError((e as Error).message); } finally { setSsoBusy(false); }
+  };
   const submit = async () => {
     setError(null);
     try {
@@ -48,6 +57,7 @@ export default function Login() {
         {mode === 'register' && <Input label="Phone" keyboardType="phone-pad" value={f.phone} onChangeText={(v) => setF({ ...f, phone: v })} />}
         <ErrorText msg={error} />
         <Button title={mode === 'login' ? 'Sign in' : 'Create account'} onPress={submit} />
+        {mode === 'login' && sso?.enabled && <Button title={ssoBusy ? 'Opening sign-in…' : sso.label} variant="secondary" disabled={ssoBusy} onPress={startSso} />}
         <Button title={mode === 'login' ? 'Create an account' : 'Have an account? Sign in'} variant="ghost" onPress={() => setMode(mode === 'login' ? 'register' : 'login')} />
         <Muted>Demo: customer@demo.gutad.io / customer12345 · owner@demo.gutad.io / merchant12345 · driver@demo.gutad.io / driver12345</Muted>
       </Card>

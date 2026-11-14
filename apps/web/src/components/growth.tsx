@@ -11,11 +11,11 @@ export interface Offer {
   id: string; code: string; name: string | null; automatic: boolean; kind: string; value: number; funder: string; platformSharePct: number | null;
   minSubtotalCents: number; maxDiscountCents: number | null; maxUses: number | null; uses: number; perUserLimit: number; locationIds: string[];
   segmentId: string | null; firstOrderOnly: boolean; itemIds: string[]; categoryIds: string[]; daysOfWeek: number[]; startTime: string | null; endTime: string | null;
-  stacking: string; priority: number; startsAt: string | null; expiresAt: string | null; isActive: boolean; campaignId: string | null; organizationId: string | null;
+  stacking: string; priority: number; buyQty?: number | null; getQty?: number | null; startsAt: string | null; expiresAt: string | null; isActive: boolean; campaignId: string | null; organizationId: string | null;
   redemptions?: number; discountCents?: number;
 }
 
-export const offerValue = (o: Pick<Offer, 'kind' | 'value' | 'maxDiscountCents'>) => (o.kind === 'PERCENT' ? `${o.value / 100}% off${o.maxDiscountCents ? ` (up to ${money(o.maxDiscountCents)})` : ''}` : o.kind === 'FIXED' ? `${money(o.value)} off` : 'Free delivery');
+export const offerValue = (o: Pick<Offer, 'kind' | 'value' | 'maxDiscountCents'> & { buyQty?: number | null; getQty?: number | null }) => (o.kind === 'BOGO' ? `Buy ${o.buyQty || 1}, get ${o.getQty || 1} free` : o.kind === 'FREE_ITEM' ? 'Free item' : o.kind === 'PERCENT' ? `${o.value / 100}% off${o.maxDiscountCents ? ` (up to ${money(o.maxDiscountCents)})` : ''}` : o.kind === 'FIXED' ? `${money(o.value)} off` : 'Free delivery');
 
 export function offerRules(o: Offer) {
   const r: string[] = [];
@@ -41,14 +41,14 @@ export function OfferEditor({ base, offer, staff, segments, menu, campaigns, onS
     value: o ? (o.kind === 'PERCENT' ? String(o.value / 100) : String(o.value / 100)) : '10', funder: o?.funder || (staff ? 'PLATFORM' : 'MERCHANT'), share: o?.platformSharePct != null ? String(o.platformSharePct) : '',
     min: o?.minSubtotalCents ? String(o.minSubtotalCents / 100) : '', cap: o?.maxDiscountCents ? String(o.maxDiscountCents / 100) : '', maxUses: o?.maxUses ? String(o.maxUses) : '', perUser: o ? String(o.perUserLimit) : '0',
     segmentId: o?.segmentId || '', firstOrderOnly: !!o?.firstOrderOnly, itemIds: o?.itemIds || [], categoryIds: o?.categoryIds || [], days: o?.daysOfWeek || [], start: o?.startTime || '', end: o?.endTime || '',
-    stacking: o?.stacking || 'EXCLUSIVE', priority: String(o?.priority ?? 0), expires: o?.expiresAt ? o.expiresAt.slice(0, 10) : '', campaignId: o?.campaignId || '', isActive: o ? o.isActive : true,
+    stacking: o?.stacking || 'EXCLUSIVE', priority: String(o?.priority ?? 0), buy: String(o?.buyQty ?? 1), get: String(o?.getQty ?? 1), expires: o?.expiresAt ? o.expiresAt.slice(0, 10) : '', campaignId: o?.campaignId || '', isActive: o ? o.isActive : true,
   });
   const set = (p: Partial<typeof f>) => setF({ ...f, ...p });
   const toggle = (k: 'itemIds' | 'categoryIds' | 'days', v: never) => set({ [k]: (f[k] as never[]).includes(v) ? (f[k] as never[]).filter((x) => x !== v) : [...(f[k] as never[]), v] } as Partial<typeof f>);
   const save = () => run(async () => {
     const cents = (s: string) => Math.round(Number(s || 0) * 100);
     const body = {
-      name: f.name || undefined, code: !f.automatic && f.code ? f.code : undefined, automatic: f.automatic, kind: f.kind, value: f.kind === 'PERCENT' ? Math.round(Number(f.value) * 100) : f.kind === 'FIXED' ? cents(f.value) : 0,
+      name: f.name || undefined, code: !f.automatic && f.code ? f.code : undefined, automatic: f.automatic, kind: f.kind, value: f.kind === 'PERCENT' ? Math.round(Number(f.value) * 100) : f.kind === 'FIXED' ? cents(f.value) : 0, buyQty: f.kind === 'BOGO' ? Number(f.buy || 1) : null, getQty: f.kind === 'BOGO' ? Number(f.get || 1) : null,
       funder: f.funder, platformSharePct: staff && f.share ? Number(f.share) : null, minSubtotalCents: cents(f.min), maxDiscountCents: f.cap ? cents(f.cap) : null, maxUses: f.maxUses ? Number(f.maxUses) : null,
       perUserLimit: Number(f.perUser || 0), segmentId: f.segmentId || null, firstOrderOnly: f.firstOrderOnly, itemIds: f.itemIds, categoryIds: f.categoryIds, daysOfWeek: f.days,
       startTime: f.start || null, endTime: f.end || null, stacking: f.stacking, priority: Number(f.priority || 0), expiresAt: f.expires ? new Date(`${f.expires}T23:59:00`).toISOString() : null, campaignId: f.campaignId || null, isActive: f.isActive,
@@ -66,8 +66,10 @@ export function OfferEditor({ base, offer, staff, segments, menu, campaigns, onS
         <Input label="Name customers see" value={f.name} onChange={(e) => set({ name: e.target.value })} placeholder="Weekday lunch: 10% off" />
         {!f.automatic && <Input label="Code (blank = random)" value={f.code} onChange={(e) => set({ code: e.target.value.toUpperCase() })} />}
         <div className="grid grid-cols-2 gap-2">
-          <Select label="Discount" value={f.kind} onChange={(e) => set({ kind: e.target.value })}><option value="PERCENT">Percent off</option><option value="FIXED">Amount off</option><option value="FREE_DELIVERY">Free delivery</option></Select>
-          {f.kind !== 'FREE_DELIVERY' && <Input label={f.kind === 'PERCENT' ? 'Percent' : 'Amount (USD)'} value={f.value} onChange={(e) => set({ value: e.target.value })} />}
+          <Select label="Discount" value={f.kind} onChange={(e) => set({ kind: e.target.value })}><option value="PERCENT">Percent off</option><option value="FIXED">Amount off</option><option value="FREE_DELIVERY">Free delivery</option><option value="BOGO">Buy X, get Y free</option><option value="FREE_ITEM">Free item</option></Select>
+          {f.kind === 'BOGO' && <><Input label="Buy" value={f.buy} onChange={(e) => set({ buy: e.target.value })} /><Input label="Get free (cheapest)" value={f.get} onChange={(e) => set({ get: e.target.value })} /></>}
+          {f.kind === 'FREE_ITEM' && <p className="col-span-2 text-xs text-ink-500">Pick the free item under “Only on” below; one is free when it is in the cart and the order qualifies.</p>}
+          {['PERCENT', 'FIXED'].includes(f.kind) && <Input label={f.kind === 'PERCENT' ? 'Percent' : 'Amount (USD)'} value={f.value} onChange={(e) => set({ value: e.target.value })} />}
           {f.kind === 'PERCENT' && <Input label="Cap (USD, optional)" value={f.cap} onChange={(e) => set({ cap: e.target.value })} />}
           <Input label="Minimum subtotal (USD)" value={f.min} onChange={(e) => set({ min: e.target.value })} />
         </div>
@@ -160,7 +162,7 @@ export function Challenges({ base, list, onChange }: { base: string; list: Chall
   );
 }
 
-interface Results { campaign: { name: string; holdoutPct: number; status: string }; groups: { treatment: { users: number; buyers: number; orders: number; revenueCents: number; conversionPct: number | null }; holdout: { users: number; buyers: number; orders: number; revenueCents: number; conversionPct: number | null } }; attributed: { orders: number; revenueCents: number; redemptions: number }; incrementalOrders: number | null; incrementalRevenueCents: number | null; incrementalMarginCents: number | null; contributionMarginBps: number; promotionCostCents: number; platformFundedCents: number; profitCents: number | null; roi: number | null; note: string | null }
+interface Results { campaign: { name: string; holdoutPct: number; status: string }; groups: { treatment: { users: number; buyers: number; orders: number; revenueCents: number; conversionPct: number | null }; holdout: { users: number; buyers: number; orders: number; revenueCents: number; conversionPct: number | null } }; attributed: { orders: number; revenueCents: number; redemptions: number }; incrementalOrders: number | null; incrementalOrdersRange: { low: number; high: number; significant: boolean } | null; incrementalRevenueRange: { low: number; high: number; significant: boolean } | null; incrementalRevenueCents: number | null; incrementalMarginCents: number | null; contributionMarginBps: number; promotionCostCents: number; platformFundedCents: number; profitCents: number | null; roi: number | null; note: string | null }
 
 /** 25.10 profitability against the holdout group. */
 export function CampaignResults({ id, onClose }: { id: string; onClose: () => void }) {
@@ -172,8 +174,8 @@ export function CampaignResults({ id, onClose }: { id: string; onClose: () => vo
           {data.note && <Alert tone="info">{data.note}</Alert>}
           <Table rows={[{ g: 'Received the campaign', ...data.groups.treatment }, { g: `Holdout (${data.campaign.holdoutPct}%)`, ...data.groups.holdout }]} cols={[{ key: 'g', label: 'Group', render: (r) => r.g }, { key: 'u', label: 'Customers', render: (r) => r.users }, { key: 'b', label: 'Ordered', render: (r) => `${r.buyers} (${r.conversionPct ?? '—'}%)` }, { key: 'o', label: 'Orders', render: (r) => r.orders }, { key: 'r', label: 'Sales', render: (r) => money(r.revenueCents) }]} />
           <div className="grid grid-cols-2 gap-3">
-            <Stat label="Incremental orders" value={data.incrementalOrders ?? '—'} hint="vs. what the holdout rate predicts" />
-            <Stat label="Incremental sales" value={data.incrementalRevenueCents === null ? '—' : money(data.incrementalRevenueCents)} />
+            <Stat label="Incremental orders" value={data.incrementalOrders ?? '—'} hint={data.incrementalOrdersRange ? `95% range ${data.incrementalOrdersRange.low} to ${data.incrementalOrdersRange.high}${data.incrementalOrdersRange.significant ? '' : ' · not conclusive yet'}` : 'vs. what the holdout rate predicts'} />
+            <Stat label="Incremental sales" value={data.incrementalRevenueCents === null ? '—' : money(data.incrementalRevenueCents)} hint={data.incrementalRevenueRange ? `95% range ${money(data.incrementalRevenueRange.low)} to ${money(data.incrementalRevenueRange.high)}` : undefined} />
             <Stat label="Promotion cost" value={money(data.promotionCostCents)} hint={`${data.attributed.redemptions} redemptions · ${money(data.platformFundedCents)} Gutad-funded`} />
             <Stat label="Profit" value={data.profitCents === null ? '—' : money(data.profitCents)} hint={`at ${data.contributionMarginBps / 100}% contribution margin${data.roi !== null ? ` · ROI ${data.roi}×` : ''}`} />
           </div>

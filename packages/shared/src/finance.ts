@@ -59,6 +59,7 @@ export const DEFAULT_GL_MAP: Record<string, { code: string; name: string; type: 
   CUSTOMER_CREDIT_LIABILITY: { code: '2200', name: 'Customer credit liability', type: 'LIABILITY' },
   DEPOSIT_LIABILITY: { code: '2210', name: 'Customer deposits', type: 'LIABILITY' },
   DEFERRED_REVENUE: { code: '2300', name: 'Deferred revenue', type: 'LIABILITY' },
+  GIFT_CARD_LIABILITY: { code: '2220', name: 'Gift card liability', type: 'LIABILITY' },
   PLATFORM_REVENUE_COMMISSION: { code: '4000', name: 'Commission revenue', type: 'REVENUE' },
   PLATFORM_REVENUE_SERVICE_FEE: { code: '4010', name: 'Service fee revenue', type: 'REVENUE' },
   PLATFORM_REVENUE_DELIVERY: { code: '4020', name: 'Delivery revenue', type: 'REVENUE' },

@@ -47,9 +47,28 @@ export const session = {
   },
 };
 
+/** 10.4-D a random id this install keeps (secure storage), sent on sign-in calls as a duplicate-account signal. */
+const DEVICE = 'gutad.device';
+let deviceCache: string | null = null;
+export async function deviceId(): Promise<string | null> {
+  if (deviceCache) return deviceCache;
+  try {
+    let d = await secureGet(DEVICE);
+    if (!d) {
+      d = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`.replace(/[^A-Za-z0-9]/g, '');
+      await secureSet(DEVICE, d);
+    }
+    deviceCache = d;
+    return d;
+  } catch {
+    return null;
+  }
+}
+
 export const api = new GutadClient({
   baseUrl: API_URL,
   getToken: () => session.token(),
+  extraHeaders: async (path): Promise<Record<string, string>> => { const d = path.startsWith('/auth/') ? await deviceId() : null; return d ? { 'X-Device-Id': d, 'X-Client': Platform.OS } : {}; },
   onUnauthorized: async () => {
     const refresh = await secureGet(REFRESH);
     if (!refresh) return;

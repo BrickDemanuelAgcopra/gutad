@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Tabs, Textarea, statusTone } from '@/components/ui';
 import { DeliveryAreaEditor } from '@/components/delivery-area';
+import { AutoThrottleCard, KioskCard, PrintersCard } from '@/components/capacity-printers';
 import { useMerchant } from '../context';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -16,7 +17,7 @@ export default function SettingsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Settings</h1>
-      <Tabs tabs={[{ id: 'location', label: 'Location' }, { id: 'hours', label: 'Hours' }, { id: 'publish', label: 'Publishing & QR' }, { id: 'floor', label: 'Floor & shifts' }, { id: 'policy', label: 'Booking policy' }, { id: 'delivery', label: 'Delivery' }, { id: 'team', label: 'Team' }, { id: 'devices', label: 'Devices & POS' }, { id: 'brands', label: 'Brands' }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ id: 'location', label: 'Location' }, { id: 'hours', label: 'Hours' }, { id: 'publish', label: 'Publishing & QR' }, { id: 'floor', label: 'Floor & shifts' }, { id: 'policy', label: 'Booking policy' }, { id: 'delivery', label: 'Delivery' }, { id: 'team', label: 'Team' }, { id: 'devices', label: 'Devices & POS' }, { id: 'capacity', label: 'Capacity, printers & kiosk' }, { id: 'brands', label: 'Brands' }]} active={tab} onChange={setTab} />
       {tab === 'location' && <LocationTab loc={loc} reload={reload} />}
       {tab === 'hours' && <HoursTab locId={loc.id} />}
       {tab === 'publish' && <PublishTab locId={loc.id} />}
@@ -25,6 +26,7 @@ export default function SettingsPage() {
       {tab === 'delivery' && <><FleetCard loc={loc} reload={reload} /><ZonesTab locId={loc.id} siblings={org.locations.map((l) => ({ id: l.id, name: l.name }))} /></>}
       {tab === 'team' && <TeamTab orgId={org.id} members={org.members} locations={org.locations} reload={reload} />}
       {tab === 'devices' && <DevicesTab locId={loc.id} orgId={org.id} />}
+      {tab === 'capacity' && <div className="space-y-4"><AutoThrottleCard locId={loc.id} /><PrintersCard locId={loc.id} /><KioskCard slug={loc.slug} /></div>}
       {tab === 'brands' && <BrandsTab orgId={org.id} brands={org.brands} kitchenId={loc.kitchenId} reload={reload} />}
     </div>
   );

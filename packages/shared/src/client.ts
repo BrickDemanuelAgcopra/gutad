@@ -5,6 +5,8 @@ export interface ClientOptions {
   getToken?: () => string | null | Promise<string | null>;
   onUnauthorized?: () => void;
   fetchImpl?: typeof fetch;
+  /** extra headers per request path (e.g. 10.4-D X-Device-Id on sign-in calls) */
+  extraHeaders?: (path: string) => Record<string, string> | Promise<Record<string, string>>;
 }
 
 export class GutadApiError extends Error {
@@ -36,7 +38,7 @@ export class GutadClient {
     options?: { idempotencyKey?: string; headers?: Record<string, string> },
   ): Promise<T> {
     const f = this.opts.fetchImpl || fetch;
-    const headers = await this.headers(options?.headers);
+    const headers = await this.headers({ ...(this.opts.extraHeaders ? await this.opts.extraHeaders(path) : {}), ...(options?.headers || {}) });
     if (options?.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
     const res = await f(`${this.opts.baseUrl}${path}`, {
       method,

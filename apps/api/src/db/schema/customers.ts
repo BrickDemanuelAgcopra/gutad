@@ -32,9 +32,13 @@ export const customerRestrictions = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    /** ORDERING_BLOCKED | PROMOTIONS_BLOCKED | REFUND_REVIEW */
+    /** ORDERING_BLOCKED | PROMOTIONS_BLOCKED | REFUND_REVIEW | CASH_LIMIT | CREDIT_LIMIT */
     kind: text('kind').notNull(),
     reason: text('reason').notNull(),
+    /** 10.8-L CASH_LIMIT / CREDIT_LIMIT: the cap in cents (per order, or per rolling window when periodDays is set) */
+    limitCents: integer('limit_cents'),
+    /** 10.8-L rolling window in days for the cap; null = per order */
+    periodDays: integer('period_days'),
     createdById: uuid('created_by_id'),
     expiresAt: ts('expires_at'),
     liftedAt: ts('lifted_at'),

@@ -6,7 +6,7 @@ import { CardField, type CardToken } from '@/card-field';
 import { useAction, useApi } from '@/hooks';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s } from '@/ui';
 
-interface Membership { status: string; plan: { name: string; priceCents: number; interval: string }; currentPeriodEnd: string; trialEndsAt: string | null; cancelAtPeriodEnd: boolean; benefitsActive: boolean; nextRetryAt: string | null; graceUntil: string | null; lastFailureReason: string | null }
+interface Membership { planId: string; pendingPlanId: string | null; status: string; plan: { name: string; priceCents: number; interval: string }; currentPeriodEnd: string; trialEndsAt: string | null; cancelAtPeriodEnd: boolean; benefitsActive: boolean; nextRetryAt: string | null; graceUntil: string | null; lastFailureReason: string | null }
 interface Plan { id: string; name: string; priceCents: number; interval: string; trialDays: number }
 
 /** Rewards on the phone: gift cards, membership (trial, cancel, card update), challenges and referrals. */
@@ -22,6 +22,8 @@ export default function Rewards() {
   const [card, setCard] = useState<CardToken | null>(null);
   const [fix, setFix] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [gift, setGift] = useState({ amount: '25', email: '' });
+  const [buying, setBuying] = useState(false);
   if (!loyalty) return <Loading />;
   const m = loyalty.membership;
   const failing = m && (m.status === 'PAST_DUE' || m.status === 'SUSPENDED');
@@ -33,10 +35,18 @@ export default function Rewards() {
 
       <Card title="Gift cards">
         <Text style={{ fontSize: 20, fontWeight: '700' }}>{money(gifts?.balanceCents || 0)}</Text>
-        <Muted>Use it at checkout. Buy gift cards on gutad.io.</Muted>
+        <Muted>Use it at checkout.</Muted>
         {gifts?.cards.map((c) => <Muted key={c.id}>{c.code}: {money(c.balanceCents)}{c.status !== 'ACTIVE' ? ` · ${c.status.toLowerCase()}` : ''}</Muted>)}
         <Input label="Add a gift card code" autoCapitalize="characters" value={code} onChangeText={(v) => setCode(v.toUpperCase())} />
         <Button title="Add to my wallet" disabled={busy || code.length < 4} onPress={() => run(async () => { const r = await api.post<{ walletCents: number }>('/me/gift-cards/claim', { code }); setCode(''); setMsg(`Gift balance: ${money(r.walletCents)}`); rg(); })} />
+        {!buying ? <Button title="Buy a gift card" variant="secondary" onPress={() => setBuying(true)} /> : (
+          <View style={{ marginTop: 8 }}>
+            <View style={{ flexDirection: 'row', gap: 6 }}>{['25', '50', '100'].map((a) => <Button key={a} title={`$${a}`} variant={gift.amount === a ? 'primary' : 'secondary'} onPress={() => setGift({ ...gift, amount: a })} />)}</View>
+            <Input label="Recipient email (blank = for me)" autoCapitalize="none" keyboardType="email-address" value={gift.email} onChangeText={(v) => setGift({ ...gift, email: v })} />
+            <CardField value={card} onChange={setCard} />
+            <Button title={`Pay ${money(Number(gift.amount) * 100)}`} disabled={busy || !card} onPress={() => run(async () => { const r = await api.post<{ note: string; code: string }>('/me/gift-cards', { amountCents: Math.round(Number(gift.amount) * 100), recipientEmail: gift.email || undefined, paymentMethodId: card!.token }); setBuying(false); setMsg(`${r.note} Code ${r.code}.`); rg(); })} />
+          </View>
+        )}
       </Card>
 
       <Card title="Membership">
@@ -49,6 +59,8 @@ export default function Rewards() {
             {(failing || fix) ? (
               <View><CardField value={card} onChange={setCard} /><Button title={failing ? 'Update card and pay' : 'Save card'} disabled={busy || !card} onPress={() => run(async () => { const r = await api.post<{ ok: boolean; error: string | null }>('/me/membership/payment-method', { paymentMethodId: card!.token }); setFix(false); setMsg(r.ok ? 'Done. Your membership is active.' : `That card didn’t work: ${r.error}`); reload(); })} /></View>
             ) : <Button title="Change card" variant="secondary" onPress={() => setFix(true)} />}
+            {!failing && plans?.filter((p) => p.id !== m.planId).map((p) => <Button key={p.id} title={`${p.priceCents > m.plan.priceCents ? 'Upgrade' : 'Switch'} to ${p.name}`} variant="ghost" onPress={() => run(async () => { const r = await api.post<{ note: string; chargedCents?: number }>('/me/membership/switch', { planId: p.id }); setMsg(r.chargedCents ? `${r.note}. Charged ${money(r.chargedCents)}.` : r.note); reload(); })} />)}
+            {m.pendingPlanId && <Muted>Moving to {plans?.find((p) => p.id === m.pendingPlanId)?.name} at renewal.</Muted>}
             {m.cancelAtPeriodEnd ? <Button title="Keep my membership" onPress={() => run(async () => { await api.post('/me/membership/resume', {}); reload(); })} /> : !failing && <Button title="Cancel at the end of the period" variant="ghost" onPress={() => run(async () => { const r = await api.post<{ accessUntil: string | null }>('/me/membership/cancel', {}); setMsg(`Canceled. Benefits until ${when(r.accessUntil)}.`); reload(); })} />}
           </View>
         ) : (

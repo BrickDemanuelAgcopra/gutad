@@ -8,6 +8,7 @@ import { SettingsService } from '../../core/settings.service';
 import { assertCan, can, JwtPayload } from '../../common/auth';
 import { AuthService } from '../auth/auth.service';
 import { SupportService } from '../support/support.service';
+import { CardSetupService } from '../payments/card-setup.service';
 
 const STAFF = sql.raw(`array[${STAFF_ROLES.map((r) => `'${r}'`).join(',')}]::role[]`);
 const rows = <T>(r: unknown) => ((r as { rows: T[] }).rows || []) as T[];
@@ -24,7 +25,7 @@ export const PRIVACY_DEFAULTS = { deleteGraceDays: 14, guestRetentionDays: 1095 
 /** 10 — customer directory & 360, duplicates & merge, restrictions & appeals, segments, saved cards, notification preferences, privacy. */
 @Injectable()
 export class CustomersService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly auth: AuthService, private readonly support: SupportService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly auth: AuthService, private readonly support: SupportService, private readonly cardSetup: CardSetupService) {}
 
   private pii(user: JwtPayload) {
     return can(user, 'customers.pii');
@@ -64,6 +65,14 @@ export class CustomersService {
     const [cnt] = rows<{ n: number }>(await this.db.execute(sql`select count(*)::int as n from (select u.id from users u left join orders o on o.user_id = u.id where ${f.where} group by u.id ${f.having}) x`));
     const show = this.pii(user);
     return { total: n(cnt?.n), items: list.map((x) => ({ id: x.id, name: x.name, email: show ? x.email : mask(x.email as string), phone: show ? x.phone : x.phone ? '•••' + String(x.phone).slice(-2) : null, status: x.status, isGuest: x.is_guest, marketingConsent: x.marketing_consent, orders: n(x.orders), spendCents: n(x.spend), lastOrderAt: x.last_order, createdAt: x.created_at })) };
+  }
+
+  /** 25.10-P marketing-consented customers in a platform segment (null = all consented customers). */
+  async segmentContacts(segmentId: string | null): Promise<{ id: string; email: string | null; phone: string | null }[]> {
+    const [seg] = segmentId ? await this.db.select().from(platformSegments).where(eq(platformSegments.id, segmentId)).limit(1) : [null];
+    if (segmentId && !seg) return [];
+    const f = this.filterSql({ ...((seg?.rules as SegmentRules) || {}), marketingConsent: true });
+    return rows<{ id: string; email: string | null; phone: string | null }>(await this.db.execute(sql`select u.id, u.email, u.phone from users u left join orders o on o.user_id = u.id where ${f.where} and u.is_guest = false group by u.id ${f.having} limit 20000`));
   }
 
   /** 25.2 is this customer in a saved platform segment (offer eligibility)? */
@@ -138,6 +147,7 @@ export class CustomersService {
       privacyRequests: privacy,
       goodwill: await this.support.goodwill(id),
       duplicates: await this.duplicates(id),
+      devices: await this.devices(id),
     };
   }
 
@@ -155,7 +165,18 @@ export class CustomersService {
       const extra = await this.db.select({ id: users.id, email: users.email, name: users.name, phone: users.phone, isGuest: users.isGuest, createdAt: users.createdAt }).from(users).where(and(inArray(users.id, [...addrIds]), isNull(users.mergedIntoId)));
       for (const e of extra) { const ex = out.find((o) => o.id === e.id); if (ex) ex.why.push('same address'); else out.push({ ...e, why: ['same address'] }); }
     }
+    // 10.4-D accounts that signed in from the same device (staff accounts excluded: shared tills and test devices)
+    const sameDevice = rows<{ id: string; client: string | null }>(await this.db.execute(sql`select distinct on (d2.user_id) d2.user_id as id, d2.client from user_devices d1 join user_devices d2 on d2.device_hash = d1.device_hash and d2.user_id <> d1.user_id join users u on u.id = d2.user_id where d1.user_id = ${id} and u.merged_into_id is null and not (u.roles && ${STAFF}) order by d2.user_id, d2.last_seen_at desc limit 20`));
+    if (sameDevice.length) {
+      const extra = await this.db.select({ id: users.id, email: users.email, name: users.name, phone: users.phone, isGuest: users.isGuest, createdAt: users.createdAt }).from(users).where(inArray(users.id, sameDevice.map((d) => d.id)));
+      for (const e of extra) { const ex = out.find((o) => o.id === e.id); if (ex) ex.why.push('same device'); else out.push({ ...e, why: ['same device'] }); }
+    }
     return out;
+  }
+
+  /** 10.4-D devices this account signed in from, and how many other accounts share each one. */
+  async devices(id: string) {
+    return rows<{ id: string; client: string | null; user_agent: string | null; sign_ins: number; first_seen_at: string; last_seen_at: string; shared_with: number }>(await this.db.execute(sql`select d.id, d.client, d.user_agent, d.sign_ins, d.created_at as first_seen_at, d.last_seen_at, (select count(distinct o.user_id)::int from user_devices o where o.device_hash = d.device_hash and o.user_id <> d.user_id) as shared_with from user_devices d where d.user_id = ${id} order by d.last_seen_at desc limit 20`)).map((d) => ({ id: d.id, client: d.client, userAgent: d.user_agent, signIns: Number(d.sign_ins), firstSeenAt: d.first_seen_at, lastSeenAt: d.last_seen_at, sharedWith: Number(d.shared_with) }));
   }
 
   async sendRecovery(user: JwtPayload, id: string, reason: string) {
@@ -197,9 +218,13 @@ export class CustomersService {
 
   // ───── 10.8 restrictions & appeals ─────
 
-  async restrict(user: JwtPayload, userId: string, input: { kind: 'ORDERING_BLOCKED' | 'PROMOTIONS_BLOCKED' | 'REFUND_REVIEW'; reason: string; expiresAt?: string }) {
+  async restrict(user: JwtPayload, userId: string, input: { kind: 'ORDERING_BLOCKED' | 'PROMOTIONS_BLOCKED' | 'REFUND_REVIEW' | 'CASH_LIMIT' | 'CREDIT_LIMIT'; reason: string; expiresAt?: string; limitCents?: number; periodDays?: number }) {
     assertCan(user, 'support.manage');
-    const [r] = await this.db.insert(customerRestrictions).values({ userId, kind: input.kind, reason: input.reason, createdById: user.sub, expiresAt: input.expiresAt ? new Date(input.expiresAt) : null }).returning();
+    // 10.8-L cash and credit limits carry a cap; one active limit per kind (a new one replaces the old)
+    const isLimit = input.kind === 'CASH_LIMIT' || input.kind === 'CREDIT_LIMIT';
+    if (isLimit && (input.limitCents === undefined || input.limitCents < 0)) throw new BadRequestException('Set the limit amount');
+    if (isLimit) await this.db.update(customerRestrictions).set({ liftedAt: new Date(), liftedById: user.sub, appealDecisionNote: 'Replaced by a new limit' }).where(and(eq(customerRestrictions.userId, userId), eq(customerRestrictions.kind, input.kind), isNull(customerRestrictions.liftedAt)));
+    const [r] = await this.db.insert(customerRestrictions).values({ userId, kind: input.kind, reason: input.reason, createdById: user.sub, expiresAt: input.expiresAt ? new Date(input.expiresAt) : null, limitCents: isLimit ? input.limitCents : null, periodDays: isLimit ? input.periodDays || null : null }).returning();
     if (input.kind === 'ORDERING_BLOCKED') await this.db.update(users).set({ status: 'RESTRICTED', statusReason: input.reason }).where(and(eq(users.id, userId), eq(users.status, 'ACTIVE')));
     await this.audit.log({ actorId: user.sub, action: 'customer.restrict', entityType: 'user', entityId: userId, after: r, reason: input.reason });
     return r;
@@ -220,7 +245,7 @@ export class CustomersService {
   }
 
   async myRestrictions(user: JwtPayload) {
-    return this.db.select({ id: customerRestrictions.id, kind: customerRestrictions.kind, reason: customerRestrictions.reason, expiresAt: customerRestrictions.expiresAt, appealStatus: customerRestrictions.appealStatus, appealDecisionNote: customerRestrictions.appealDecisionNote, createdAt: customerRestrictions.createdAt }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, user.sub), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), sql`${customerRestrictions.expiresAt} > now()`)));
+    return this.db.select({ id: customerRestrictions.id, kind: customerRestrictions.kind, reason: customerRestrictions.reason, limitCents: customerRestrictions.limitCents, periodDays: customerRestrictions.periodDays, expiresAt: customerRestrictions.expiresAt, appealStatus: customerRestrictions.appealStatus, appealDecisionNote: customerRestrictions.appealDecisionNote, createdAt: customerRestrictions.createdAt }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, user.sub), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), sql`${customerRestrictions.expiresAt} > now()`)));
   }
 
   async appeal(user: JwtPayload, restrictionId: string, note: string) {
@@ -257,6 +282,14 @@ export class CustomersService {
   /** Save a processor token. The card number never reaches Gutad; brand and last 4 come from the processor (mock: from the token). */
   async addCard(user: JwtPayload, input: { paymentMethodId: string; brand?: string; last4?: string; expMonth?: number; expYear?: number; makeDefault?: boolean }) {
     if (!/^(pm_|mock_pm_)[A-Za-z0-9_]+$/.test(input.paymentMethodId)) throw new BadRequestException('Not a payment token');
+    // 10.3-P live processor: the masked details come from the processor, never from the client
+    if (this.cardSetup.live) {
+      if (input.paymentMethodId.startsWith('mock_')) throw new BadRequestException('Test cards are not accepted by the live processor');
+      const d = await this.cardSetup.describe(input.paymentMethodId);
+      if (!d) throw new BadRequestException('The processor does not recognise this card');
+      if (d.customerRef) await this.db.update(users).set({ paymentCustomerRef: d.customerRef }).where(and(eq(users.id, user.sub), isNull(users.paymentCustomerRef)));
+      input = { ...input, brand: d.brand || 'card', last4: d.last4 || undefined, expMonth: d.expMonth ?? undefined, expYear: d.expYear ?? undefined };
+    }
     const last4 = input.last4 || input.paymentMethodId.match(/(\d{4})$/)?.[1] || null;
     const existing = await this.myCards(user);
     if (existing.some((c) => c.providerRef === input.paymentMethodId)) throw new ConflictException('Card already saved');

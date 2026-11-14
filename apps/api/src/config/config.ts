@@ -15,6 +15,8 @@ const schema = z.object({
   PAYMENT_PROVIDER: z.enum(['mock', 'stripe']).default('mock'),
   STRIPE_SECRET_KEY: z.string().optional().default(''),
   STRIPE_WEBHOOK_SECRET: z.string().optional().default(''),
+  /** 18.9-S publishable key for Stripe Elements / hosted fields (optional; without it clients use the hosted setup page) */
+  STRIPE_PUBLISHABLE_KEY: z.string().optional().default(''),
   DELIVERY_PROVIDER: z.enum(['mock', 'doordash', 'uber']).default('mock'),
   DOORDASH_DEVELOPER_ID: z.string().optional().default(''),
   DOORDASH_KEY_ID: z.string().optional().default(''),
@@ -40,6 +42,18 @@ const schema = z.object({
   DEFAULT_CURRENCY: z.string().default('USD'),
   DEFAULT_TIMEZONE: z.string().default('America/New_York'),
   CREDENTIALS_KEY: z.string().optional().default(''),
+  // 15.3-R road travel times: straight (default, no network) | osrm (ROUTING_URL) | google | mapbox (ROUTING_API_KEY)
+  ROUTING_PROVIDER: z.enum(['straight', 'osrm', 'google', 'mapbox']).default('straight'),
+  ROUTING_API_KEY: z.string().optional().default(''),
+  ROUTING_URL: z.string().optional().default(''),
+  // 16.2-U file storage: local disk (default) or an S3-compatible bucket
+  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  STORAGE_DIR: z.string().optional().default(''),
+  S3_ENDPOINT: z.string().optional().default(''),
+  S3_REGION: z.string().optional().default('us-east-1'),
+  S3_BUCKET: z.string().optional().default(''),
+  S3_ACCESS_KEY_ID: z.string().optional().default(''),
+  S3_SECRET_ACCESS_KEY: z.string().optional().default(''),
 });
 
 export type AppConfig = z.infer<typeof schema>;

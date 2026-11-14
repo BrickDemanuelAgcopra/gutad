@@ -11,7 +11,7 @@ interface Scope { regionIds: string[]; organizationIds: string[]; locationIds: s
 interface Staff { id: string; email: string; name: string | null; roles: string[]; status: string; statusReason: string | null; mfaEnabled: boolean; scope: Scope | null; activeGrants: Grant[]; sessions: number; lastSeenAt: string | null }
 interface Detail { id: string; email: string; roles: string[]; status: string; mfaEnabled: boolean; scope: Scope | null; sessions: { id: string; client: string | null; userAgent: string | null; ip: string | null; amr: string[]; lastSeenAt: string; createdAt: string }[]; grants: Grant[]; recentActions: { id: string; action: string; entityType: string; entityId: string; reason: string | null; createdAt: string }[] }
 interface Region { id: string; code: string; name: string; locations: number }
-interface Policy { sso: { enabled: boolean; issuer: string; clientId: string; redirectUri: string; allowedDomains: string[]; label: string; hasClientSecret: boolean }; mfaRequiredRoles: string[]; sessions: { staffTokenMinutes: number; staffIdleMinutes: number; staffMaxHours: number }; emergency: { maxMinutes: number; grantableRoles: string[] } }
+interface Policy { sso: { enabled: boolean; issuer: string; clientId: string; redirectUri: string; mobileRedirectUri?: string; allowedDomains: string[]; label: string; hasClientSecret: boolean }; mfaRequiredRoles: string[]; sessions: { staffTokenMinutes: number; staffIdleMinutes: number; staffMaxHours: number }; emergency: { maxMinutes: number; grantableRoles: string[] } }
 
 const roleLabel = (r: string) => STAFF_ROLE_LABELS[r as StaffRole] || r;
 
@@ -184,6 +184,8 @@ function PolicyTab() {
           <Input label="Issuer URL" placeholder="https://login.example.com" value={o.issuer} onChange={(ev) => setSso({ ...o, issuer: ev.target.value })} />
           <div className="grid grid-cols-2 gap-2"><Input label="Client ID" value={o.clientId} onChange={(ev) => setSso({ ...o, clientId: ev.target.value })} /><Input label={o.hasClientSecret ? 'Client secret (saved; type to replace)' : 'Client secret'} type="password" value={o.clientSecret || ''} onChange={(ev) => setSso({ ...o, clientSecret: ev.target.value })} /></div>
           <Input label="Redirect URI (your web app)" placeholder="https://gutad.io/account/sso" value={o.redirectUri} onChange={(ev) => setSso({ ...o, redirectUri: ev.target.value })} />
+          <Input label="Mobile app redirect URI (optional)" placeholder="gutad://auth/sso" value={o.mobileRedirectUri || ''} onChange={(ev) => setSso({ ...o, mobileRedirectUri: ev.target.value })} />
+          <p className="text-xs text-ink-500">Leave empty if your identity provider only accepts web redirects: mobile sign-ins then come back through the web redirect above and are handed to the app.</p>
           <Input label="Allowed email domains (comma separated)" value={o.allowedDomains.join(', ')} onChange={(ev) => setSso({ ...o, allowedDomains: ev.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} />
           <Input label="Button label" value={o.label} onChange={(ev) => setSso({ ...o, label: ev.target.value })} />
           <Button size="sm" disabled={!sso} onClick={() => save({ sso: { ...o, clientSecret: o.clientSecret || undefined, hasClientSecret: undefined } }, 'single sign-on')}>Save</Button>

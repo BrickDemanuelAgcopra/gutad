@@ -4,6 +4,7 @@ import { ITEM_KINDS } from '@gutad/shared';
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Stat, statusTone, Table, Tabs } from '@/components/ui';
+import { ForecastFactors, SupplierPortalAccess } from '@/components/followups-c';
 
 interface Item { id: string; name: string; unit: string; kind: string; purchaseUnit: string | null; purchaseUnitFactor: number; supplierId: string | null; shelfLifeDays: number | null; minTempC: number | null; maxTempC: number | null; onHand: number; parLevel: number; safetyStock: number; valueCents: number; costCentsPerUnit: number; organizationId: string | null }
 interface Lot { id: string; ingredient: string; unit: string; lotCode: string; quantity: number; receivedQty: number; expiresAt: string | null; daysLeft: number | null; status: string; storageArea: string | null; supplier: string | null }
@@ -129,7 +130,7 @@ function Receiving({ kitchenId, organizationId }: { kitchenId: string; organizat
 }
 
 function Forecast({ kitchenId }: { kitchenId: string }) {
-  const { data, reload } = useApi<{ ingredientId: string; name: string; unit: string; purchaseUnit: string | null; supplier: string | null; supplierApproved: boolean | null; onHand: number; onOrder: number; dailyDemand: number; safetyStock: number; reorderPoint: number; daysOfCover: number | null; needsReorder: boolean; proposedQty: number; proposedPurchaseUnits: number }[]>(`/kitchens/${kitchenId}/forecast`, { deps: [kitchenId] });
+  const { data, reload } = useApi<{ ingredientId: string; name: string; unit: string; purchaseUnit: string | null; supplier: string | null; supplierApproved: boolean | null; onHand: number; onOrder: number; dailyDemand: number; baseDailyDemand: number; trendFactor: number; yoyFactor: number; seasonalFactor: number; promoUpliftPct: number; promotions: string[]; safetyStock: number; reorderPoint: number; daysOfCover: number | null; needsReorder: boolean; proposedQty: number; proposedPurchaseUnits: number }[]>(`/kitchens/${kitchenId}/forecast`, { deps: [kitchenId] });
   const { run, error } = useAction();
   const [out, setOut] = useState<string | null>(null);
   return (
@@ -139,11 +140,14 @@ function Forecast({ kitchenId }: { kitchenId: string }) {
       <Table rows={data || []} empty="No stocked items." cols={[
         { key: 'n', label: 'Item', render: (x) => <span>{x.name}<span className="block text-xs text-ink-500">{x.supplier || 'no supplier'}{x.supplierApproved === false ? ' (not approved)' : ''}</span></span> },
         { key: 'o', label: 'On hand / on order', render: (x) => `${x.onHand} / ${x.onOrder} ${x.unit}` },
-        { key: 'd', label: 'Daily use', render: (x) => x.dailyDemand }, { key: 'c', label: 'Days of cover', render: (x) => x.daysOfCover ?? '—' },
+        { key: 'd', label: 'Daily use', render: (x) => <span>{x.dailyDemand}{x.seasonalFactor !== 1 && <span className="block text-xs text-ink-500">base {x.baseDailyDemand}</span>}</span> },
+        { key: 'f', label: 'Factors', render: (x) => <span className="text-xs">{x.seasonalFactor === 1 && !x.promoUpliftPct ? '—' : <>{x.seasonalFactor !== 1 && <span className="block" title={`trend ${x.trendFactor}× · last year ${x.yoyFactor}×`}>season {x.seasonalFactor}×</span>}{x.promoUpliftPct > 0 && <span className="block text-amber-700" title={x.promotions.join(', ')}>promo +{x.promoUpliftPct}%</span>}</>}</span> },
+        { key: 'c', label: 'Days of cover', render: (x) => x.daysOfCover ?? '—' },
         { key: 'r', label: 'Reorder point (incl. safety)', render: (x) => `${x.reorderPoint} (${x.safetyStock})` },
         { key: 'p', label: 'Proposal', render: (x) => x.needsReorder ? <Badge tone="warn">{x.proposedPurchaseUnits} {x.purchaseUnit || x.unit}</Badge> : <span className="text-xs text-ink-500">ok</span> },
       ]} />
-      <p className="text-xs text-ink-500">Demand is the average use for each weekday over the last 4 weeks; safety stock is the larger of your setting and 2 days of use.</p>
+      <p className="text-xs text-ink-500">Demand is the average use for each weekday over the last 4 weeks, times a seasonal factor (recent trend and the same weeks last year) and an uplift on days when promotions run; safety stock is the larger of your setting and 2 days of use.</p>
+      <ForecastFactors kitchenId={kitchenId} />
     </div>
   );
 }
@@ -152,10 +156,12 @@ function Suppliers({ organizationId }: { organizationId: string }) {
   const { data, reload } = useApi<Supplier[]>(`/suppliers?organizationId=${organizationId}`, { deps: [organizationId] });
   const { run, error } = useAction();
   const [f, setF] = useState({ name: '', contactName: '', email: '', leadTimeDays: '2' });
+  const [portalOf, setPortalOf] = useState<Supplier | null>(null);
   return (
     <div className="space-y-3">
       {error && <Alert>{error}</Alert>}
-      <Table rows={data || []} empty="No suppliers." cols={[{ key: 'n', label: 'Supplier', render: (s) => <span>{s.name}{!s.organizationId && <Badge tone="info">Gutad</Badge>}<span className="block text-xs text-ink-500">{s.contactName} {s.email}</span></span> }, { key: 'l', label: 'Lead time', render: (s) => `${s.leadTimeDays} d` }, { key: 'a', label: 'Approved', render: (s) => s.approved ? <Badge tone="good">approved {s.approvedAt?.slice(0, 10)}</Badge> : <Badge tone="warn">not approved</Badge> }, { key: 'x', label: '', render: (s) => s.organizationId ? <Button size="sm" variant={s.approved ? 'ghost' : 'secondary'} onClick={() => { const note = window.prompt(s.approved ? 'Why revoke?' : 'Approval note (audit, certificates checked)'); if (note) run(async () => { await api.post(`/suppliers/${s.id}/approval`, { approved: !s.approved, note }); await reload(); }); }}>{s.approved ? 'Revoke' : 'Approve'}</Button> : null }]} />
+      {portalOf && <SupplierPortalAccess supplierId={portalOf.id} supplierName={portalOf.name} onClose={() => setPortalOf(null)} />}
+      <Table rows={data || []} empty="No suppliers." cols={[{ key: 'n', label: 'Supplier', render: (s) => <span>{s.name}{!s.organizationId && <Badge tone="info">Gutad</Badge>}<span className="block text-xs text-ink-500">{s.contactName} {s.email}</span></span> }, { key: 'l', label: 'Lead time', render: (s) => `${s.leadTimeDays} d` }, { key: 'a', label: 'Approved', render: (s) => s.approved ? <Badge tone="good">approved {s.approvedAt?.slice(0, 10)}</Badge> : <Badge tone="warn">not approved</Badge> }, { key: 'p', label: 'Invoices', render: (s) => <button className="text-xs underline" onClick={() => setPortalOf(s)}>Portal / EDI</button> }, { key: 'x', label: '', render: (s) => s.organizationId ? <Button size="sm" variant={s.approved ? 'ghost' : 'secondary'} onClick={() => { const note = window.prompt(s.approved ? 'Why revoke?' : 'Approval note (audit, certificates checked)'); if (note) run(async () => { await api.post(`/suppliers/${s.id}/approval`, { approved: !s.approved, note }); await reload(); }); }}>{s.approved ? 'Revoke' : 'Approve'}</Button> : null }]} />
       <Card title="Add supplier"><div className="grid gap-2 sm:grid-cols-5"><Input label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /><Input label="Contact" value={f.contactName} onChange={(e) => setF({ ...f, contactName: e.target.value })} /><Input label="Email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /><Input label="Lead time (days)" value={f.leadTimeDays} onChange={(e) => setF({ ...f, leadTimeDays: e.target.value })} /><Button className="self-end" disabled={f.name.length < 2} onClick={() => run(async () => { await api.post('/suppliers', { organizationId, name: f.name, contactName: f.contactName || undefined, email: f.email || undefined, leadTimeDays: Number(f.leadTimeDays) || 2 }); setF({ name: '', contactName: '', email: '', leadTimeDays: '2' }); await reload(); })}>Add</Button></div><p className="mt-1 text-xs text-ink-500">New suppliers need approval before you can order from them; changing their product specifications sends them back for approval.</p></Card>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ScrollView, Switch, Text, View } from 'react-native';
+import { router } from 'expo-router';
 import { api, when } from '@/api';
 import { useAction, useApi } from '@/hooks';
 import { useMerchantLocation } from '@/merchant';
@@ -37,6 +38,11 @@ function LocationScreen() {
         <Muted>Unaccepted orders escalate after {l.acceptTimeoutMinutes} min.</Muted>
         <Input label="Pickup instructions for customers" value={pickup ?? l.pickupInstructions ?? ''} onChangeText={setPickup} />
         {pickup !== null && <Button title="Save" onPress={() => run(async () => { await api.patch(`/locations/${loc.id}`, { pickupInstructions: pickup || null }); setPickup(null); reload(); })} />}
+      </Card>
+      <Card title="Self-order kiosk">
+        <View style={s.row}><Text style={{ color: C.ink }}>Kiosk ordering</Text><Switch value={l.acceptsKiosk} onValueChange={(v) => run(async () => { await api.patch(`/locations/${loc.id}`, { acceptsKiosk: v }); reload(); })} /></View>
+        <Muted>Turns this tablet into a full-screen ordering kiosk (eat here or take away, pager number, card or pay at counter). It resets after 90 seconds idle.</Muted>
+        <Button title="Open kiosk mode" variant="secondary" disabled={!l.acceptsKiosk} onPress={() => router.push(`/kiosk/${loc.id}`)} />
       </Card>
       <Card title={`Launch checklist · ${d.checklist.progressPct}%`}>
         {d.checklist.items.map((i) => <Text key={i.key} style={{ color: i.done ? C.good : C.ink5, marginBottom: 2 }}>{i.done ? '✓' : '○'} {i.label}{i.required ? '' : ' (optional)'}</Text>)}

@@ -1,11 +1,12 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, statusTone, Table, Tabs } from '@/components/ui';
 import { askReason, SectionTitle } from '@/components/admin-ui';
 import { TileMap } from '@/components/tile-map';
 import { DeliveryAreaEditor } from '@/components/delivery-area';
+import { useDebounced, useLiveDelivery } from '@/lib/live';
 
 interface Live { couriers: { id: string; name: string | null; lat: number | null; lng: number | null; status: string; vehicleType: string; activeJobs: number; lastSeenAt: string }[]; pickups: { id: string; name: string; lat: number | null; lng: number | null; jobs: number }[]; deliveries: { id: string; orderId: string | null; status: string; fleet: string; provider: string; location: string; locationId: string; driverId: string | null; batchId: string | null; etaAt: string | null; late: boolean; dropoff: { lat: number | null; lng: number | null; line1: string }; requirements: string[]; offerAttempts: number; exception: string | null; needsAttention: boolean }[] }
 const courierColor = (s: string) => (s === 'ON_DELIVERY' ? '#d97706' : s === 'ONLINE' ? '#059669' : '#9ca3af');
@@ -27,7 +28,15 @@ export default function AdminDelivery() {
 }
 
 function LiveDispatch() {
-  const { data, reload } = useApi<Live>('/admin/delivery/live', { poll: 10000 });
+  // 17.1-R pushed updates; polling stays as a slow fallback (fast while the stream is down)
+  const [pushed, setPushed] = useState(false);
+  const { data, reload, setData } = useApi<Live>('/admin/delivery/live', { poll: pushed ? 60000 : 10000, deps: [pushed] });
+  const refetch = useDebounced(() => void reload(), 1500);
+  const { connected } = useLiveDelivery({ onEvent: (ev) => {
+    if (ev.type === 'courier') setData((d) => (d && d.couriers.some((c) => c.id === ev.driverId) ? { ...d, couriers: d.couriers.map((c) => (c.id === ev.driverId ? { ...c, lat: ev.lat, lng: ev.lng, lastSeenAt: ev.at } : c)) } : d));
+    if (ev.type === 'job' || !data?.couriers.some((c) => c.id === ev.driverId)) refetch();
+  } });
+  useEffect(() => setPushed(connected), [connected]);
   const { data: couriers } = useApi<{ id: string; name: string | null; status: string; operational: string; vehicleType: string; capabilities: string[]; activeJobs: number }[]>('/admin/couriers?status=APPROVED');
   const { can } = useSession();
   const { run, error } = useAction();
@@ -47,7 +56,7 @@ function LiveDispatch() {
           ...data.couriers.filter((c) => c.lat).map((c) => ({ id: `c${c.id}`, lat: c.lat!, lng: c.lng!, color: courierColor(c.status), label: c.name || 'courier', title: `${c.status} · ${c.vehicleType} · ${c.activeJobs} job(s)` })),
           ...data.deliveries.filter((d) => d.dropoff.lat).map((d) => ({ id: `d${d.id}`, lat: d.dropoff.lat!, lng: d.dropoff.lng!, color: d.needsAttention || d.late ? '#dc2626' : '#0284c7', size: 5, title: `${d.status} · ${d.dropoff.line1}` })),
         ]} />
-      <div className="flex flex-wrap items-center gap-3 text-xs text-ink-500"><span><span className="inline-block h-2 w-2 rounded-full bg-[#f45d0a]" /> pickup</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#059669]" /> courier online</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#d97706]" /> on delivery</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#0284c7]" /> drop-off</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#dc2626]" /> needs attention / late</span><label className="ml-auto flex items-center gap-1"><input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} /> Only problems</label></div>
+      <div className="flex flex-wrap items-center gap-3 text-xs text-ink-500"><span><span className="inline-block h-2 w-2 rounded-full bg-[#f45d0a]" /> pickup</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#059669]" /> courier online</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#d97706]" /> on delivery</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#0284c7]" /> drop-off</span><span><span className="inline-block h-2 w-2 rounded-full bg-[#dc2626]" /> needs attention / late</span><span className={connected ? 'text-emerald-700' : ''}>{connected ? '● live' : '○ refreshing every 10 s'}</span><label className="ml-auto flex items-center gap-1"><input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} /> Only problems</label></div>
       <Table rows={rows} empty="No active deliveries." cols={[
         { key: 'l', label: 'Pickup → drop-off', render: (d) => <span>{d.location} → {d.dropoff.line1}{d.batchId && <Badge tone="info">batch</Badge>}{d.requirements.filter((r) => r !== 'COLD_BAG').map((r) => <Badge key={r} tone="warn">{r.toLowerCase().replace('_', ' ')}</Badge>)}</span> },
         { key: 's', label: 'Status', render: (d) => <span><Badge tone={statusTone(d.status)}>{d.status}</Badge>{d.late && <Badge tone="bad">late</Badge>}{d.exception && <Badge tone="bad">{d.exception.toLowerCase().replace(/_/g, ' ')}</Badge>}</span> },
@@ -136,12 +145,15 @@ function Providers() {
   const { data: regions } = useApi<{ id: string; name: string }[]>('/admin/regions');
   const { run, error } = useAction();
   const [f, setF] = useState({ regionId: '', provider: 'PLATFORM', priority: '1' });
+  const { data: names } = useApi<{ primary: string; available: string[] }>('/admin/delivery/provider-names');
+  const { data: routing } = useApi<{ provider: string; requested: string; configured: boolean; calls: number; cacheHits: number; failures: number }>('/admin/delivery/routing');
   return (
     <div className="space-y-3">
       {error && <Alert>{error}</Alert>}
-      <p className="text-sm text-ink-500">Failover order per region: when the first option finds no courier after the offer rounds, the next one is tried. Without rows: own fleet, then the configured partner provider.</p>
+      <p className="text-sm text-ink-500">Failover order per region: when the first option finds no courier after the offer rounds, the next one is tried. Without rows: own fleet, then the configured partner provider. Partner-fleet restaurants use the partners in this order too: if a partner cannot take the job, it goes to the next one.</p>
       <Table rows={data || []} empty="Using the default order." cols={[{ key: 'r', label: 'Region', render: (x) => regions?.find((r) => r.id === x.regionId)?.name || 'All regions' }, { key: 'p', label: 'Provider', render: (x) => x.provider === 'PLATFORM' ? 'Gutad fleet' : x.provider }, { key: 'o', label: 'Order', render: (x) => x.priority }, { key: 'a', label: 'Active', render: (x) => <button className="text-xs underline" onClick={() => run(async () => { await api.post('/admin/delivery/providers', { ...x, isActive: !x.isActive }); await reload(); })}>{x.isActive ? 'on' : 'off'}</button> }]} />
-      <div className="flex flex-wrap items-end gap-2"><Select label="Region" value={f.regionId} onChange={(e) => setF({ ...f, regionId: e.target.value })}><option value="">All regions</option>{regions?.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select><Select label="Provider" value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value })}><option value="PLATFORM">Gutad fleet</option><option value="mock">mock</option><option value="doordash">doordash</option><option value="uber">uber</option></Select><Input label="Order" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} /><Button onClick={() => run(async () => { await api.post('/admin/delivery/providers', { regionId: f.regionId || null, provider: f.provider, priority: Number(f.priority) }); await reload(); })}>Add</Button></div>
+      <div className="flex flex-wrap items-end gap-2"><Select label="Region" value={f.regionId} onChange={(e) => setF({ ...f, regionId: e.target.value })}><option value="">All regions</option>{regions?.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select><Select label="Provider" value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value })}>{(names?.available || ['PLATFORM', 'mock']).map((p) => <option key={p} value={p}>{p === 'PLATFORM' ? 'Gutad fleet' : p}</option>)}</Select><Input label="Order" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} /><Button onClick={() => run(async () => { await api.post('/admin/delivery/providers', { regionId: f.regionId || null, provider: f.provider, priority: Number(f.priority) }); await reload(); })}>Add</Button></div>
+      {routing && <p className="text-xs text-ink-500">Travel times: {routing.provider === 'straight' ? 'straight-line distance × minutes per km (set ROUTING_PROVIDER for road times)' : `${routing.provider} road routing · ${routing.calls} calls, ${routing.cacheHits} cached, ${routing.failures} fell back to straight-line`}{!routing.configured ? ` · ${routing.requested} is selected but not configured` : ''}. Default partner: {names?.primary}.</p>}
     </div>
   );
 }

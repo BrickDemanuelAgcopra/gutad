@@ -6,6 +6,7 @@ import { api, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Input, Select, statusTone, Table, Tabs } from '@/components/ui';
 import { SectionTitle } from '@/components/admin-ui';
+import { DocLink } from '@/components/courier-docs';
 
 interface Row { id: string; name: string | null; email: string; status: string; operational: string; vehicleType: string; capabilities: string[]; activeJobs: number; missingDocs: string[]; pendingDocs: number; appealStatus: string; lastSeenAt: string | null; metrics?: { acceptanceRate: number | null; completionRate: number | null; onTimeRate: number | null; delivered: number } }
 const pct = (x: number | null | undefined) => (x == null ? '—' : `${x}%`);
@@ -47,7 +48,7 @@ function Directory() {
 }
 
 function Documents() {
-  const { data, reload } = useApi<{ pending: { id: string; driverId: string; kind: string; fileUrl: string; expiresAt: string | null; courierName: string | null; courierEmail: string; createdAt: string }[]; expiring: { id: string; driverId: string; kind: string; expiresAt: string; courierName: string | null }[] }>('/admin/couriers/documents');
+  const { data, reload } = useApi<{ pending: { id: string; driverId: string; kind: string; fileUrl: string; fileId: string | null; expiresAt: string | null; courierName: string | null; courierEmail: string; createdAt: string }[]; expiring: { id: string; driverId: string; kind: string; expiresAt: string; courierName: string | null }[] }>('/admin/couriers/documents');
   const { can } = useSession();
   const { run, error } = useAction();
   const [exp, setExp] = useState<Record<string, string>>({});
@@ -56,7 +57,7 @@ function Documents() {
       {error && <Alert>{error}</Alert>}
       <Table rows={data?.pending || []} empty="Nothing to review." cols={[
         { key: 'c', label: 'Courier', render: (d) => <Link className="underline" href={`/admin/couriers/${d.driverId}`}>{d.courierName || d.courierEmail}</Link> },
-        { key: 'k', label: 'Document', render: (d) => <a className="underline" href={d.fileUrl} target="_blank" rel="noreferrer">{COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind}</a> },
+        { key: 'k', label: 'Document', render: (d) => <DocLink doc={d} label={COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind} /> },
         { key: 'e', label: 'Expires', render: (d) => <Input type="date" className="w-40" value={exp[d.id] ?? (d.expiresAt ? d.expiresAt.slice(0, 10) : '')} onChange={(e) => setExp({ ...exp, [d.id]: e.target.value })} /> },
         { key: 'a', label: '', render: (d) => can('delivery.manage') && <span className="flex gap-1"><Button size="sm" onClick={() => run(async () => { await api.post(`/admin/courier-documents/${d.id}/review`, { approve: true, note: 'Checked', expiresAt: exp[d.id] ? new Date(`${exp[d.id]}T23:59:00Z`).toISOString() : undefined }); await reload(); })}>Approve</Button><Button size="sm" variant="ghost" onClick={() => { const note = window.prompt('Why is it rejected? (shown to the courier)'); if (note) run(async () => { await api.post(`/admin/courier-documents/${d.id}/review`, { approve: false, note }); await reload(); }); }}>Reject</Button></span> },
       ]} />

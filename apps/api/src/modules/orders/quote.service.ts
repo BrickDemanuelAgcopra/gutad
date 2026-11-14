@@ -5,6 +5,7 @@ import { brands, taxRates, customerRestrictions, menuCategories, menuItems, menu
 import { brandSellable } from '../../common/brand-rules';
 import { DEFAULT_PAYMENT_METHODS, enabledMethods, type AppliedPromotion, type PaymentMethodsConfig } from '@gutad/shared';
 import { giftBalance } from '../growth/gift-tender';
+import { assertCashLimit, creditAllowance } from '../customers/limits';
 import { cartCompatibility, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
@@ -12,9 +13,11 @@ import { ContractsService } from '../contracts/contracts.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { GrowthService } from '../growth/growth.service';
 import { KitchenService } from '../kitchen/kitchen.service';
+import { LocationLoadService } from '../kitchen/location-load.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 import { PaymentsService } from '../payments/payments.service';
 import { addMinutes, bps, isWithin, localParts, zonedTimeToUtc } from '../../common/utils';
+import { taxEngine } from './tax-provider';
 import type { Address } from '../delivery/providers/delivery-provider';
 
 export type Channel = 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR' | 'PARTNER' | 'PHONE' | 'WALK_IN' | 'CAMPUS' | 'CORPORATE' | 'API' | 'KIOSK';
@@ -66,6 +69,7 @@ export class QuoteService {
     private readonly delivery: DeliveryService,
     private readonly growth: GrowthService,
     private readonly kitchen: KitchenService,
+    private readonly locationLoad: LocationLoadService,
     private readonly payments: PaymentsService,
     private readonly entitlements: EntitlementsService,
     private readonly settings: SettingsService,
@@ -125,8 +129,9 @@ export class QuoteService {
       throw new BadRequestException({ message: 'Restaurant is closed right now; schedule for later', code: 'CLOSED', nextOpenAt: await this.nextOpenAt(loc, now, tx) });
     }
     // 13.7 kitchen auto-throttle
-    const load = sim ? null : await this.kitchen.loadFor(loc.kitchenId, tx);
-    if (load?.level === 'OVERLOADED' && !scheduledFor) throw new BadRequestException({ message: 'The kitchen is at capacity right now; schedule for later', code: 'KITCHEN_BUSY' });
+    // 13.7-L restaurants without a production kitchen: load from open orders × prep time
+    const load = sim ? null : (await this.kitchen.loadFor(loc.kitchenId, tx)) ?? (await this.locationLoad.loadFor(loc, tx));
+    if (load?.level === 'OVERLOADED' && !scheduledFor) throw new BadRequestException({ message: loc.kitchenId ? 'The kitchen is at capacity right now; schedule for later' : 'The restaurant is at capacity right now; schedule for later', code: 'KITCHEN_BUSY' });
 
     // items & modifiers
     const items = await this.catalog.resolveItems(loc.id, input.channel, input.lines.map((l) => l.menuItemId), sim?.ignoreHours ? undefined : scheduledFor ?? now);
@@ -217,7 +222,10 @@ export class QuoteService {
     if (smallOrderFeeCents) warnings.push(`Small-order fee applies under ${(feeRules.smallOrder.thresholdCents / 100).toFixed(2)}`);
     const taxableCents = Math.max(0, subtotalCents - discountCents);
     // 9.5 — tax by item category (discount spread across lines); one category at the location rate = the old flat calculation
-    const tax = await this.taxForLines(loc, snapLines, discountCents, subtotalCents, tx, sim?.taxRates);
+    const builtinTax = await this.taxForLines(loc, snapLines, discountCents, subtotalCents, tx, sim?.taxRates);
+    // 9.5-X — external tax engine (TAX_PROVIDER) when configured; simulations keep the draft rate table
+    const tax = sim ? { ...builtinTax, engine: 'builtin' as string, warning: undefined as string | undefined } : await taxEngine().resolve({ locationId: loc.id, currency: loc.currency, from: { line1: loc.addressLine1, city: loc.city, region: loc.region, postalCode: loc.postalCode, country: loc.country }, to: input.fulfillmentType === 'DELIVERY' && input.deliveryAddress ? input.deliveryAddress : { line1: loc.addressLine1, city: loc.city, region: loc.region, postalCode: loc.postalCode, country: loc.country }, lines: builtinTax.lines.map((l) => ({ category: l.category, taxableCents: l.taxableCents })) }, builtinTax);
+    if (tax.warning) warnings.push(tax.warning);
     const taxCents = tax.taxCents;
     const tipCents = Math.max(0, input.tipCents || 0);
     const commissionCents = bps(taxableCents, terms.commissionBps);
@@ -229,10 +237,14 @@ export class QuoteService {
     const grossTotal = taxableCents + taxCents + serviceFeeCents + smallOrderFeeCents + packagingFeeCents + deliveryFeeCents + tipCents;
     if (input.userId) {
       if (input.useCreditsCents) creditsCents = Math.min(input.useCreditsCents, await this.payments.availableCredit(input.userId, tx), grossTotal);
+      // 10.8-L per-customer credit limit: cap what this order may use and say so
+      if (creditsCents && !sim) { const allow = await creditAllowance(tx, input.userId); if (creditsCents > allow) { creditsCents = allow; warnings.push(`Credits on this account are limited; up to $${(allow / 100).toFixed(2)} applied`); } }
       if (input.useLoyaltyPoints) loyaltyCents = Math.min(input.useLoyaltyPoints, await this.growth.loyaltyBalance(input.userId, tx), grossTotal - creditsCents); // 1 point = 1 cent
       if (input.useGiftBalance) giftCents = Math.min(await giftBalance(tx, input.userId), grossTotal - creditsCents - loyaltyCents);
     }
     const totalCents = Math.max(0, grossTotal - creditsCents - loyaltyCents - giftCents);
+    // 10.8-L per-customer cash / pay-later limit on what the customer owes
+    if (input.userId && !sim) await assertCashLimit(tx, input.userId, totalCents);
 
     const promiseAt = scheduledFor ? scheduledFor : addMinutes(now, etaMinutes);
     const expiresAt = deliveryExpiresAt && deliveryExpiresAt < addMinutes(now, QUOTE_TTL_MINUTES) ? deliveryExpiresAt : addMinutes(now, QUOTE_TTL_MINUTES);
@@ -251,6 +263,7 @@ export class QuoteService {
       grossTotalCents: grossTotal,
       giftCents,
       taxLines: tax.lines,
+      taxEngine: tax.engine,
       fees: { serviceFeeCents, smallOrderFeeCents, packagingFeeCents, rules: feeRules },
       menuVersions: [...new Set(snapLines.map((l) => l.menuItemId))].length ? await this.catalog.menuVersionsFor([...items.values()].map((i) => i.id)) : {},
       creditsCents,

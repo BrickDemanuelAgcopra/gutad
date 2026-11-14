@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { CurrentUser, JwtPayload, Public, Roles } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { PaymentsService } from './payments.service';
+import { loadConfig } from '../../config/config';
 
 const RefundDto = z.object({ paymentId: z.string().uuid(), amountCents: z.number().int().positive(), reason: z.string().min(2), funder: z.enum(['MERCHANT', 'PLATFORM', 'PROVIDER', 'DRIVER']), incidentId: z.string().uuid().optional() });
 const CreditDto = z.object({ userId: z.string().uuid(), cents: z.number().int().positive(), reason: z.string(), funder: z.enum(['PLATFORM', 'MERCHANT']).optional(), orderId: z.string().uuid().optional(), expiresInDays: z.number().int().positive().optional(), organizationId: z.string().uuid().optional() });
@@ -14,7 +15,7 @@ const CreditDto = z.object({ userId: z.string().uuid(), cents: z.number().int().
 export class PaymentsController {
   constructor(private readonly svc: PaymentsService) {}
 
-  @Public() @Get('public/payments/provider') provider() { return { provider: this.svc.providerName }; }
+  @Public() @Get('public/payments/provider') provider() { return { provider: this.svc.providerName, publishableKey: this.svc.providerName === 'stripe' ? loadConfig().STRIPE_PUBLISHABLE_KEY || null : null }; } // 18.9-S
 
   /** Raw-body webhook (see main.ts rawBody). Signature header differs per provider. */
   @Public()

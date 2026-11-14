@@ -36,8 +36,9 @@ const ItemDto = z.object({
   allergenReviewNeeded: z.boolean().optional(),
   reason: z.string().optional(),
 });
-const DocItem = z.object({ id: z.string().uuid().optional(), name: z.string(), priceCents: z.number().int() }).passthrough();
-const MenuDocDto = z.object({ name: z.string().optional(), brandId: z.string().uuid().optional(), categories: z.array(z.object({ id: z.string().uuid().optional(), name: z.string(), sortOrder: z.number().int().optional(), items: z.array(DocItem) })) });
+const DocItem = z.object({ id: z.string().uuid().optional(), name: z.string(), priceCents: z.number().int(), modifierGroupIds: z.array(z.string().uuid()).optional() }).passthrough();
+const DocModifierGroup = z.object({ id: z.string().uuid().optional(), name: z.string(), minSelect: z.number().int().min(0), maxSelect: z.number().int().min(0), required: z.boolean(), options: z.array(z.object({ id: z.string().uuid().optional(), name: z.string(), priceCents: z.number().int(), soldOut: z.boolean().optional(), ingredientId: z.string().uuid().nullable().optional() })) });
+const MenuDocDto = z.object({ name: z.string().optional(), brandId: z.string().uuid().optional(), categories: z.array(z.object({ id: z.string().uuid().optional(), name: z.string(), sortOrder: z.number().int().optional(), items: z.array(DocItem) })), modifierGroups: z.array(DocModifierGroup).optional() });
 const SoldOutDto = z.object({ soldOut: z.boolean(), untilMinutes: z.number().int().positive().optional() });
 const ModGroupDto = z.object({ name: z.string().min(1), minSelect: z.number().int().min(0).optional(), maxSelect: z.number().int().min(1).optional(), required: z.boolean().optional(), options: z.array(z.object({ name: z.string().min(1), priceCents: z.number().int().min(0).optional() })) });
 const ImportDto = z.object({ name: z.string(), brandId: z.string().uuid().optional(), categories: z.array(z.object({ name: z.string(), items: z.array(z.object({ name: z.string(), priceCents: z.number().int(), description: z.string().optional(), allergens: z.array(z.string()).optional(), posExternalId: z.string().optional(), stationCode: z.string().optional() })) })) });

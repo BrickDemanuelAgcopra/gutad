@@ -15,6 +15,8 @@ import { DEFAULT_GOODWILL, DEFAULT_SUPPORT_SLA, SUPPORT_CATEGORIES, type Support
 
 type ResolveInput = { owner: 'MERCHANT' | 'PLATFORM' | 'PROVIDER' | 'DRIVER' | 'CUSTOMER'; remedy: 'REFUND' | 'CREDIT' | 'REMAKE' | 'REDELIVERY' | 'REASSIGN' | 'NONE'; remedyCents?: number; note?: string; evidence?: unknown[] };
 type Category = SupportCategory;
+/** 24.6-W merchant roles that may dispute responsibility for the business. */
+const DISPUTE_MERCHANT_ROLES = ['MERCHANT_OWNER', 'MERCHANT_MANAGER'] as const;
 
 /** 28 — incident queues, order/booking timeline, role-based remedies with evidence, chargebacks, appeals, data requests. */
 @Injectable()
@@ -130,12 +132,33 @@ export class SupportService implements OnModuleInit {
 
   // ───── 24.6 responsibility review ─────
 
+  /**
+   * 24.6-W tickets where the caller's party was held responsible: the merchant's (owner/manager) organizations, or
+   * deliveries the caller drove. Only what's needed to decide whether to dispute; no customer contact details.
+   */
+  async responsibleTickets(user: JwtPayload) {
+    const orgIds = Object.entries(user.orgs || {}).filter(([, m]) => m.roles.some((r) => (DISPUTE_MERCHANT_ROLES as readonly string[]).includes(r))).map(([id]) => id);
+    const r = await this.db.execute(sql`
+      select i.id, i.category, i.status, i.owner, i.remedy, i.remedy_cents, i.resolved_at, i.created_at, i.responsibility_dispute, i.organization_id, i.order_id, o.number as order_number,
+        case when i.owner = 'DRIVER' then 'DRIVER' else 'MERCHANT' end as role
+      from incidents i left join orders o on o.id = i.order_id
+      where (i.owner = 'MERCHANT' and ${orgIds.length ? sql`i.organization_id = any(${'{' + orgIds.join(',') + '}'}::uuid[])` : sql`false`})
+         or (i.owner = 'DRIVER' and i.delivery_job_id in (select dj.id from delivery_jobs dj join drivers d on d.id = dj.driver_id where d.user_id = ${user.sub}))
+         or (i.owner = 'PLATFORM' and i.responsibility_dispute->>'by' = ${user.sub})
+      order by coalesce(i.resolved_at, i.created_at) desc limit 100`);
+    return ((r as unknown as { rows: Record<string, unknown>[] }).rows || []).map((x) => {
+      const d = x.responsibility_dispute as { status?: string; reason?: string; at?: string; note?: string; decidedAt?: string; role?: string } | null;
+      return { id: x.id as string, category: x.category as string, status: x.status as string, owner: x.owner as string, remedy: x.remedy as string | null, remedyCents: Number(x.remedy_cents || 0), resolvedAt: x.resolved_at, createdAt: x.created_at, orderId: x.order_id as string | null, orderNumber: x.order_number as string | null, organizationId: x.organization_id as string | null, role: (d?.role || x.role) as 'MERCHANT' | 'DRIVER', dispute: d ? { status: d.status || null, reason: d.reason || null, at: d.at || null, note: d.note || null, decidedAt: d.decidedAt || null } : null, canDispute: ['RESOLVED', 'CLOSED'].includes(x.status as string) && x.owner !== 'PLATFORM' && !(d && ['OPEN', 'UPHELD', 'REVERSED'].includes(d.status || '')) };
+    });
+  }
+
   /** A merchant or courier disputes being held responsible for a resolved ticket. */
   async disputeResponsibility(user: JwtPayload, incidentId: string, reason: string) {
     const [i] = await this.db.select().from(incidents).where(eq(incidents.id, incidentId)).limit(1);
     if (!i) throw new NotFoundException();
     let role: string | null = null;
-    if (i.owner === 'MERCHANT' && i.organizationId && user.orgs?.[i.organizationId]) role = 'MERCHANT';
+    // 24.6-W only the merchant's owner or manager speaks for the business (not line staff)
+    if (i.owner === 'MERCHANT' && i.organizationId && user.orgs?.[i.organizationId]?.roles.some((r) => (DISPUTE_MERCHANT_ROLES as readonly string[]).includes(r))) role = 'MERCHANT';
     if (i.owner === 'DRIVER' && i.deliveryJobId) {
       const [j] = await this.db.execute(sql`select dj.id from delivery_jobs dj join drivers d on d.id = dj.driver_id where dj.id = ${i.deliveryJobId} and d.user_id = ${user.sub}`).then((r) => (r as unknown as { rows: unknown[] }).rows);
       if (j) role = 'DRIVER';
@@ -143,6 +166,7 @@ export class SupportService implements OnModuleInit {
     if (!role) throw new ForbiddenException('Only the party held responsible can dispute it');
     if (!['RESOLVED', 'CLOSED'].includes(i.status)) throw new BadRequestException('Only resolved tickets can be disputed');
     if ((i.responsibilityDispute as { status?: string } | null)?.status === 'OPEN') throw new BadRequestException('Already disputed');
+    if (['UPHELD', 'REVERSED'].includes((i.responsibilityDispute as { status?: string } | null)?.status || '')) throw new BadRequestException('A decision was already made on this ticket'); // 24.6-W one review per ticket
     const dispute = { by: user.sub, role, reason, at: new Date().toISOString(), status: 'OPEN' };
     const [u] = await this.db.update(incidents).set({ responsibilityDispute: dispute, status: 'APPEALED', appealNote: reason }).where(eq(incidents.id, incidentId)).returning();
     await this.audit.log({ organizationId: i.organizationId, actorId: user.sub, action: 'incident.responsibility_dispute', entityType: 'incident', entityId: incidentId, after: dispute });

@@ -27,6 +27,12 @@ export class SafetyService {
   // 22.2 temperatures
   async logTemperature(user: JwtPayload, kitchenId: string, input: { kind: 'RECEIVING' | 'STORAGE' | 'HOT_HOLD' | 'COOLING'; tempC: number; storageAreaId?: string; lotId?: string; purchaseOrderId?: string; ingredientId?: string; note?: string }) {
     const k = await this.k(user, kitchenId);
+    return this.recordTemperature(k, input, user.sub);
+  }
+
+  /** The reading itself, with the out-of-range alert and corrective action (staff entry, or a wireless sensor: 22.2-S). */
+  async recordTemperature(k: { id: string; name: string; organizationId: string }, input: { kind: 'RECEIVING' | 'STORAGE' | 'HOT_HOLD' | 'COOLING'; tempC: number; storageAreaId?: string; lotId?: string; purchaseOrderId?: string; ingredientId?: string; note?: string }, recordedById: string | null, opts: { alertKey?: string } = {}) {
+    const kitchenId = k.id;
     let min: number | null = null, max: number | null = null, label = input.kind.toLowerCase().replace('_', ' ');
     if (input.storageAreaId) {
       const [a] = await this.db.select().from(storageAreas).where(and(eq(storageAreas.id, input.storageAreaId), eq(storageAreas.kitchenId, kitchenId))).limit(1);
@@ -40,12 +46,13 @@ export class SafetyService {
     }
     if (min === null && max === null) { const d = DEFAULT_TEMP_RANGES[input.kind] ?? (input.kind === 'RECEIVING' ? DEFAULT_TEMP_RANGES.RECEIVING_COLD : null); min = d?.min ?? null; max = d?.max ?? null; }
     const inRange = (min === null || input.tempC >= min) && (max === null || input.tempC <= max);
-    const [log] = await this.db.insert(temperatureLogs).values({ kitchenId, storageAreaId: input.storageAreaId ?? null, lotId: input.lotId ?? null, purchaseOrderId: input.purchaseOrderId ?? null, kind: input.kind, tempC: input.tempC, minC: min, maxC: max, inRange, note: input.note ?? null, recordedById: user.sub }).returning();
+    const [log] = await this.db.insert(temperatureLogs).values({ kitchenId, storageAreaId: input.storageAreaId ?? null, lotId: input.lotId ?? null, purchaseOrderId: input.purchaseOrderId ?? null, kind: input.kind, tempC: input.tempC, minC: min, maxC: max, inRange, note: input.note ?? null, recordedById }).returning();
     let quarantined = false;
     if (!inRange) {
       const range = `${min ?? '—'}…${max ?? '—'} °C`;
-      await this.db.insert(opsAlerts).values(alert({ type: 'FOOD_SAFETY_TEMP', severity: 'HIGH', title: `Temperature out of range: ${label}`, detail: `${input.tempC} °C recorded (safe ${range}) at ${k.name}.`, subjectType: 'kitchen', subjectId: kitchenId, organizationId: k.organizationId, dedupeKey: `temp:${log.id}`, ownerRole: 'CULINARY', minutes: 30 })).onConflictDoNothing();
-      await this.action({ source: 'TEMPERATURE', sourceId: log.id, kitchenId, title: `Fix ${label}: ${input.tempC} °C (safe ${range}); re-check and discard affected food if needed`, dueHours: 2 });
+      await this.db.insert(opsAlerts).values(alert({ type: 'FOOD_SAFETY_TEMP', severity: 'HIGH', title: `Temperature out of range: ${label}`, detail: `${input.tempC} °C recorded (safe ${range}) at ${k.name}.`, subjectType: 'kitchen', subjectId: kitchenId, organizationId: k.organizationId, dedupeKey: opts.alertKey ?? `temp:${log.id}`, ownerRole: 'CULINARY', minutes: 30 })).onConflictDoNothing();
+      // a sensor stays out of range for many readings: one open alert and one corrective action per excursion
+      if (!opts.alertKey || !(await this.db.select({ id: correctiveActions.id }).from(correctiveActions).innerJoin(temperatureLogs, eq(temperatureLogs.id, correctiveActions.sourceId)).where(and(eq(correctiveActions.source, 'TEMPERATURE'), eq(temperatureLogs.storageAreaId, input.storageAreaId ?? ''), sql`${correctiveActions.completedAt} is null`)).limit(1)).length) await this.action({ source: 'TEMPERATURE', sourceId: log.id, kitchenId, title: `Fix ${label}: ${input.tempC} °C (safe ${range}); re-check and discard affected food if needed`, dueHours: 2 });
       // goods received out of range are quarantined until someone decides
       if (input.lotId && input.kind === 'RECEIVING') { await this.db.update(stockLots).set({ status: 'QUARANTINED' }).where(and(eq(stockLots.id, input.lotId), eq(stockLots.status, 'AVAILABLE'))); quarantined = true; }
     }

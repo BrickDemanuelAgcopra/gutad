@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { DEFAULT_FORECAST_CONFIG, type ForecastConfig } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
+import { coupons, locations, menuCategories, menuItems, menus, recipeLines } from '../../db/schema';
 import { ingredientStock, ingredients, kitchens, purchaseOrderLines, purchaseOrders, stockLots, stockMovements, stockTransfers, storageAreas, suppliers } from '../../db/schema';
 import { assertCan, assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
@@ -157,6 +159,12 @@ export class InventoryService {
     const [po] = await this.db.select().from(purchaseOrders).where(eq(purchaseOrders.id, poId)).limit(1);
     if (!po) throw new NotFoundException();
     await this.k(user, po.kitchenId);
+    return this.matchInvoice(po, input, user.sub);
+  }
+
+  /** The three-way match itself (staff entry, or a supplier submission via portal / EDI with no user: 21.8-P). */
+  async matchInvoice(po: typeof purchaseOrders.$inferSelect, input: { invoiceNumber: string; lines: { ingredientId: string; quantity: number; unitCostCents: number }[] }, actorId: string | null, source = 'STAFF') {
+    const poId = po.id;
     if (po.status !== 'RECEIVED') throw new ConflictException('Receive the goods before matching the invoice');
     const tol = await this.settings.get<number>('procurement.matchTolerancePct', 2);
     const lines = await this.db.select().from(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, poId));
@@ -172,7 +180,7 @@ export class InventoryService {
     const recTotal = detail.reduce((a, d) => a + d.receivedCents, 0);
     const ok = detail.every((d) => d.qtyOk && d.priceOk) && !extra.length && Math.abs(invTotal - recTotal) <= recTotal * tol / 100;
     const [u] = await this.db.update(purchaseOrders).set({ invoiceNumber: input.invoiceNumber, invoiceLines: input.lines, invoiceTotalCents: invTotal, matchStatus: ok ? 'MATCHED' : 'VARIANCE', matchDetail: { tolerancePct: tol, lines: detail, unexpectedLines: extra, receivedCents: recTotal, invoicedCents: invTotal, varianceCents: invTotal - recTotal } }).where(eq(purchaseOrders.id, poId)).returning();
-    await this.audit.log({ actorId: user.sub, action: 'po.invoice_match', entityType: 'purchase_order', entityId: poId, after: { status: u.matchStatus, varianceCents: invTotal - recTotal } });
+    await this.audit.log({ actorId, action: 'po.invoice_match', entityType: 'purchase_order', entityId: poId, after: { status: u.matchStatus, varianceCents: invTotal - recTotal, source } });
     return u;
   }
 
@@ -251,25 +259,102 @@ export class InventoryService {
     return by;
   }
 
+  forecastConfig() { return this.settings.getObject<ForecastConfig>('inventory.forecast', DEFAULT_FORECAST_CONFIG); }
+
+  /**
+   * 21.6-S seasonal factor per ingredient: recent-weeks trend (last 14 days vs the 14 before, blended by weight) times
+   * year-over-year seasonality (the same upcoming days 364 days ago vs the 4 weeks before them), clamped.
+   */
+  private async seasonalFactors(kitchenId: string, horizonDays: number, cfg: ForecastConfig) {
+    const out = new Map<string, { trend: number; yoy: number; factor: number }>();
+    const clamp = (x: number) => Math.min(cfg.maxFactor, Math.max(cfg.minFactor, x));
+    const blend = (ratio: number, w: number) => 1 + (ratio - 1) * Math.max(0, Math.min(1, w));
+    const trend = cfg.trend.enabled ? rows<{ ingredient_id: string; recent: number; older: number }>(await this.db.execute(sql`select ingredient_id, sum(case when created_at > now() - interval '14 days' then -quantity else 0 end) as recent, sum(case when created_at <= now() - interval '14 days' then -quantity else 0 end) as older
+      from stock_movements where kitchen_id = ${kitchenId} and kind = 'CONSUMPTION' and created_at > now() - interval '28 days' group by 1`)) : [];
+    const yoy = cfg.yearOverYear.enabled ? rows<{ ingredient_id: string; upcoming: number; prior: number }>(await this.db.execute(sql`select ingredient_id,
+        sum(case when created_at >= now() - interval '364 days' then -quantity else 0 end) as upcoming,
+        sum(case when created_at < now() - interval '364 days' then -quantity else 0 end) as prior
+      from stock_movements where kitchen_id = ${kitchenId} and kind = 'CONSUMPTION' and created_at >= now() - interval '392 days' and created_at < now() - interval '364 days' + make_interval(days => ${horizonDays}) group by 1`)) : [];
+    const ids = new Set([...trend.map((t) => t.ingredient_id), ...yoy.map((y) => y.ingredient_id)]);
+    for (const id of ids) {
+      const t = trend.find((x) => x.ingredient_id === id), y = yoy.find((x) => x.ingredient_id === id);
+      const tr = t && n(t.older) > 0 ? clamp(blend(Math.max(0, n(t.recent)) / n(t.older), cfg.trend.weight)) : 1;
+      const yr = y && n(y.prior) > 0 ? clamp(blend((Math.max(0, n(y.upcoming)) / horizonDays) / (n(y.prior) / 28), cfg.yearOverYear.weight)) : 1;
+      out.set(id, { trend: Math.round(tr * 100) / 100, yoy: Math.round(yr * 100) / 100, factor: Math.round(clamp(tr * yr) * 100) / 100 });
+    }
+    return out;
+  }
+
+  /**
+   * 21.6-S active promotions at the kitchen locations: automatic offers and campaign coupons (merchant or Gutad-wide)
+   * running in the horizon. Item/category-scoped ones lift only the ingredients in those items' recipes.
+   */
+  async activePromotions(kitchenId: string, horizonDays: number, cfg: ForecastConfig) {
+    if (!cfg.promotions.enabled) return [];
+    const locs = await this.db.select({ id: locations.id, organizationId: locations.organizationId }).from(locations).where(eq(locations.kitchenId, kitchenId));
+    if (!locs.length) return [];
+    const orgIds = [...new Set(locs.map((l) => l.organizationId))];
+    const end = new Date(Date.now() + horizonDays * 86400_000);
+    const list = await this.db.select().from(coupons).where(and(eq(coupons.isActive, true), or(eq(coupons.automatic, true), sql`${coupons.campaignId} is not null`), or(isNull(coupons.startsAt), lt(coupons.startsAt, end)), or(isNull(coupons.expiresAt), gte(coupons.expiresAt, new Date())), or(isNull(coupons.organizationId), inArray(coupons.organizationId, orgIds)), sql`(${coupons.maxUses} is null or ${coupons.uses} < ${coupons.maxUses})`));
+    const locIds = locs.map((l) => l.id);
+    const relevant = list.filter((c) => !c.locationIds.length || c.locationIds.some((id) => locIds.includes(id)));
+    const out: { id: string; code: string; name: string | null; kind: string; automatic: boolean; startsAt: Date | null; expiresAt: Date | null; daysOfWeek: number[]; scope: 'MENU' | 'ITEMS'; ingredientIds: string[] | null }[] = [];
+    for (const c of relevant) {
+      let ingredientIds: string[] | null = null;
+      if (c.itemIds.length || c.categoryIds.length) {
+        const recs = await this.db.selectDistinct({ ingredientId: recipeLines.ingredientId }).from(menuItems).innerJoin(menuCategories, eq(menuCategories.id, menuItems.categoryId)).innerJoin(menus, eq(menus.id, menuCategories.menuId)).innerJoin(recipeLines, eq(recipeLines.recipeId, menuItems.recipeId)).where(and(inArray(menus.locationId, locIds), or(c.itemIds.length ? inArray(menuItems.id, c.itemIds) : sql`false`, c.categoryIds.length ? inArray(menuItems.categoryId, c.categoryIds) : sql`false`)));
+        ingredientIds = recs.map((r) => r.ingredientId);
+      }
+      out.push({ id: c.id, code: c.code, name: c.name, kind: c.kind, automatic: c.automatic, startsAt: c.startsAt, expiresAt: c.expiresAt, daysOfWeek: c.daysOfWeek, scope: ingredientIds ? 'ITEMS' : 'MENU', ingredientIds });
+    }
+    return out;
+  }
+
+  /** Factors behind the forecast: settings and active promotions (web supply UI). */
+  async forecastFactors(user: JwtPayload, kitchenId: string, horizonDays = 7) {
+    await this.k(user, kitchenId);
+    const cfg = await this.forecastConfig();
+    const promos = await this.activePromotions(kitchenId, horizonDays, cfg);
+    return { config: cfg, horizonDays, promotions: promos.map(({ ingredientIds, ...p }) => ({ ...p, ingredientCount: ingredientIds?.length ?? null })) };
+  }
+
   async forecast(user: JwtPayload, kitchenId: string, horizonDays = 7) {
     await this.k(user, kitchenId);
+    const cfg = await this.forecastConfig();
     const by = await this.demand(kitchenId);
+    const seasonal = await this.seasonalFactors(kitchenId, horizonDays, cfg);
+    const promos = await this.activePromotions(kitchenId, horizonDays, cfg);
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    // uplift (fraction) for an ingredient on day d of the horizon: each running promotion adds upliftPct, capped
+    const upliftOn = (ingredientId: string, d: number) => {
+      const day = new Date(dayStart.getTime() + d * 86400_000), dayEnd = new Date(day.getTime() + 86400_000);
+      const hits = promos.filter((p) => (!p.ingredientIds || p.ingredientIds.includes(ingredientId)) && (!p.startsAt || p.startsAt < dayEnd) && (!p.expiresAt || p.expiresAt >= day) && (!p.daysOfWeek.length || p.daysOfWeek.includes(day.getDay())));
+      return { pct: Math.min(cfg.promotions.maxUpliftPct, hits.length * cfg.promotions.upliftPct) / 100, codes: hits.map((h) => h.name || h.code) };
+    };
     const stock = await this.db.select({ s: ingredientStock, i: ingredients, sup: suppliers }).from(ingredientStock).innerJoin(ingredients, eq(ingredients.id, ingredientStock.ingredientId)).leftJoin(suppliers, eq(suppliers.id, ingredients.supplierId)).where(eq(ingredientStock.kitchenId, kitchenId));
     const onOrder = rows<{ ingredient_id: string; qty: number }>(await this.db.execute(sql`select l.ingredient_id, sum(l.quantity * coalesce(i.purchase_unit_factor, 1)) as qty from purchase_order_lines l join purchase_orders p on p.id = l.purchase_order_id join ingredients i on i.id = l.ingredient_id where p.kitchen_id = ${kitchenId} and p.status in ('ORDERED','PENDING_APPROVAL','DRAFT') group by 1`));
     const today = new Date().getDay();
     return stock.map(({ s, i, sup }) => {
       const week = by.get(i.id) || [0, 0, 0, 0, 0, 0, 0];
-      const daily = week.reduce((a, b) => a + b, 0) / 7;
+      const baseDaily = week.reduce((a, b) => a + b, 0) / 7;
       const lead = sup?.leadTimeDays ?? 2;
-      const horizon = Array.from({ length: horizonDays }, (_, d) => week[(today + d) % 7]).reduce((a, b) => a + b, 0);
-      const leadDemand = Array.from({ length: lead }, (_, d) => week[(today + d) % 7]).reduce((a, b) => a + b, 0);
+      const sf = seasonal.get(i.id) || { trend: 1, yoy: 1, factor: 1 };
+      const promoDays = Array.from({ length: Math.max(horizonDays, lead) }, (_, d) => upliftOn(i.id, d));
+      const perDay = (d: number) => week[(today + d) % 7] * sf.factor * (1 + promoDays[d].pct);
+      const baseHorizon = Array.from({ length: horizonDays }, (_, d) => week[(today + d) % 7]).reduce((a, b) => a + b, 0);
+      const horizon = Array.from({ length: horizonDays }, (_, d) => perDay(d)).reduce((a, b) => a + b, 0);
+      const leadDemand = Array.from({ length: lead }, (_, d) => perDay(d)).reduce((a, b) => a + b, 0);
+      const daily = baseDaily * sf.factor;
+      const horizonPromo = promoDays.slice(0, horizonDays);
+      const promoUpliftPct = Math.round((horizonPromo.reduce((a, x) => a + x.pct, 0) / Math.max(1, horizonDays)) * 1000) / 10;
+      const promotions = [...new Set(horizonPromo.flatMap((x) => x.codes))];
       const safety = Math.max(s.safetyStock, daily * 2);
       const reorderPoint = leadDemand + safety;
       const pending = n(onOrder.find((o) => o.ingredient_id === i.id)?.qty);
       const target = horizon + safety;
       const proposeBase = Math.max(0, target - s.onHand - pending, s.parLevel - s.onHand - pending);
       const factor = i.purchaseUnitFactor || 1;
-      return { ingredientId: i.id, name: i.name, unit: i.unit, purchaseUnit: i.purchaseUnit, purchaseUnitFactor: factor, supplierId: sup?.id ?? null, supplier: sup?.name ?? null, supplierApproved: sup?.approved ?? null, onHand: r2(s.onHand), onOrder: r2(pending), dailyDemand: r2(daily), weekdayDemand: week.map(r2), safetyStock: r2(safety), reorderPoint: r2(reorderPoint), horizonDemand: r2(horizon), daysOfCover: daily ? r2(s.onHand / daily) : null, needsReorder: s.onHand + pending <= reorderPoint || s.onHand < s.parLevel, proposedQty: r2(proposeBase), proposedPurchaseUnits: Math.ceil(proposeBase / factor), unitCostCents: i.costCentsPerUnit };
+      return { ingredientId: i.id, name: i.name, unit: i.unit, purchaseUnit: i.purchaseUnit, purchaseUnitFactor: factor, supplierId: sup?.id ?? null, supplier: sup?.name ?? null, supplierApproved: sup?.approved ?? null, onHand: r2(s.onHand), onOrder: r2(pending), dailyDemand: r2(daily), baseDailyDemand: r2(baseDaily), baseHorizonDemand: r2(baseHorizon), trendFactor: sf.trend, yoyFactor: sf.yoy, seasonalFactor: sf.factor, promoUpliftPct, promotions, weekdayDemand: week.map(r2), safetyStock: r2(safety), reorderPoint: r2(reorderPoint), horizonDemand: r2(horizon), daysOfCover: daily ? r2(s.onHand / daily) : null, needsReorder: s.onHand + pending <= reorderPoint || s.onHand < s.parLevel, proposedQty: r2(proposeBase), proposedPurchaseUnits: Math.ceil(proposeBase / factor), unitCostCents: i.costCentsPerUnit };
     }).sort((a, b) => Number(b.needsReorder) - Number(a.needsReorder) || a.name.localeCompare(b.name));
   }
 

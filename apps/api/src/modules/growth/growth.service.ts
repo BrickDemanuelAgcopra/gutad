@@ -54,6 +54,8 @@ export interface OfferInput {
   endTime?: string | null;
   stacking?: 'EXCLUSIVE' | 'STACKABLE';
   priority?: number;
+  buyQty?: number | null;
+  getQty?: number | null;
   startsAt?: Date | null;
   expiresAt?: Date | null;
   campaignId?: string | null;
@@ -87,7 +89,7 @@ export class GrowthService {
    * with stackable offers. Without a code the customer gets the better of the best exclusive offer and all
    * stackable offers combined. Offers apply in priority order and never exceed the subtotal.
    */
-  async evaluatePromotions(ctx: { loc: { id: string; organizationId: string; timezone: string }; channel: string; lines: { menuItemId: string; lineTotalCents: number }[]; subtotalCents: number; userId?: string | null; code?: string | null; blocked?: boolean; now?: Date; simulate?: boolean }, tx: DbOrTx = this.db): Promise<PromoEvaluation> {
+  async evaluatePromotions(ctx: { loc: { id: string; organizationId: string; timezone: string }; channel: string; lines: { menuItemId: string; lineTotalCents: number; quantity?: number }[]; subtotalCents: number; userId?: string | null; code?: string | null; blocked?: boolean; now?: Date; simulate?: boolean }, tx: DbOrTx = this.db): Promise<PromoEvaluation> {
     const now = ctx.now || new Date();
     const warnings: string[] = [];
     let coded: Coupon | null = null;
@@ -134,11 +136,23 @@ export class GrowthService {
         if (camp && camp.holdoutPct > 0 && ctx.userId && !ctx.simulate && !isCode && (await this.assign(camp.id, ctx.userId, camp.holdoutPct, tx)) === 'HOLDOUT') return { reason: 'holdout' };
       }
       const scoped = c.itemIds.length || c.categoryIds.length;
-      const base = scoped ? ctx.lines.filter((l) => c.itemIds.includes(l.menuItemId) || (cats.get(l.menuItemId) && c.categoryIds.includes(cats.get(l.menuItemId)!))).reduce((a, l) => a + l.lineTotalCents, 0) : ctx.subtotalCents;
-      if (scoped && base === 0) return { reason: 'Promo applies to items that are not in your cart' };
+      const eligibleLines = scoped ? ctx.lines.filter((l) => c.itemIds.includes(l.menuItemId) || (cats.get(l.menuItemId) && c.categoryIds.includes(cats.get(l.menuItemId)!))) : ctx.lines;
+      const base = scoped ? eligibleLines.reduce((a, l) => a + l.lineTotalCents, 0) : ctx.subtotalCents;
+      if (scoped && base === 0) return { reason: c.kind === 'FREE_ITEM' ? 'Add the free item to your cart to get it free' : 'Promo applies to items that are not in your cart' };
       let d = c.kind === 'PERCENT' ? bps(base, c.value) : c.kind === 'FIXED' ? Math.min(c.value, base) : 0;
+      if (c.kind === 'BOGO') {
+        // 25.1-B buy X get Y: units sorted by price, in each block of X+Y the cheapest Y are free
+        const buy = Math.max(1, c.buyQty || 1), get = Math.max(1, c.getQty || 1);
+        const units = eligibleLines.flatMap((l) => { const q = Math.max(1, l.quantity || 1); return Array.from({ length: q }, () => Math.round(l.lineTotalCents / q)); }).sort((a, b) => b - a);
+        for (let i = 0; i + buy + get <= units.length; i += buy + get) d += units.slice(i + buy, i + buy + get).reduce((a, u) => a + u, 0);
+        if (!d) return { reason: `Add ${buy + get} qualifying items to get ${get} free` };
+      }
+      if (c.kind === 'FREE_ITEM') {
+        const l = eligibleLines[0];
+        d = Math.round(l.lineTotalCents / Math.max(1, l.quantity || 1));
+      }
       if (c.maxDiscountCents !== null && c.maxDiscountCents !== undefined) d = Math.min(d, c.maxDiscountCents);
-      return { promo: { promotionId: c.id, code: c.automatic && !isCode ? null : c.code, name: c.name || (c.automatic ? 'Offer' : `Code ${c.code}`), automatic: c.automatic && !isCode, kind: c.kind as OfferKind, discountCents: d, freeDelivery: c.kind === 'FREE_DELIVERY', funder: c.funder as 'MERCHANT' | 'PLATFORM', platformShareCents: 0, campaignId: c.campaignId } };
+      return { promo: { promotionId: c.id, code: c.automatic && !isCode ? null : c.code, name: c.name || (c.kind === 'BOGO' ? `Buy ${c.buyQty || 1}, get ${c.getQty || 1} free` : c.kind === 'FREE_ITEM' ? 'Free item' : c.automatic ? 'Offer' : `Code ${c.code}`), automatic: c.automatic && !isCode, kind: c.kind as OfferKind, discountCents: d, freeDelivery: c.kind === 'FREE_DELIVERY', funder: c.funder as 'MERCHANT' | 'PLATFORM', platformShareCents: 0, campaignId: c.campaignId } };
     };
 
     let codePromo: AppliedPromotion | null = null;
@@ -180,6 +194,11 @@ export class GrowthService {
     const platformShareCents = chosen.reduce((a, p) => a + p.platformShareCents, 0);
     const funder = !chosen.length ? null : platformShareCents === 0 ? 'MERCHANT' : platformShareCents === discountCents ? 'PLATFORM' : 'SPLIT';
     return { applied: chosen, discountCents, freeDelivery: chosen.some((p) => p.freeDelivery), platformShareCents, funder, warnings };
+  }
+
+  private async platformContacts(segmentId: string | null) {
+    const { CustomersService } = await import('../customers/customers.service');
+    return this.moduleRef.get(CustomersService, { strict: false }).segmentContacts(segmentId);
   }
 
   private async inSegment(segmentId: string, userId: string) {
@@ -224,6 +243,8 @@ export class GrowthService {
     if (!orgId && input.funder === 'MERCHANT') throw new BadRequestException('Gutad-wide offers are platform-funded');
     if ((input.startTime && !input.endTime) || (!input.startTime && input.endTime)) throw new BadRequestException('Give both a start and an end time for the daypart');
     if (input.kind === 'PERCENT' && input.value > 10000) throw new BadRequestException('Percent is in basis points (10000 = 100%)');
+    if (input.kind === 'FREE_ITEM' && !input.itemIds?.length) throw new BadRequestException('Choose the item that is free');
+    if (input.kind === 'BOGO' && (!input.buyQty || !input.getQty)) throw new BadRequestException('Set how many to buy and how many are free');
     let before: Coupon | undefined;
     if (input.id) {
       [before] = await this.db.select().from(coupons).where(eq(coupons.id, input.id)).limit(1);
@@ -257,6 +278,8 @@ export class GrowthService {
       endTime: input.endTime ?? null,
       stacking: input.stacking || 'EXCLUSIVE',
       priority: input.priority ?? 0,
+      buyQty: input.kind === 'BOGO' ? input.buyQty ?? 1 : null,
+      getQty: input.kind === 'BOGO' ? input.getQty ?? 1 : null,
       startsAt: input.startsAt ?? null,
       expiresAt: input.expiresAt ?? null,
       campaignId: input.campaignId ?? null,
@@ -313,7 +336,7 @@ export class GrowthService {
       if (input.sponsored?.locationId) await this.entitlements.assertLocation(input.sponsored.locationId, 'ads');
       else await this.entitlements.assertOrg(orgId, 'ads');
     }
-    if (!orgId && ['EMAIL', 'SMS', 'SPONSORED'].includes(input.kind)) throw new BadRequestException('Gutad-wide campaigns run offers (COUPON); messages go out from a merchant or a customer segment');
+    if (!orgId && input.kind === 'SPONSORED') throw new BadRequestException('Sponsored placements belong to a merchant');
     return this.db.transaction(async (tx) => {
       const [camp] = await tx.insert(campaigns).values({ organizationId: orgId, name: input.name, kind: input.kind, budgetCents: input.budgetCents || 0, segmentId: input.segmentId ?? null, content: input.content || {}, startsAt: input.startsAt ?? null, endsAt: input.endsAt ?? null, funder: orgId ? input.funder || 'MERCHANT' : 'PLATFORM', holdoutPct: Math.min(Math.max(input.holdoutPct || 0, 0), 50), status: 'ACTIVE' }).returning();
       if (input.kind === 'SPONSORED' && input.sponsored) {
@@ -337,10 +360,13 @@ export class GrowthService {
   async sendCampaign(user: JwtPayload, campaignId: string) {
     const [camp] = await this.db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
     if (!camp) throw new NotFoundException();
-    if (!camp.organizationId) throw new BadRequestException('Gutad-wide campaigns are offers; they are not sent');
-    assertOrgAccess(user, camp.organizationId, null, MANAGER_ROLES);
+    if (camp.organizationId) assertOrgAccess(user, camp.organizationId, null, MANAGER_ROLES);
+    else assertCan(user, 'growth.manage');
     if (!['EMAIL', 'SMS'].includes(camp.kind)) throw new BadRequestException('Only EMAIL/SMS campaigns can be sent');
-    const audience = await this.segmentAudience(camp.organizationId, camp.segmentId);
+    // 25.10-P Gutad-wide messages go to a platform customer segment (marketing consent only)
+    const audience: { id: string; userId: string | null; email: string | null; phone: string | null }[] = camp.organizationId
+      ? await this.segmentAudience(camp.organizationId, camp.segmentId)
+      : (await this.platformContacts(camp.segmentId)).map((u) => ({ id: u.id, userId: u.id, email: u.email, phone: u.phone }));
     let sent = 0, held = 0;
     for (const g of audience) {
       const grp = camp.holdoutPct > 0 && g.userId ? await this.assign(camp.id, g.userId, camp.holdoutPct) : 'TREATMENT';
@@ -364,10 +390,25 @@ export class GrowthService {
     const start = camp.startsAt || camp.createdAt;
     const end = camp.endsAt && camp.endsAt < new Date() ? camp.endsAt : new Date();
     const org = camp.organizationId ? sql`and o.organization_id = ${camp.organizationId}` : sql``;
+    // only a finished campaign is cut off; a running one counts everything so far (no app/DB clock skew)
+    const endSql = camp.endsAt && camp.endsAt < new Date() ? sql`and o.created_at <= ${camp.endsAt.toISOString()}` : sql``;
     const g = rows<{ grp: string; users: number; buyers: number; orders: number; revenue: string }>(await this.db.execute(sql`
       select a.grp, count(distinct a.user_id)::int as users, count(distinct o.user_id)::int as buyers, count(o.id)::int as orders, coalesce(sum(o.subtotal_cents - o.discount_cents),0)::bigint as revenue
-      from campaign_assignments a left join orders o on o.user_id = a.user_id and o.created_at >= a.created_at and o.created_at >= ${start.toISOString()} and o.created_at <= ${end.toISOString()} and o.status not in ('CANCELED','REJECTED') ${org}
+      from campaign_assignments a left join orders o on o.user_id = a.user_id and o.created_at >= a.created_at and o.created_at >= ${start.toISOString()} ${endSql} and o.status not in ('CANCELED','REJECTED') ${org}
       where a.campaign_id = ${campaignId} group by a.grp`));
+    // 25.10-S per-customer spread for a 95% interval on the difference (normal approximation)
+    const spread = rows<{ grp: string; n: number; o_mean: number; o_var: number; r_mean: number; r_var: number }>(await this.db.execute(sql`
+      select grp, count(*)::int as n, avg(orders)::float as o_mean, coalesce(var_samp(orders),0)::float as o_var, avg(revenue)::float as r_mean, coalesce(var_samp(revenue),0)::float as r_var from (
+        select a.grp, a.user_id, count(o.id) as orders, coalesce(sum(o.subtotal_cents - o.discount_cents),0) as revenue
+        from campaign_assignments a left join orders o on o.user_id = a.user_id and o.created_at >= a.created_at and o.created_at >= ${start.toISOString()} ${endSql} and o.status not in ('CANCELED','REJECTED') ${org}
+        where a.campaign_id = ${campaignId} group by a.grp, a.user_id) x group by grp`));
+    const st = spread.find((x) => x.grp === 'TREATMENT'), sh = spread.find((x) => x.grp === 'HOLDOUT');
+    const interval = (mean: 'o_mean' | 'r_mean', v: 'o_var' | 'r_var') => {
+      if (!st || !sh || st.n < 2 || sh.n < 2) return null;
+      const diff = st[mean] - sh[mean];
+      const se = Math.sqrt(st[v] / st.n + sh[v] / sh.n);
+      return { low: Math.round((diff - 1.96 * se) * st.n), high: Math.round((diff + 1.96 * se) * st.n), significant: diff - 1.96 * se > 0 || diff + 1.96 * se < 0 };
+    };
     const t = g.find((x) => x.grp === 'TREATMENT') || { users: 0, buyers: 0, orders: 0, revenue: '0' };
     const h = g.find((x) => x.grp === 'HOLDOUT') || { users: 0, buyers: 0, orders: 0, revenue: '0' };
     const [cost] = await this.db.select({ cents: sql<number>`coalesce(sum(${offerRedemptions.discountCents}),0)::int`, platform: sql<number>`coalesce(sum(${offerRedemptions.platformFundedCents}),0)::int`, orders: sql<number>`count(*)::int` }).from(offerRedemptions).where(and(eq(offerRedemptions.campaignId, campaignId), isNull(offerRedemptions.reversedAt)));
@@ -387,6 +428,8 @@ export class GrowthService {
       },
       attributed: { orders: camp.conversions, revenueCents: camp.attributedRevenueCents, redemptions: cost.orders },
       incrementalOrders: incOrders,
+      incrementalOrdersRange: interval('o_mean', 'o_var'),
+      incrementalRevenueRange: interval('r_mean', 'r_var'),
       incrementalRevenueCents: incRevenue,
       contributionMarginBps: margin,
       incrementalMarginCents: incMargin,
@@ -555,6 +598,47 @@ export class GrowthService {
     return { ok: true, renewsOn: m.currentPeriodEnd };
   }
 
+  /**
+   * 25.7-P switch plans. Moving to a more expensive plan happens now: the unused part of the current period is credited
+   * against the new price and a new period starts. Moving to a cheaper plan is scheduled for the next renewal.
+   * On a free trial the plan simply changes (the trial end stays).
+   */
+  async switchPlan(user: JwtPayload, planId: string) {
+    const m = await this.currentMembership(user.sub);
+    if (!m || !['ACTIVE', 'TRIALING'].includes(m.status)) throw new BadRequestException('Switching needs an active membership');
+    if (m.planId === planId) {
+      if (m.pendingPlanId) { await this.db.update(memberSubscriptions).set({ pendingPlanId: null }).where(eq(memberSubscriptions.id, m.id)); return { mode: 'UNCHANGED', note: 'Scheduled change removed' }; }
+      throw new BadRequestException('You are already on this plan');
+    }
+    const [next] = await this.db.select().from(membershipPlans).where(and(eq(membershipPlans.id, planId), eq(membershipPlans.isActive, true))).limit(1);
+    if (!next) throw new NotFoundException('Plan not found');
+    if (m.status === 'TRIALING') {
+      await this.db.update(memberSubscriptions).set({ planId, pendingPlanId: null }).where(eq(memberSubscriptions.id, m.id));
+      return { mode: 'NOW', chargedCents: 0, creditCents: 0, note: `Your trial continues on ${next.name}` };
+    }
+    const curDays = m.plan.interval === 'YEAR' ? 365 : 30;
+    const nextDays = next.interval === 'YEAR' ? 365 : 30;
+    if (next.priceCents < m.plan.priceCents) {
+      await this.db.update(memberSubscriptions).set({ pendingPlanId: planId, cancelAtPeriodEnd: false }).where(eq(memberSubscriptions.id, m.id));
+      await this.audit.log({ actorId: user.sub, action: 'membership.downgrade_scheduled', entityType: 'member_subscription', entityId: m.id, after: { planId, on: m.currentPeriodEnd } });
+      return { mode: 'AT_RENEWAL', on: m.currentPeriodEnd, note: `You move to ${next.name} on ${m.currentPeriodEnd.toISOString().slice(0, 10)}` };
+    }
+    const now = new Date();
+    const leftMs = Math.max(0, m.currentPeriodEnd.getTime() - now.getTime());
+    const creditCents = Math.min(m.plan.priceCents, Math.round((m.plan.priceCents * leftMs) / (curDays * 86400_000)));
+    const charge = Math.max(0, next.priceCents - creditCents);
+    return this.db.transaction(async (tx) => {
+      let paymentId: string | null = null;
+      if (charge > 0) {
+        const p = await this.payments.chargeNow({ purpose: 'MEMBERSHIP', referenceId: next.id, userId: user.sub, amountCents: charge, currency: loadConfig().DEFAULT_CURRENCY, customerEmail: user.email, paymentMethodId: m.paymentMethodId, offSession: true, idempotencyKey: `switch:${m.id}:${planId}:${now.toISOString().slice(0, 16)}`, ledgerLines: [{ account: 'PROCESSOR_CLEARING', debitCents: charge }, { account: 'PLATFORM_REVENUE_MEMBERSHIP', creditCents: charge, memo: `${m.plan.name} → ${next.name} (prorated)` }] }, tx);
+        paymentId = p.id;
+      }
+      await tx.update(memberSubscriptions).set({ planId, pendingPlanId: null, currentPeriodEnd: addDays(now, nextDays), cancelAtPeriodEnd: false }).where(eq(memberSubscriptions.id, m.id));
+      await this.audit.log({ actorId: user.sub, action: 'membership.upgrade', entityType: 'member_subscription', entityId: m.id, after: { from: m.planId, to: planId, creditCents, chargedCents: charge } }, tx);
+      return { mode: 'NOW', chargedCents: charge, creditCents, paymentId, renewsOn: addDays(now, nextDays), note: `You're on ${next.name} now` };
+    });
+  }
+
   /** 25.8 update the card on file; a past-due or recently suspended membership is retried right away. */
   async updateMembershipCard(user: JwtPayload, paymentMethodId: string) {
     const m = await this.currentMembership(user.sub);
@@ -575,7 +659,12 @@ export class GrowthService {
   private async chargeRenewal(subId: string, now: Date, manual = false): Promise<{ ok: boolean; status: string; error?: string }> {
     const [row] = await this.db.select({ sub: memberSubscriptions, plan: membershipPlans, user: users }).from(memberSubscriptions).innerJoin(membershipPlans, eq(membershipPlans.id, memberSubscriptions.planId)).innerJoin(users, eq(users.id, memberSubscriptions.userId)).where(eq(memberSubscriptions.id, subId)).limit(1);
     if (!row) throw new NotFoundException();
-    const { sub, plan, user } = row;
+    const { sub, user } = row;
+    let plan = row.plan;
+    if (sub.pendingPlanId) {
+      const [next] = await this.db.select().from(membershipPlans).where(eq(membershipPlans.id, sub.pendingPlanId)).limit(1);
+      if (next) plan = next;
+    }
     const days = plan.interval === 'YEAR' ? 365 : 30;
     if (sub.cancelAtPeriodEnd && !manual) {
       await this.db.update(memberSubscriptions).set({ status: 'CANCELED', nextRetryAt: null }).where(eq(memberSubscriptions.id, sub.id));
@@ -585,7 +674,7 @@ export class GrowthService {
       await this.db.transaction(async (tx) => {
         await this.payments.chargeNow({ purpose: 'MEMBERSHIP', referenceId: plan.id, userId: user.id, amountCents: plan.priceCents, currency: loadConfig().DEFAULT_CURRENCY, customerEmail: user.email, paymentMethodId: sub.paymentMethodId, offSession: true, idempotencyKey: `renew:${sub.id}:${sub.currentPeriodEnd.toISOString()}:${sub.renewalFailures}${manual ? `:m${Date.now()}` : ''}`, ledgerLines: [{ account: 'PROCESSOR_CLEARING', debitCents: plan.priceCents }, { account: 'PLATFORM_REVENUE_MEMBERSHIP', creditCents: plan.priceCents, memo: `${plan.name} ${sub.status === 'TRIALING' ? 'first charge after trial' : 'renewal'}` }] }, tx);
         const from = sub.status === 'PAST_DUE' || sub.status === 'SUSPENDED' ? now : sub.currentPeriodEnd;
-        await tx.update(memberSubscriptions).set({ status: 'ACTIVE', currentPeriodEnd: addDays(from, days), renewalFailures: 0, nextRetryAt: null, graceUntil: null, lastFailureReason: null }).where(eq(memberSubscriptions.id, sub.id));
+        await tx.update(memberSubscriptions).set({ status: 'ACTIVE', planId: plan.id, pendingPlanId: null, currentPeriodEnd: addDays(from, days), renewalFailures: 0, nextRetryAt: null, graceUntil: null, lastFailureReason: null }).where(eq(memberSubscriptions.id, sub.id));
         const b = plan.benefits as { creditCentsPerMonth?: number };
         if (b.creditCentsPerMonth) await this.payments.issueCredit({ userId: user.id, cents: b.creditCentsPerMonth, reason: 'Membership monthly credit', expiresInDays: 30 }, tx);
       });

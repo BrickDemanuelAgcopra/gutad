@@ -4,6 +4,7 @@ import { api, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Select, statusTone, Textarea } from '@/components/ui';
 import { useMerchant } from '../context';
+import { ResponsibilityDisputes } from '@/components/responsibility-disputes';
 
 interface Case { id: string; category: string; description: string; status: string; remedy: string | null; orderNumber: string | null; aboutMerchant: boolean; reporterType: string; createdAt: string }
 interface Msg { id: string; authorRole: string; authorEmail: string | null; body: string; createdAt: string }
@@ -26,6 +27,7 @@ export default function MerchantSupport() {
       <Card title="Open a case">
         <div className="grid gap-2 sm:grid-cols-[220px_1fr_auto]"><Select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>{CATEGORIES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select><Textarea rows={2} placeholder="What happened? Include order numbers and dates." value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /><Button className="self-start" disabled={f.description.length < 5} onClick={() => run(async () => { await api.post(`/organizations/${org.id}/cases`, f); setF({ ...f, description: '' }); reload(); })}>Send</Button></div>
       </Card>
+      <ResponsibilityDisputes organizationId={org.id} />
       <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
         <ul className="divide-y divide-ink-100 rounded-xl border border-ink-100 bg-white">
           {(data || []).map((c) => <li key={c.id}><button className={`w-full px-4 py-3 text-left hover:bg-ink-50 ${open?.id === c.id ? 'bg-brand-50' : ''}`} onClick={() => setOpen(c)}><div className="flex items-center justify-between"><span className="font-medium">{c.category.toLowerCase().replace(/_/g, ' ')}</span><Badge tone={statusTone(c.status)}>{c.status}</Badge></div><div className="text-xs text-ink-500">{c.aboutMerchant ? `Complaint from a ${c.reporterType.toLowerCase()}` : 'Opened by you'}{c.orderNumber ? ` · order ${c.orderNumber}` : ''} · {when(c.createdAt)}</div><div className="truncate text-sm">{c.description}</div></button></li>)}

@@ -137,6 +137,9 @@ export const coupons = pgTable('coupons', {
   /** EXCLUSIVE (alone) | STACKABLE (combines with other stackable offers) */
   stacking: text('stacking').notNull().default('EXCLUSIVE'),
   priority: integer('priority').notNull().default(0),
+  /** 25.1-B BOGO: buy `buyQty` eligible units, get `getQty` of them free (cheapest first). FREE_ITEM uses itemIds. */
+  buyQty: integer('buy_qty'),
+  getQty: integer('get_qty'),
   createdAt: ts('created_at').defaultNow(),
 });
 
@@ -190,6 +193,8 @@ export const memberSubscriptions = pgTable('member_subscriptions', {
   nextRetryAt: ts('next_retry_at'),
   graceUntil: ts('grace_until'),
   lastFailureReason: text('last_failure_reason'),
+  /** 25.7-P downgrade scheduled for the next renewal */
+  pendingPlanId: uuid('pending_plan_id'),
 });
 
 // ───── 23 Notifications ─────

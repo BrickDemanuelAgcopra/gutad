@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { and, eq, gt, isNull, lte, or } from 'drizzle-orm';
@@ -16,8 +16,10 @@ const OfferDto = z.object({
   name: z.string().min(2).optional(),
   code: z.string().min(3).max(32).optional(),
   automatic: z.boolean().optional(),
-  kind: z.enum(['PERCENT', 'FIXED', 'FREE_DELIVERY']),
+  kind: z.enum(['PERCENT', 'FIXED', 'FREE_DELIVERY', 'BOGO', 'FREE_ITEM']),
   value: z.number().int().min(0),
+  buyQty: z.number().int().min(1).max(20).nullable().optional(),
+  getQty: z.number().int().min(1).max(20).nullable().optional(),
   funder: z.enum(['MERCHANT', 'PLATFORM']).optional(),
   platformSharePct: z.number().int().min(0).max(100).nullable().optional(),
   minSubtotalCents: z.number().int().min(0).optional(),
@@ -58,11 +60,12 @@ export class GrowthController {
     if (!l) return [];
     const now = new Date();
     const list = await this.db.select().from(coupons).where(and(eq(coupons.automatic, true), eq(coupons.isActive, true), or(isNull(coupons.organizationId), eq(coupons.organizationId, l.organizationId)), or(isNull(coupons.startsAt), lte(coupons.startsAt, now)), or(isNull(coupons.expiresAt), gt(coupons.expiresAt, now))));
-    return list.filter((c) => !c.locationIds.length || c.locationIds.includes(id)).filter((c) => !c.segmentId).map((c) => ({ id: c.id, name: c.name, kind: c.kind, value: c.value, minSubtotalCents: c.minSubtotalCents, maxDiscountCents: c.maxDiscountCents, firstOrderOnly: c.firstOrderOnly, daysOfWeek: c.daysOfWeek, startTime: c.startTime, endTime: c.endTime, itemIds: c.itemIds, categoryIds: c.categoryIds, stacking: c.stacking, expiresAt: c.expiresAt, gutadFunded: !c.organizationId }));
+    return list.filter((c) => !c.locationIds.length || c.locationIds.includes(id)).filter((c) => !c.segmentId).map((c) => ({ id: c.id, name: c.name, kind: c.kind, value: c.value, minSubtotalCents: c.minSubtotalCents, maxDiscountCents: c.maxDiscountCents, firstOrderOnly: c.firstOrderOnly, daysOfWeek: c.daysOfWeek, startTime: c.startTime, endTime: c.endTime, itemIds: c.itemIds, categoryIds: c.categoryIds, stacking: c.stacking, expiresAt: c.expiresAt, buyQty: c.buyQty, getQty: c.getQty, gutadFunded: !c.organizationId }));
   }
   @ApiBearerAuth() @Get('me/loyalty') loyalty(@CurrentUser() u: JwtPayload) { return this.svc.myLoyalty(u.sub); }
   @ApiBearerAuth() @Post('me/membership') enroll(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ planId: z.string().uuid(), paymentMethodId: z.string().optional() }))) b: { planId: string; paymentMethodId?: string }) { return this.svc.enroll(u, b.planId, b.paymentMethodId); }
   @ApiBearerAuth() @Post('me/membership/cancel') cancel(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ immediate: z.boolean().optional() }).optional())) b?: { immediate?: boolean }) { return this.svc.cancelMembership(u, b || {}); }
+  @ApiBearerAuth() @Post('me/membership/switch') switchPlan(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ planId: z.string().uuid() }))) b: { planId: string }) { return this.svc.switchPlan(u, b.planId); }
   @ApiBearerAuth() @Post('me/membership/resume') resume(@CurrentUser() u: JwtPayload) { return this.svc.resumeMembership(u); }
   @ApiBearerAuth() @Post('me/membership/payment-method') card(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ paymentMethodId: z.string().min(3) }))) b: { paymentMethodId: string }) { return this.svc.updateMembershipCard(u, b.paymentMethodId); }
   @ApiBearerAuth() @Get('me/referral') myReferral(@CurrentUser() u: JwtPayload) { return this.rewards.mine(u.sub); }
@@ -106,6 +109,8 @@ export class GrowthController {
   @ApiBearerAuth() @Post('admin/memberships/:id/retry') retry(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.retryMembership(u, id); }
   @ApiBearerAuth() @Get('admin/gift-cards') giftCards(@CurrentUser() u: JwtPayload, @Query() q: Record<string, string>) { return this.gifts.list(u, { status: q.status, search: q.search }); }
   @ApiBearerAuth() @Get('admin/gift-cards/liability') giftLiability(@CurrentUser() u: JwtPayload) { assertCan(u, 'growth.read', 'finance.read'); return this.gifts.liability(); }
+  @ApiBearerAuth() @Get('admin/gift-cards/escheat') escheat(@CurrentUser() u: JwtPayload, @Query('asOf') asOf?: string) { return this.gifts.escheat(u, { asOf: asOf ? new Date(asOf) : undefined }); }
+  @ApiBearerAuth() @Get('admin/gift-cards/escheat.csv') @Header('Content-Type', 'text/csv') escheatCsv(@CurrentUser() u: JwtPayload, @Query('asOf') asOf?: string) { return this.gifts.escheat(u, { asOf: asOf ? new Date(asOf) : undefined, format: 'csv' }); }
   @ApiBearerAuth() @Get('admin/gift-cards/:id') giftCard(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.gifts.detail(u, id); }
   @ApiBearerAuth() @Post('admin/gift-cards') issue(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ amountCents: z.number().int().min(100).max(100000), count: z.number().int().min(1).max(100).optional(), recipientEmail: z.string().email().optional(), reason: z.string().min(3), expiresInDays: z.number().int().min(30).optional() }))) b: Parameters<GiftCardsService['issuePromotional']>[1]) { return this.gifts.issuePromotional(u, b); }
   @ApiBearerAuth() @Post('admin/gift-cards/:id/action') giftAct(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ action: z.enum(['LOCK', 'UNLOCK', 'APPROVE', 'VOID']), reason: z.string().min(3) }))) b: { action: 'LOCK' | 'UNLOCK' | 'APPROVE' | 'VOID'; reason: string }) { return this.gifts.act(u, id, b.action, b.reason); }

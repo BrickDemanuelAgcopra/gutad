@@ -9,7 +9,7 @@ import type { DeliveryJobResult, DeliveryProvider, DeliveryProviderEvent, Delive
  */
 @Injectable()
 export class MockDeliveryProvider implements DeliveryProvider {
-  readonly name = 'mock';
+  readonly name: string = 'mock';
   private jobs = new Map<string, DeliveryJobResult & { externalId: string }>();
 
   private distance(i: DeliveryQuoteInput) {

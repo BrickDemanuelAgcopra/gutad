@@ -7,10 +7,11 @@ import { api, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, statusTone, Table } from '@/components/ui';
 import { askReason } from '@/components/admin-ui';
+import { DocLink } from '@/components/courier-docs';
 
 interface P {
   courier: { id: string; name: string | null; email: string; phone: string | null; status: string; vehicleType: string; capabilities: string[]; zoneIds: string[]; maxConcurrent: number; isAvailable: boolean; lastSeenAt: string | null; suspendedReason: string | null; suspendedAt: string | null; appealStatus: string; appealNote: string | null; appealDecisionNote: string | null };
-  documents: { id: string; kind: string; status: string; fileUrl: string; expiresAt: string | null; reviewNote: string | null }[];
+  documents: { id: string; kind: string; status: string; fileUrl: string; fileId: string | null; expiresAt: string | null; reviewNote: string | null }[];
   shifts: { id: string; startsAt: string; endsAt: string; status: string }[];
   records: { id: string; kind: string; title: string; detail: string | null; createdAt: string }[];
   jobs: { id: string; orderId: string | null; status: string; createdAt: string; deliveredAt: string | null; etaAt: string | null; batchId: string | null }[];
@@ -58,7 +59,7 @@ export default function Courier() {
           <p className="mt-1 text-xs text-ink-500">Dispatch only offers alcohol and large orders to couriers with that capability; a cold bag improves the match for chilled items.</p>
         </Card>
         <Card title="Documents">
-          <Table rows={p.documents} empty="No documents uploaded." cols={[{ key: 'k', label: 'Document', render: (d) => <a className="underline" href={d.fileUrl} target="_blank" rel="noreferrer">{COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind}</a> }, { key: 's', label: 'Status', render: (d) => <Badge tone={statusTone(d.status)}>{d.status}</Badge> }, { key: 'e', label: 'Expires', render: (d) => when(d.expiresAt) }, { key: 'n', label: 'Note', render: (d) => <span className="text-xs">{d.reviewNote}</span> }]} />
+          <Table rows={p.documents} empty="No documents uploaded." cols={[{ key: 'k', label: 'Document', render: (d) => <DocLink doc={d} label={COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind} /> }, { key: 's', label: 'Status', render: (d) => <Badge tone={statusTone(d.status)}>{d.status}</Badge> }, { key: 'e', label: 'Expires', render: (d) => when(d.expiresAt) }, { key: 'n', label: 'Note', render: (d) => <span className="text-xs">{d.reviewNote}</span> }]} />
           {c.status === 'PENDING' && manage && <Button className="mt-2" size="sm" onClick={() => act(() => api.post(`/drivers/${id}/approve`, { approved: true }), 'Courier approved.')}>Approve courier</Button>}
         </Card>
       </div>

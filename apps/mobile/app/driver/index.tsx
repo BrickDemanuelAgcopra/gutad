@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Linking, ScrollView, Text, View } from 'react-native';
+import { Linking, Platform, ScrollView, Text, View } from 'react-native';
 import * as Location from 'expo-location';
 import { COURIER_DOC_KINDS, COURIER_DOC_LABELS, type CourierDocKind } from '@gutad/shared';
 import { api, money, when } from '@/api';
 import { useAction, useApi, useSession } from '@/hooks';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
 import { Pills } from '@/ops';
+import { mimeFor, pickFileOnWeb, uploadMultipart, type PickedFile } from '@/upload';
+import { ResponsibilityDisputes } from '@/responsibility';
 
 interface Addr { line1: string; city: string; lat?: number; lng?: number; instructions?: string }
 interface Job { id: string; status: string; pickupAddress: Addr; dropoffAddress: Addr; tipCents: number; providerCostCents: number; batchId: string | null; arrivedPickupAt: string | null; arrivedDropoffAt: string | null; requirements: string[]; exception: { kind: string; attempts: unknown[]; waitUntil: string; resolution?: string } | null }
@@ -49,6 +51,7 @@ export default function Driver() {
         <>
           <Card title="Offers">{offers?.length ? offers.map((o) => <View key={o.id} style={{ marginBottom: 8 }}><Text style={{ fontWeight: '700' }}>{money(o.payCents)} · {o.pickupAddress.line1} → {o.dropoffAddress.line1}</Text>{o.batchWith && <Text style={{ color: C.info }}>Adds to your current trip (same pickup)</Text>}{o.requirements.includes('ALCOHOL') && <Text style={{ color: C.warn }}>Contains alcohol: check ID at handoff</Text>}<Muted>Expires {when(o.expiresAt)}</Muted><View style={{ flexDirection: 'row', gap: 6 }}><Button title="Accept" onPress={() => act(() => api.post(`/driver/offers/${o.id}`, { accept: true }))} /><Button title="Decline" variant="ghost" onPress={() => act(() => api.post(`/driver/offers/${o.id}`, { accept: false }))} /></View></View>) : <Muted>No offers right now{me.isAvailable ? '' : ' — go online to receive offers'}.</Muted>}</Card>
           <Card title="Active deliveries">{jobs?.length ? jobs.map((j) => <JobCard key={j.id} j={j} nav={nav} pos={pos} act={act} />) : <Muted>No active deliveries.</Muted>}</Card>
+          <ResponsibilityDisputes role="DRIVER" />
         </>
       )}
       {tab === 'docs' && <Docs />}
@@ -85,19 +88,26 @@ function JobCard({ j, nav, pos, act }: { j: Job; nav: (a: Addr) => void; pos: ()
 }
 
 function Docs() {
-  const { data, reload } = useApi<{ id: string; kind: string; status: string; expiresAt: string | null; reviewNote: string | null }[]>('/driver/documents');
+  const { data, reload } = useApi<{ id: string; kind: string; status: string; expiresAt: string | null; reviewNote: string | null; fileId: string | null }[]>('/driver/documents');
   const { run, error } = useAction();
   const [kind, setKind] = useState<string>('LICENSE');
   const [url, setUrl] = useState('');
   const [exp, setExp] = useState('');
+  const [file, setFile] = useState<PickedFile | null>(null);
+  const [fileUri, setFileUri] = useState('');
+  const expiresAt = exp ? new Date(`${exp}T23:59:00Z`).toISOString() : undefined;
+  // 16.2-U a scan or photo goes straight to storage; a link still works
+  const picked: PickedFile | null = file || (fileUri.length > 7 ? { uri: fileUri, name: fileUri.split('/').pop() || 'document.jpg', type: mimeFor(fileUri) } : null);
   return (
     <Card title="Documents">
-      {data?.map((d) => <View key={d.id} style={s.row}><Text>{COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind}</Text><Text style={{ color: d.status === 'APPROVED' ? C.good : d.status === 'PENDING' ? C.warn : C.bad }}>{d.status.toLowerCase()}{d.expiresAt ? ` · ${new Date(d.expiresAt).toLocaleDateString()}` : ''}</Text></View>)}
+      {data?.map((d) => <View key={d.id} style={s.row}><Text>{COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind}{d.fileId ? ' · file' : ''}</Text><Text style={{ color: d.status === 'APPROVED' ? C.good : d.status === 'PENDING' ? C.warn : C.bad }}>{d.status.toLowerCase()}{d.expiresAt ? ` · ${new Date(d.expiresAt).toLocaleDateString()}` : ''}</Text></View>)}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>{COURIER_DOC_KINDS.map((k) => <Button key={k} title={COURIER_DOC_LABELS[k]} variant={kind === k ? 'primary' : 'secondary'} onPress={() => setKind(k)} />)}</View>
-      <Input label="Link to the scanned file" autoCapitalize="none" value={url} onChangeText={setUrl} />
+      {Platform.OS === 'web' ? <Button title={file ? `File: ${file.name}` : 'Choose a file (PDF or photo)'} variant="secondary" onPress={() => run(async () => setFile(await pickFileOnWeb()))} /> : <Input label="File on this phone (file:// or content:// from Files / Share)" autoCapitalize="none" value={fileUri} onChangeText={setFileUri} />}
+      {!picked && <Input label="…or a link to the scanned file" autoCapitalize="none" value={url} onChangeText={setUrl} />}
       <Input label="Expiry (YYYY-MM-DD)" value={exp} onChangeText={setExp} />
       <ErrorText msg={error} />
-      <Button title="Upload" disabled={url.length < 4} onPress={() => run(async () => { await api.post('/driver/documents', { kind, fileUrl: url, expiresAt: exp ? new Date(`${exp}T23:59:00Z`).toISOString() : undefined }); setUrl(''); setExp(''); await reload(); })} />
+      <Button title="Upload" disabled={!picked && url.length < 4} onPress={() => run(async () => { if (picked) await uploadMultipart('/driver/documents/upload', picked, { kind, expiresAt }); else await api.post('/driver/documents', { kind, fileUrl: url, expiresAt }); setUrl(''); setExp(''); setFile(null); setFileUri(''); await reload(); })} />
+      <Muted>Files are stored privately; only you and Gutad’s courier team can open them.</Muted>
     </Card>
   );
 }

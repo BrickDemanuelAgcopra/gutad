@@ -7,7 +7,7 @@ import { Alert, Badge, Button, Card, Input, Spinner, statusTone } from '@/compon
 import { CardField, type CardToken } from '@/components/card-field';
 
 interface Loyalty { points: number; valueCents: number; credits: { availableCents: number }; entries: { id: string; kind: string; points: number; createdAt: string }[]; membership: Membership | null }
-interface Membership { id: string; status: string; plan: { name: string; priceCents: number; interval: string }; currentPeriodEnd: string; trialEndsAt: string | null; cancelAtPeriodEnd: boolean; benefitsActive: boolean; accessUntil: string | null; renewalFailures: number; nextRetryAt: string | null; graceUntil: string | null; lastFailureReason: string | null }
+interface Membership { id: string; planId: string; pendingPlanId: string | null; status: string; plan: { name: string; priceCents: number; interval: string }; currentPeriodEnd: string; trialEndsAt: string | null; cancelAtPeriodEnd: boolean; benefitsActive: boolean; accessUntil: string | null; renewalFailures: number; nextRetryAt: string | null; graceUntil: string | null; lastFailureReason: string | null }
 interface Plan { id: string; name: string; priceCents: number; interval: string; trialDays: number; benefits: { freeDeliveryAboveCents?: number; serviceFeeWaived?: boolean; creditCentsPerMonth?: number; priorityWaitlist?: boolean } }
 
 const benefitText = (b: Plan['benefits']) => [b.freeDeliveryAboveCents !== undefined ? `free delivery over ${money(b.freeDeliveryAboveCents)}` : null, b.serviceFeeWaived ? 'no service fee' : null, b.creditCentsPerMonth ? `${money(b.creditCentsPerMonth)} credit each month` : null, b.priorityWaitlist ? 'priority waitlist' : null].filter(Boolean).join(' · ');
@@ -52,6 +52,13 @@ function MembershipCard({ m, reload }: { m: Membership | null; reload: () => voi
           {m.cancelAtPeriodEnd ? <Button size="sm" onClick={() => run(async () => { await api.post('/me/membership/resume', {}); setMsg('Your membership will renew.'); reload(); })}>Keep my membership</Button> : !failing && <Button size="sm" variant="ghost" onClick={() => run(async () => { const r = await api.post<{ accessUntil: string | null }>('/me/membership/cancel', {}); setMsg(r.accessUntil ? `Canceled. Benefits continue until ${when(r.accessUntil)}.` : 'Canceled.'); reload(); })}>Cancel</Button>}
           {failing && m.status === 'PAST_DUE' && <Button size="sm" variant="ghost" onClick={() => run(async () => { await api.post('/me/membership/cancel', { immediate: true }); reload(); })}>End membership</Button>}
         </div>
+        {!failing && plans && plans.length > 1 && (
+          <div className="mt-3 border-t border-ink-100 pt-2 text-sm">
+            {m.pendingPlanId && <p className="text-xs text-ink-500">Moving to {plans.find((p) => p.id === m.pendingPlanId)?.name} at renewal.</p>}
+            {plans.filter((p) => p.id !== m.planId).map((p) => <Button key={p.id} size="sm" variant="ghost" onClick={() => run(async () => { const r = await api.post<{ mode: string; chargedCents?: number; creditCents?: number; note: string }>('/me/membership/switch', { planId: p.id }); setMsg(r.mode === 'NOW' && r.chargedCents ? `${r.note}. Charged ${money(r.chargedCents)} after a ${money(r.creditCents || 0)} credit for unused time.` : r.note); reload(); })}>{p.priceCents > m.plan.priceCents ? 'Upgrade' : 'Switch'} to {p.name} ({money(p.priceCents)}/{p.interval.toLowerCase()})</Button>)}
+            <p className="text-xs text-ink-500">Upgrades start now with credit for the unused time; cheaper plans start at your next renewal.</p>
+          </div>
+        )}
         {(failing || fixing) && <div className="mt-2"><CardField value={card} onChange={setCard} /><Button className="mt-2" size="sm" disabled={!card} onClick={() => run(async () => { const r = await api.post<{ ok: boolean; status: string; error: string | null }>('/me/membership/payment-method', { paymentMethodId: card!.token }); setFixing(false); setMsg(r.ok ? (failing ? 'Payment collected. You’re all set.' : 'Card updated.') : `That card didn’t work either: ${r.error}`); reload(); })}>{failing ? 'Update card and pay' : 'Save card'}</Button></div>}
       </Card>
     );

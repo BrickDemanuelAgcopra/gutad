@@ -60,8 +60,23 @@ function Tax() {
       <p className="text-xs text-ink-500">Most specific wins: location → region (state) → platform default → the location&apos;s own rate. EXEMPT is always 0%. Each menu item has a tax category.</p>
       <Table rows={data?.rates || []} empty="No category rates yet — every item uses its location's rate." cols={[{ key: 'c', label: 'Category', render: (r) => TAX_CATEGORIES.find((c) => c.key === r.category)?.label || r.category }, { key: 's', label: 'Applies to', render: (r) => r.locationId ? locs?.find((l) => l.id === r.locationId)?.name || 'location' : r.region ? `region ${r.region}` : 'all locations' }, { key: 'r', label: 'Rate', render: (r) => `${(r.rateBps / 100).toFixed(3)}%` }, { key: 'l', label: 'Label', render: (r) => r.label }, { key: 'x', label: '', render: (r) => can('finance.manage') ? <button className="text-xs text-red-600" onClick={() => run(async () => { await api.delete(`/admin/tax-rates/${r.id}`); reload(); })}>Remove</button> : null }]} />
       {can('finance.manage') && <div className="mt-3 grid gap-2 sm:grid-cols-5"><Select value={f.scope} onChange={(e) => setF({ ...f, scope: e.target.value })}><option value="region">Region</option><option value="location">Location</option><option value="all">All locations</option></Select>{f.scope === 'region' ? <Input placeholder="State, e.g. NY" value={f.region} onChange={(e) => setF({ ...f, region: e.target.value })} /> : f.scope === 'location' ? <Select value={f.locationId} onChange={(e) => setF({ ...f, locationId: e.target.value })}><option value="">Location…</option>{locs?.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select> : <span />}<Select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>{TAX_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}</Select><Input placeholder="Rate %" value={f.rate} onChange={(e) => setF({ ...f, rate: e.target.value })} /><Button size="sm" onClick={() => run(async () => { await api.post('/admin/tax-rates', { category: f.category, rateBps: Math.round(Number(f.rate) * 100), region: f.scope === 'region' ? f.region : null, locationId: f.scope === 'location' ? f.locationId : null }); setF({ ...f, rate: '' }); reload(); })}>Add rate</Button></div>}
-      <p className="mt-2 text-xs text-ink-500">Tax is calculated by the built-in flat-rate provider. An external tax service (Avalara, TaxJar) can replace it behind the same interface; none is connected.</p>
+      <TaxEngineNote />
     </Card>
+  );
+}
+
+/** 9.5-X — the active tax engine (env TAX_PROVIDER); the rate table above is also the fallback when a provider fails. */
+function TaxEngineNote() {
+  const { data } = useApi<{ engine: string; requested: string; configured: boolean; reason: string | null; cacheTtlSeconds: number; cacheEntries: number; lastError: { at: string; message: string } | null; stats: { calls: number; cacheHits: number; fallbacks: number } }>('/admin/pricing/tax-engine');
+  if (!data) return null;
+  const label: Record<string, string> = { builtin: 'Built-in rate table', taxjar: 'TaxJar', avalara: 'Avalara AvaTax', mock: 'Mock provider (testing)' };
+  return (
+    <div className="mt-3 rounded-lg bg-ink-50 p-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2"><b>Tax engine:</b> <Badge tone={data.engine === 'builtin' ? 'neutral' : 'good'}>{label[data.engine] || data.engine}</Badge>{data.reason && <span className="text-amber-700">{data.reason}</span>}</div>
+      {data.engine === 'builtin'
+        ? <p className="mt-1 text-ink-500">Quotes use the rates above. Set TAX_PROVIDER=taxjar (TAXJAR_API_KEY) or TAX_PROVIDER=avalara (AVALARA_ACCOUNT_ID, AVALARA_LICENSE_KEY, AVALARA_COMPANY_CODE) on the API to use an external service.</p>
+        : <p className="mt-1 text-ink-500">Quotes are priced by {label[data.engine]}; results are cached for {data.cacheTtlSeconds}s per cart ({data.cacheEntries} cached). If the service fails, the rates above are used and the customer sees an estimate warning. Calls {data.stats.calls} · cache hits {data.stats.cacheHits} · fallbacks {data.stats.fallbacks}{data.lastError ? ` · last error ${new Date(data.lastError.at).toLocaleString()}: ${data.lastError.message}` : ''}</p>}
+    </div>
   );
 }
 

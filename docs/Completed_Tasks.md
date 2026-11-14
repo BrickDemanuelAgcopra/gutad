@@ -536,3 +536,50 @@ Verification:
 - **18.3-G** The order's payment split records the gift share; allocated refunds return money to the card, credits and gift cards in proportion, and cancellations return gift money to the cards it came from (after capture, charged to whoever bears the refund). **API W**
 - **20.4-G** Gift-card liability (outstanding, ledger balance, not yet in a wallet, spent in 30 days) in Accounting → Balances and in the liabilities report. **API W**
 
+## Follow-ups across phases A–J (shipped 2026-11-14)
+
+Verification:
+- Typecheck clean for shared, API, web and mobile; `next build`: OK.
+- `npm run smoke` on a fresh database: **480/480 checks pass**, including 74 new checks in `scripts/smoke-followups-{a,b,c,d}.mjs`.
+- Migration `0016_followups_all.sql`. New tables: `user_devices`, `location_load_settings`, `printers`, `print_jobs`, `stored_files`, `gl_connections`, `gl_push_batches`, `supplier_access_tokens`, `supplier_invoice_submissions`, `temperature_sensors`, `payroll_connections`, `payroll_export_batches`, `equipment_vendor_links`, `equipment_vendor_events`. New columns on customer restrictions (limit, period), courier documents (stored file), close periods (reopen), coupons (buy/get quantities), member subscriptions (pending plan).
+- External providers are optional adapters that keep today's behaviour until configured: Stripe Elements / hosted setup, TaxJar / Avalara, OSRM / Google / Mapbox routing, QuickBooks / Xero, Gusto / ADP, Rational / Welbilt, S3-compatible storage, ESC/POS network printers. Their real API calls were written against the public API shapes and **have not been run against those services**; the mock / default paths are what the smoke tests cover.
+- Production note: courier document uploads default to local disk inside the API container. Set `STORAGE_DRIVER=s3` with a bucket before relying on uploads in production.
+- **Fixed:** campaign results no longer drop the newest orders when the database clock runs ahead of the app server; `GIFT_CARD_LIABILITY` was missing from the default GL map (unmapped in the CSV export).
+
+### Phase A–E follow-ups
+- **2.4c-M** SSO on mobile: system-browser OIDC flow (`expo-web-browser` + deep link `gutad://auth/sso`), one-time verifier so a stolen code can't be redeemed, optional `security.sso.mobileRedirectUri`. **API M**
+- **4.3-T** Smoke check for document expiry (upload, approve with expiry, sweep, reminder once); `POST /admin/jobs/document-expiry`. **API**
+- **5.1-L** Admin merchant page invites staff with a location picker and an approval limit. **W**
+- **7.7-M** Menu versions include modifier groups and options (publish, rollback, diff; shared groups are copied, never edited). **API W**
+- **9.5-X** External tax provider adapter (TaxJar, Avalara, mock) behind `TAX_PROVIDER`, cached, falling back to the built-in rates with a warning; the pricing page shows the active engine. **API W**
+- **10.3-P / 18.9-S** Processor tokenization: SetupIntent / Elements on web, hosted setup page on mobile, `/me/payment-methods/setup`; test mode unchanged. With the live processor, guest checkout on mobile needs a signed-in user. **API W M**
+- **10.4-D** Hashed device id (sent as `X-Device-Id` by web and mobile) recorded at sign-in and used as a duplicate-account signal; devices listed in customer 360. **API W M**
+- **10.8-L** Cash and credit limits per customer (per order or rolling window), enforced at quote and re-checked at checkout. **API W**
+- **24.6-W** Merchants (web and phone) and couriers (phone) see tickets charged to them and dispute once; only owners/managers or the courier can dispute. **API W M**
+
+### Phase F–G follow-ups
+- **13.7-L** Auto-throttle for restaurants without a production kitchen (open orders × prep time ÷ parallel capacity), busy and overloaded levels, alerts; off by default (`orders.locationThrottle`). **API W**
+- **13.8-P** Network ticket printers: registry, ESC/POS raw TCP and log adapters, print queue with retries, auto-print on fan-out, test print, print buttons. **API W**
+- **14.8-K** Full-screen kiosk mode on web (`/kiosk/[slug]`) and mobile (`kiosk/[slug]`) with pager/table number, idle reset and pay by card or at the counter. **W M**
+- **15.3-R** Road-network travel times from OSRM, Google or Mapbox (`ROUTING_PROVIDER`), cached, falling back to straight-line. **API**
+- **16.2-U** Courier documents uploaded directly to storage (local or S3-compatible), content checked, signed links for staff. **API W M**
+- **17.1-R** Live map pushed over server-sent events (Redis pub/sub) to admin, merchant dispatch and the ops app, with polling as fallback. **API W M**
+- **17.9-M** Several partner providers in priority order with failover on dispatch failure; with none left the job goes to a dispatcher. **API**
+
+### Phase H–I follow-ups
+- **20.1-L** Live journal push to QuickBooks Online or Xero per closed month, batches with retry, idempotent per entity and period; CSV stays the default. **API**
+- **20.7-L** Postings dated in a closed month are redirected to the open month (or refused, `accounting.ledgerLock`); audited reopen. **API**
+- **21.6-S** Forecast adds trend, same-period-last-year and promotion uplift (`inventory.forecast`), shown in the supply forecast. **API**
+- **21.8-P** Supplier portal (per-supplier token) and EDI 810 / CSV upload feeding the three-way match. **API W**
+- **22.2-S** Wireless temperature sensors (token ingest) feed storage logs with the same alerts and corrective actions; offline sensor alerts. **API W M**
+- **23.3-P** Payroll push to Gusto or ADP per pay period with batches and retry; CSV export kept. **API W**
+- **23.8-V** Equipment vendor feeds (Rational, Welbilt, generic): telemetry, maintenance and faults recorded and alerted; still no commands to machines. **API**
+
+### Phase J follow-ups
+- **25.1-B** Buy X get Y free (cheapest units free) and free-item offers. **API W**
+- **25.7-P** Switch membership plans: upgrades now with credit for unused time, downgrades at renewal. **API W M**
+- **25.9-M** Buy gift cards in the mobile app. **M**
+- **25.9-E** Unclaimed-property (escheat) report by state with dormancy rules (`giftcards.escheat`) and CSV. **API W**
+- **25.10-P** Gutad-wide email/SMS campaigns to platform customer segments (marketing consent only) with a holdout. **API W**
+- **25.10-S** 95% ranges on incremental orders and sales, flagged when not conclusive. **API W**
+

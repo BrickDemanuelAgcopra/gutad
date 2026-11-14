@@ -8,6 +8,7 @@ import { SettingsService } from '../../core/settings.service';
 import { assertCan, assertOrgAccess, JwtPayload } from '../../common/auth';
 import { AdminService } from '../admin/admin.service';
 import { QuoteService, type QuoteSimulation } from '../orders/quote.service';
+import { taxEngine } from '../orders/tax-provider';
 
 /** 9 — customer fee rules, item tax categories & rates, membership benefits, commission/royalty overview, price simulation. */
 @Injectable()
@@ -81,6 +82,12 @@ export class PricingService {
     const promos = await this.db.select({ code: coupons.code, funder: coupons.funder, platformSharePct: coupons.platformSharePct, kind: coupons.kind, value: coupons.value, uses: coupons.uses }).from(coupons).orderBy(coupons.code).limit(50);
     const scheduled = await this.db.select().from(priceChanges).where(inArray(priceChanges.status, ['SCHEDULED', 'PENDING_APPROVAL'])).orderBy(priceChanges.effectiveAt).limit(100);
     return { commission: fees.map((x) => ({ plan: x.plan, code: x.code, productLine: x.productLine, version: x.version, type: x.f.type, channel: x.f.channel, fulfillment: x.f.fulfillment, bps: x.f.bps, cents: x.f.cents, capCents: x.f.capCents })), royalties, promotions: promos, customerFees: await this.settings.getObject<CustomerFeeRules>('fees.customer', DEFAULT_CUSTOMER_FEES), scheduledPriceChanges: scheduled };
+  }
+
+  /** 9.5-X — which tax engine prices quotes (env TAX_PROVIDER) and its health; never exposes keys. */
+  taxEngineInfo(user: JwtPayload) {
+    assertCan(user, 'finance.read', 'catalog.read');
+    return taxEngine().info();
   }
 
   // ───── 9.8 checkout-price simulation ─────

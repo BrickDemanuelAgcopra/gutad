@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { api, money, when } from '@/lib/api';
+import { api, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Stat, statusTone, Table } from '@/components/ui';
 import { askReason, SectionTitle } from '@/components/admin-ui';
@@ -62,6 +62,7 @@ export default function AdminGiftCards() {
           </Card>
         </div>
       </div>
+      <Escheat />
       {open && <CardDetail id={open} onClose={() => setOpen(null)} />}
     </div>
   );
@@ -76,5 +77,20 @@ function CardDetail({ id, onClose }: { id: string; onClose: () => void }) {
         <Table rows={data.txns} cols={[{ key: 'k', label: 'Activity', render: (t) => t.kind.toLowerCase() }, { key: 'c', label: 'Amount', render: (t) => <span className={t.cents < 0 ? 'text-red-600' : 'text-emerald-700'}>{money(t.cents)}</span> }, { key: 'o', label: 'Order', render: (t) => (t.orderId ? <a className="underline" href={`/admin/orders/${t.orderId}`}>open</a> : '—') }, { key: 'n', label: 'Note', render: (t) => t.note || '' }, { key: 'd', label: 'When', render: (t) => when(t.createdAt) }]} />
       </div>}
     </Modal>
+  );
+}
+
+/** 25.9-E balances that must be reported to the state as unclaimed property. */
+function Escheat() {
+  const [asOf, setAsOf] = useState('');
+  const { data } = useApi<{ totalCents: number; byState: { state: string; cards: number; cents: number }[]; comingDue12Months: { cards: number; cents: number }; rules: { defaultDormancyYears: number; byState: Record<string, number> } }>(`/admin/gift-cards/escheat${asOf ? `?asOf=${new Date(asOf).toISOString()}` : ''}`, { deps: [asOf] });
+  return (
+    <Card title="Unclaimed property (escheat)" action={<div className="flex items-end gap-2"><Input type="date" label="As of" value={asOf} onChange={(e) => setAsOf(e.target.value)} /><Button size="sm" variant="secondary" onClick={() => downloadFile(`/admin/gift-cards/escheat.csv${asOf ? `?asOf=${new Date(asOf).toISOString()}` : ''}`, 'gift-card-escheat.csv')}>CSV</Button></div>}>
+      {data && <div className="space-y-2 text-sm">
+        <p>Reportable now: <b>{money(data.totalCents)}</b>. Coming due in the next 12 months: {data.comingDue12Months.cards} cards, {money(data.comingDue12Months.cents)}.</p>
+        <Table rows={data.byState} empty="Nothing is reportable." cols={[{ key: 's', label: 'State', render: (r) => r.state }, { key: 'c', label: 'Cards', render: (r) => r.cards }, { key: 'v', label: 'Balance', render: (r) => money(r.cents) }, { key: 'y', label: 'Dormancy', render: (r) => `${data.rules.byState[r.state] ?? data.rules.defaultDormancyYears} years` }]} />
+        <p className="text-xs text-ink-500">Purchased cards with a balance and no activity for the dormancy period of the buyer’s state (setting <code>giftcards.escheat</code>). Promotional cards are not reportable. Confirm periods with counsel before filing.</p>
+      </div>}
+    </Card>
   );
 }

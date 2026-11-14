@@ -10,10 +10,11 @@ import { ApprovalsService } from '../security/approvals.service';
 import { AuditService } from '../../core/audit.service';
 import { SettingsService } from '../../core/settings.service';
 import { LedgerService } from '../../core/ledger.service';
+import { PrintingService } from './printing.service';
 
 @Injectable()
 export class KitchenService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService, private readonly printing: PrintingService) {}
 
   onModuleInit() {
     this.approvals.register('PURCHASE_ORDER', {
@@ -137,6 +138,8 @@ export class KitchenService implements OnModuleInit {
         await tx.update(orderLines).set({ status: 'PREPARING', stationCode: code, handling: flags }).where(eq(orderLines.id, l.id));
       }
     }
+    // 13.8-P queue station tickets for network printers with auto-print on (the worker sends them)
+    await this.printing.queueForTickets(tickets, tx);
     const handling = Array.from(new Set(lineFlags.flat()));
     const extras = loc?.packingExtras?.length ? loc.packingExtras : ['Napkins', 'Receipt'];
     const checklist = [

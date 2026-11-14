@@ -2,10 +2,10 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { createPublicKey, verify as cryptoVerify, type JsonWebKey } from 'node:crypto';
-import { and, desc, eq, gt, inArray, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { isStaffRole, type Sensitivity } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
-import { accessGrants, accountRecoveryTokens, addresses, consents, locations, orgMemberships, refreshTokens, staffScopes, userSessions, users } from '../../db/schema';
+import { accessGrants, accountRecoveryTokens, addresses, consents, locations, orgMemberships, refreshTokens, staffScopes, userDevices, userSessions, users } from '../../db/schema';
 import { CryptoService } from '../../core/crypto.service';
 import { NotifyService } from '../../core/notify.service';
 import { RedisService } from '../../core/redis.service';
@@ -16,11 +16,13 @@ import { addDays, token } from '../../common/utils';
 import { permissionsOf, type JwtPayload, type RoleName } from '../../common/auth';
 import { newTotpSecret, otpauthUrl, verifyTotp } from '../../common/totp';
 
-export interface SessionMeta { client?: string | null; ip?: string | null; userAgent?: string | null }
+export interface SessionMeta { client?: string | null; ip?: string | null; userAgent?: string | null; /** 10.4-D client-generated device id (X-Device-Id) */ deviceId?: string | null }
 
 /** Session policy (setting `security.sessions`). Staff sessions are shorter and expire when idle. */
 export const SESSION_DEFAULTS = { staffTokenMinutes: 720, staffIdleMinutes: 480, staffMaxHours: 72 };
-export interface SsoConfig { enabled: boolean; issuer: string; clientId: string; clientSecretEnc?: string; redirectUri: string; allowedDomains: string[]; label: string }
+export interface SsoConfig { enabled: boolean; issuer: string; clientId: string; clientSecretEnc?: string; redirectUri: string; /** 2.4c-M optional custom-scheme redirect registered with the IdP for the mobile app */ mobileRedirectUri?: string; allowedDomains: string[]; label: string }
+/** 2.4c-M deep links an SSO sign-in may return to (the mobile app scheme). */
+const SSO_APP_RETURN = /^gutad:\/\/[A-Za-z0-9/_-]*$/;
 
 const ACCESS_TOKEN_MAX_SECONDS = 7 * 86400;
 
@@ -161,7 +163,17 @@ export class AuthService {
     const policy = await this.settings.getObject('security.sessions', SESSION_DEFAULTS);
     const expiresAt = staff ? new Date(Date.now() + policy.staffMaxHours * 3600_000) : addDays(new Date(), loadConfig().REFRESH_TOKEN_TTL_DAYS);
     const [s] = await this.db.insert(userSessions).values({ userId, amr, client: meta.client ?? null, ip: meta.ip ?? null, userAgent: meta.userAgent?.slice(0, 300) ?? null, expiresAt }).returning();
+    if (meta.deviceId) await this.recordDevice(userId, meta).catch(() => undefined); // a signal only: never blocks sign-in
     return s;
+  }
+
+  /** 10.4-D remember the (hashed) device this account signed in from; feeds duplicate-account detection. */
+  private async recordDevice(userId: string, meta: SessionMeta) {
+    const deviceHash = this.crypto.sha256(`device:${meta.deviceId}`);
+    await this.db
+      .insert(userDevices)
+      .values({ userId, deviceHash, client: meta.client?.slice(0, 40) ?? null, userAgent: meta.userAgent?.slice(0, 300) ?? null })
+      .onConflictDoUpdate({ target: [userDevices.userId, userDevices.deviceHash], set: { lastSeenAt: new Date(), signIns: sql`${userDevices.signIns} + 1`, client: meta.client?.slice(0, 40) ?? null, userAgent: meta.userAgent?.slice(0, 300) ?? null } });
   }
 
   async startSession(userId: string, amr: string[], meta: SessionMeta, isGuest = false) {
@@ -262,25 +274,42 @@ export class AuthService {
     return d;
   }
 
-  async ssoStart(meta: SessionMeta) {
+  /**
+   * 2.4c-M mobile apps pass `returnTo` (their deep link, e.g. gutad://auth/sso). The identity provider redirects to
+   * `mobileRedirectUri` when configured (a custom-scheme redirect registered with the IdP), otherwise to the web
+   * callback, which forwards code and state to the app. The app also gets a one-time `verifier` that must accompany
+   * the code, so a code intercepted on the way back can't be redeemed by anyone else.
+   */
+  async ssoStart(meta: SessionMeta, opts: { returnTo?: string } = {}) {
     const c = await this.settings.get<SsoConfig | null>('security.sso', null);
     if (!c?.enabled) throw new BadRequestException('Single sign-on is not configured');
+    const returnTo = opts.returnTo || null;
+    if (returnTo && !SSO_APP_RETURN.test(returnTo) && !(loadConfig().NODE_ENV !== 'production' && /^exps?:\/\/[^\s]+$/.test(returnTo))) throw new BadRequestException('Unsupported app return link');
     const d = await this.oidc(c);
     const state = token(16);
     const nonce = token(16);
-    await this.redis.setJson(`sso:state:${state}`, { nonce, meta }, 600);
-    const q = new URLSearchParams({ response_type: 'code', client_id: c.clientId, redirect_uri: c.redirectUri, scope: 'openid email profile', state, nonce });
-    return { url: `${d.authorization_endpoint}?${q}` };
+    const verifier = returnTo ? token(24) : null;
+    const redirectUri = returnTo && c.mobileRedirectUri ? c.mobileRedirectUri : c.redirectUri;
+    await this.redis.setJson(`sso:state:${state}`, { nonce, meta, returnTo, redirectUri, verifierHash: verifier ? this.crypto.sha256(verifier) : null }, 600);
+    const q = new URLSearchParams({ response_type: 'code', client_id: c.clientId, redirect_uri: redirectUri, scope: 'openid email profile', state, nonce });
+    return { url: `${d.authorization_endpoint}?${q}`, ...(verifier ? { state, verifier, redirectUri } : {}) };
   }
 
-  async ssoCallback(code: string, state: string) {
+  /** 2.4c-M the web callback asks where a sign-in started; app sign-ins are forwarded to the app with code and state. */
+  async ssoReturn(state: string) {
+    const st = await this.redis.getJson<{ returnTo?: string | null }>(`sso:state:${state}`);
+    return { returnTo: st?.returnTo || null };
+  }
+
+  async ssoCallback(code: string, state: string, verifier?: string) {
     const c = await this.settings.get<SsoConfig | null>('security.sso', null);
     if (!c?.enabled) throw new BadRequestException('Single sign-on is not configured');
-    const st = await this.redis.getJson<{ nonce: string; meta: SessionMeta }>(`sso:state:${state}`);
+    const st = await this.redis.getJson<{ nonce: string; meta: SessionMeta; redirectUri?: string; verifierHash?: string | null }>(`sso:state:${state}`);
     if (!st) throw new UnauthorizedException('Sign-in expired, start again');
     await this.redis.del(`sso:state:${state}`);
+    if (st.verifierHash && (!verifier || this.crypto.sha256(verifier) !== st.verifierHash)) throw new UnauthorizedException('Finish signing in on the device that started it');
     const d = await this.oidc(c);
-    const body = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: c.redirectUri, client_id: c.clientId, client_secret: c.clientSecretEnc ? this.crypto.decrypt(c.clientSecretEnc) : '' });
+    const body = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: st.redirectUri || c.redirectUri, client_id: c.clientId, client_secret: c.clientSecretEnc ? this.crypto.decrypt(c.clientSecretEnc) : '' });
     const tr = await fetch(d.token_endpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
     if (!tr.ok) throw new UnauthorizedException('Identity provider rejected the sign-in');
     const { id_token } = (await tr.json()) as { id_token?: string };

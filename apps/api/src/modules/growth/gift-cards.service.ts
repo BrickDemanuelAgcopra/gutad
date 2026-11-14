@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, gte, ilike, inArray, or, sql } from 'drizzle-orm';
-import { DEFAULT_GIFT_CARD_LIMITS, type GiftCardLimits } from '@gutad/shared';
+import { DEFAULT_ESCHEAT_RULES, DEFAULT_GIFT_CARD_LIMITS, type EscheatRules, type GiftCardLimits } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
 import { giftCards, giftCardTxns, users } from '../../db/schema';
 import { assertCan, JwtPayload } from '../../common/auth';
@@ -167,6 +167,39 @@ export class GiftCardsService {
       await this.audit.log({ actorId: user.sub, action: `giftcard.${action.toLowerCase()}`, entityType: 'gift_card', entityId: id, before: { status: c.status, balanceCents: c.balanceCents }, after: { status: row.status, balanceCents: row.balanceCents }, reason }, tx);
       return { ...row, code: mask(row.code) };
     });
+  }
+
+  /**
+   * 25.9-E unclaimed-property (escheat) report: purchased cards with a balance and no activity for longer than the
+   * dormancy period of the buyer's state (setting `giftcards.escheat`). `asOf` lets finance prepare a future filing.
+   */
+  async escheat(user: JwtPayload, opts: { asOf?: Date; format?: 'json' | 'csv' } = {}) {
+    assertCan(user, 'finance.read', 'growth.read');
+    const rules = await this.settings.getObject<EscheatRules>('giftcards.escheat', DEFAULT_ESCHEAT_RULES);
+    const asOf = opts.asOf || new Date();
+    const r = await this.db.execute(sql`
+      select g.id, g.code, g.balance_cents, g.initial_cents, g.created_at, g.purchaser_id, u.email as purchaser_email,
+        coalesce((select upper(a.region) from addresses a where a.user_id = g.purchaser_id order by a.is_default desc, a.created_at limit 1), 'UNKNOWN') as state,
+        (select max(t.created_at) from gift_card_txns t where t.gift_card_id = g.id) as last_activity
+      from gift_cards g left join users u on u.id = g.purchaser_id
+      where g.kind = 'PURCHASED' and g.status <> 'VOID' and g.balance_cents > 0`);
+    const list = ((r as unknown as { rows?: Record<string, unknown>[] }).rows ?? (r as unknown as Record<string, unknown>[]));
+    const due = list.map((x) => {
+      const state = String(x.state);
+      const years = rules.byState[state] ?? rules.defaultDormancyYears;
+      const last = new Date(String(x.last_activity || x.created_at));
+      const dormantSince = last;
+      const reportableOn = new Date(last.getTime() + years * 365.25 * 86400_000);
+      return { id: String(x.id), code: mask(String(x.code)), state, balanceCents: Number(x.balance_cents), lastActivity: dormantSince, dormancyYears: years, reportableOn, purchaserEmail: x.purchaser_email as string | null };
+    });
+    const reportable = due.filter((d) => d.reportableOn <= asOf);
+    const byState = Object.entries(reportable.reduce<Record<string, { cards: number; cents: number }>>((a, d) => { a[d.state] = a[d.state] || { cards: 0, cents: 0 }; a[d.state].cards++; a[d.state].cents += d.balanceCents; return a; }, {})).map(([state, v]) => ({ state, ...v })).sort((a, b) => b.cents - a.cents);
+    const next12 = due.filter((d) => d.reportableOn > asOf && d.reportableOn <= new Date(asOf.getTime() + 365 * 86400_000));
+    if (opts.format === 'csv') {
+      const rows = [['state', 'card', 'balance_cents', 'last_activity', 'dormancy_years', 'reportable_on', 'purchaser_email'], ...reportable.map((d) => [d.state, d.code, String(d.balanceCents), d.lastActivity.toISOString(), String(d.dormancyYears), d.reportableOn.toISOString().slice(0, 10), d.purchaserEmail || ''])];
+      return rows.map((x) => x.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')).join('\n');
+    }
+    return { asOf, rules, reportable, byState, totalCents: reportable.reduce((a, d) => a + d.balanceCents, 0), comingDue12Months: { cards: next12.length, cents: next12.reduce((a, d) => a + d.balanceCents, 0) } };
   }
 
   /** 20.4-G outstanding gift balances vs the ledger, by kind and status, plus redemptions in the last 30 days. */

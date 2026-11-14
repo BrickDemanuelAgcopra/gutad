@@ -28,6 +28,8 @@ export const courierDocuments = pgTable('courier_documents', {
     .references(() => drivers.id, { onDelete: 'cascade' }),
   kind: text('kind').notNull(), // LICENSE | INSURANCE | BACKGROUND_CHECK | VEHICLE_REGISTRATION | ID
   fileUrl: text('file_url').notNull(),
+  /** 16.2-U uploaded file in storage (stored_files.id); null when the courier gave a link */
+  fileId: uuid('file_id'),
   status: text('status').notNull().default('PENDING'), // PENDING | APPROVED | REJECTED | EXPIRED
   expiresAt: ts('expires_at'),
   reviewedById: uuid('reviewed_by_id'),

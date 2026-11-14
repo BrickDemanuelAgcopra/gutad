@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { api, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Stat, statusTone, Table, Tabs } from '@/components/ui';
+import { EquipmentVendorPanel, PayrollProviderCard } from '@/components/followups-c';
 
 interface Eq { id: string; name: string; kind: string; stationCode: string | null; status: string; isAutomated: boolean; softwareVersion: string | null; softwareApproved: boolean | null; nextServiceDueAt: string | null; serviceDue: boolean; openTickets: number; kitchen: string }
 
@@ -12,7 +13,7 @@ export function TeamWorkspace({ locationId, kitchenId, organizationId, members }
   return (
     <div className="space-y-4">
       <Tabs tabs={[{ id: 'attendance', label: 'Attendance & payroll' }, { id: 'shifts', label: 'Shifts & staffing' }, { id: 'skills', label: 'Skills' }, { id: 'labor', label: 'Labor vs volume' }, ...(kitchenId ? [{ id: 'equipment', label: 'Equipment' }] : []), { id: 'devices', label: 'Devices' }]} active={tab} onChange={setTab} />
-      {tab === 'attendance' && <Attendance locationId={locationId} />}
+      {tab === 'attendance' && <Attendance locationId={locationId} organizationId={organizationId} members={members} />}
       {tab === 'shifts' && <Shifts locationId={locationId} members={members} />}
       {tab === 'skills' && <Skills organizationId={organizationId} members={members} />}
       {tab === 'labor' && <Labor locationId={locationId} />}
@@ -22,7 +23,7 @@ export function TeamWorkspace({ locationId, kitchenId, organizationId, members }
   );
 }
 
-function Attendance({ locationId }: { locationId: string }) {
+function Attendance({ locationId, organizationId, members }: { locationId: string; organizationId: string; members: { id: string; email: string }[] }) {
   const { user } = useSession();
   const { data: me, reload: rm } = useApi<{ open: { clockInAt: string } | null }>('/attendance/me');
   const [r, setR] = useState({ from: new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
@@ -39,6 +40,7 @@ function Attendance({ locationId }: { locationId: string }) {
         { key: 'a', label: '', render: (e) => e.approvedById ? <Badge tone="good">approved</Badge> : e.clockOutAt && e.userId !== user?.id ? <Button size="sm" variant="secondary" onClick={() => run(async () => { await api.patch(`/time-entries/${e.id}`, { approve: true }); await reload(); })}>Approve</Button> : null },
       ]} />
       <p className="text-xs text-ink-500">Only approved hours are paid; nobody approves their own hours. Overtime is paid above the weekly threshold.</p>
+      <PayrollProviderCard locationId={locationId} organizationId={organizationId} members={members} from={r.from} to={r.to} />
     </div>
   );
 }
@@ -90,13 +92,15 @@ export function Equipment({ kitchenId }: { kitchenId?: string }) {
   const { run, error } = useAction();
   const [f, setF] = useState({ name: '', kind: '', station: '', automated: false, version: '', interval: '' });
   const [msg, setMsg] = useState<string | null>(null);
+  const [vendorOf, setVendorOf] = useState<Eq | null>(null);
   return (
     <div className="space-y-3">
       {error && <Alert>{error}</Alert>}{msg && <Alert tone="info">{msg}</Alert>}
+      {vendorOf && <EquipmentVendorPanel equipmentId={vendorOf.id} name={vendorOf.name} onClose={() => { setVendorOf(null); void reload(); }} />}
       <Table rows={data || []} empty="No equipment registered." cols={[
         { key: 'n', label: 'Equipment', render: (e) => <span>{e.name}<span className="block text-xs text-ink-500">{e.kind.toLowerCase()}{e.stationCode ? ` · station ${e.stationCode}` : ''}{kitchenId ? '' : ` · ${e.kitchen}`}</span></span> },
         { key: 's', label: 'Status', render: (e) => <Badge tone={e.status === 'OK' ? 'good' : e.status === 'DEGRADED' ? 'warn' : 'bad'}>{e.status}</Badge> },
-        { key: 'v', label: 'Software', render: (e) => e.isAutomated ? <span className={e.softwareApproved === false ? 'text-red-700' : ''}>{e.softwareVersion || '—'}{e.softwareApproved === false ? ' (not approved)' : ''}</span> : '—' },
+        { key: 'v', label: 'Software', render: (e) => e.isAutomated ? <span className={e.softwareApproved === false ? 'text-red-700' : ''}>{e.softwareVersion || '—'}{e.softwareApproved === false ? ' (not approved)' : ''}<button className="block text-xs text-ink-500 underline" onClick={() => setVendorOf(e)}>Vendor feed</button></span> : '—' },
         { key: 'm', label: 'Service', render: (e) => <span className={e.serviceDue ? 'text-red-700' : 'text-xs'}>{e.nextServiceDueAt ? `due ${when(e.nextServiceDueAt)}` : '—'}{e.openTickets ? ` · ${e.openTickets} open ticket(s)` : ''}</span> },
         { key: 'x', label: '', render: (e) => kitchenId ? <span className="flex flex-wrap gap-1">{e.status === 'OK' ? <Button size="sm" variant="danger" onClick={() => { const note = window.prompt('What is wrong?'); if (note) run(async () => { const r = await api.post<{ outageState: { soldOutItemIds: string[] } | null }>(`/equipment/${e.id}/status`, { status: 'DOWN', note }); setMsg(`${e.name} marked down: ${r.outageState?.soldOutItemIds.length ?? 0} dish(es) paused.`); await reload(); }); }}>Report down</Button> : <Button size="sm" onClick={() => run(async () => { await api.post(`/equipment/${e.id}/status`, { status: 'OK', note: 'Back in service' }); setMsg(`${e.name} back in service; paused dishes restored.`); await reload(); })}>Back in service</Button>}<Button size="sm" variant="ghost" onClick={() => { const t = window.prompt('Service / maintenance needed'); if (t) run(async () => { await api.post(`/equipment/${e.id}/tickets`, { kind: 'SERVICE', title: t }); await reload(); }); }}>Service ticket</Button></span> : null },
       ]} />

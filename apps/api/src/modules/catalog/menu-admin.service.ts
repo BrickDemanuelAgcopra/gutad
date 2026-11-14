@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
@@ -9,9 +10,13 @@ import { assertOrgAccess, can, isPlatformStaff, JwtPayload, MANAGER_ROLES } from
 import { ApprovalsService } from '../security/approvals.service';
 
 type Item = typeof menuItems.$inferSelect;
-/** Fields a menu document carries for each item (modifier groups are managed separately and are not versioned). */
+/** Fields a menu document carries for each item; modifier groups and their options travel in `modifierGroups`, linked by `modifierGroupIds` (7.7-M). */
 const DOC_FIELDS = ['name', 'description', 'priceCents', 'imageUrl', 'photos', 'allergens', 'dietaryTags', 'isActive', 'sortOrder', 'servingSize', 'kind', 'taxCategory', 'maxPerOrder', 'nutrition', 'channelPrices', 'stationCode', 'cookMinutes', 'handling'] as const;
-export interface MenuDoc { categories: { id?: string; name: string; sortOrder?: number; items: (Partial<Pick<Item, (typeof DOC_FIELDS)[number]>> & { id?: string; name: string; priceCents: number })[] }[] }
+export interface DocModifierOption { id?: string; name: string; priceCents: number; soldOut?: boolean; ingredientId?: string | null }
+export interface DocModifierGroup { id?: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: DocModifierOption[] }
+/** `modifierGroups` is absent on documents written before 7.7-M; such documents leave modifier groups untouched on publish. */
+export interface MenuDoc { categories: { id?: string; name: string; sortOrder?: number; items: (Partial<Pick<Item, (typeof DOC_FIELDS)[number]>> & { id?: string; name: string; priceCents: number; modifierGroupIds?: string[] })[] }[]; modifierGroups?: DocModifierGroup[] }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const csvCell = (v: unknown) => { const s = v === null || v === undefined ? '' : Array.isArray(v) ? v.join('|') : typeof v === 'object' ? JSON.stringify(v) : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 
 /** 7 — menu versions (draft → review → publish → rollback), shared menus, location overrides, export & validation, allergens; 9.7 price changes. */
@@ -40,7 +45,20 @@ export class MenuAdminService {
   async snapshot(menuId: string): Promise<MenuDoc> {
     const cats = await this.db.select().from(menuCategories).where(eq(menuCategories.menuId, menuId)).orderBy(menuCategories.sortOrder);
     const items = cats.length ? await this.db.select().from(menuItems).where(inArray(menuItems.categoryId, cats.map((c) => c.id))).orderBy(menuItems.sortOrder) : [];
-    return { categories: cats.map((c) => ({ id: c.id, name: c.name, sortOrder: c.sortOrder, items: items.filter((i) => i.categoryId === c.id).map((i) => ({ id: i.id, ...Object.fromEntries(DOC_FIELDS.map((f) => [f, i[f]])) }) as MenuDoc['categories'][number]['items'][number]) })) };
+    const links = items.length ? await this.db.select().from(itemModifierGroups).where(inArray(itemModifierGroups.itemId, items.map((i) => i.id))).orderBy(itemModifierGroups.sortOrder) : [];
+    const groupIds = [...new Set(links.map((l) => l.groupId))];
+    const groups = groupIds.length ? await this.db.select().from(modifierGroups).where(inArray(modifierGroups.id, groupIds)).orderBy(modifierGroups.name, modifierGroups.id) : [];
+    const opts = groupIds.length ? await this.db.select().from(modifierOptions).where(inArray(modifierOptions.groupId, groupIds)).orderBy(modifierOptions.name, modifierOptions.id) : [];
+    return {
+      categories: cats.map((c) => ({ id: c.id, name: c.name, sortOrder: c.sortOrder, items: items.filter((i) => i.categoryId === c.id).map((i) => ({ id: i.id, ...Object.fromEntries(DOC_FIELDS.map((f) => [f, i[f]])), modifierGroupIds: links.filter((l) => l.itemId === i.id).map((l) => l.groupId) }) as MenuDoc['categories'][number]['items'][number]) })),
+      modifierGroups: groups.map((g) => ({ id: g.id, name: g.name, minSelect: g.minSelect, maxSelect: g.maxSelect, required: g.required, options: opts.filter((o) => o.groupId === g.id).map((o) => ({ id: o.id, name: o.name, priceCents: o.priceCents, soldOut: o.soldOut, ingredientId: o.ingredientId })) })),
+    };
+  }
+
+  /** Give new modifier groups/options an id so items can reference them and publish/rollback restore the same rows. */
+  private normalizeDoc(doc: MenuDoc): MenuDoc {
+    if (!doc.modifierGroups) return doc;
+    return { ...doc, modifierGroups: doc.modifierGroups.map((g) => ({ ...g, id: g.id || randomUUID(), options: (g.options || []).map((o) => ({ ...o, id: o.id || randomUUID() })) })) };
   }
 
   // ───── 7.7 versions ─────
@@ -85,6 +103,24 @@ export class MenuAdminService {
     }
     const duplicates = [...names.entries()].filter(([, n]) => n > 1).map(([k]) => k);
     for (const d of duplicates) warnings.push(`Duplicate item name: ${d}`);
+    if (doc?.modifierGroups) {
+      const gids = new Set<string>();
+      for (const g of doc.modifierGroups) {
+        if (!g.name?.trim()) errors.push('A modifier group has no name');
+        if (g.id && !UUID_RE.test(g.id)) errors.push(`${g.name}: modifier group id is not a valid id`);
+        if (g.id) gids.add(g.id);
+        if (!Number.isInteger(g.minSelect) || !Number.isInteger(g.maxSelect) || g.minSelect < 0 || g.maxSelect < 0) errors.push(`${g.name}: min/max selections must be whole numbers ≥ 0`);
+        else if (g.maxSelect > 0 && g.minSelect > g.maxSelect) errors.push(`${g.name}: minimum selections exceed the maximum`);
+        if (g.required && g.minSelect < 1) warnings.push(`${g.name}: required but minimum selections is 0`);
+        if (!(g.options || []).length) warnings.push(`${g.name}: modifier group has no options`);
+        for (const o of g.options || []) {
+          if (!o.name?.trim()) errors.push(`An option in ${g.name} has no name`);
+          if (o.id && !UUID_RE.test(o.id)) errors.push(`${g.name} / ${o.name}: option id is not a valid id`);
+          if (!Number.isInteger(o.priceCents) || o.priceCents < 0) errors.push(`${g.name} / ${o.name}: price must be a whole number of cents ≥ 0`);
+        }
+      }
+      for (const c of doc.categories || []) for (const i of c.items || []) for (const gid of i.modifierGroupIds || []) if (!gids.has(gid)) errors.push(`${i.name}: references a modifier group that is not in the document`);
+    }
     return { ok: errors.length === 0, errors, warnings, duplicates };
   }
 
@@ -92,6 +128,7 @@ export class MenuAdminService {
     const { v, m } = await this.version(versionId);
     assertOrgAccess(user, m.organizationId, m.locationId, MANAGER_ROLES);
     if (v.status !== 'DRAFT') throw new ConflictException('Only drafts can be edited');
+    document = this.normalizeDoc(document);
     const check = this.validateDoc(document);
     if (!check.ok) throw new BadRequestException({ message: check.errors.join('; '), code: 'MENU_INVALID', ...check });
     const [row] = await this.db.update(menuVersions).set({ document, note: note ?? v.note }).where(eq(menuVersions.id, versionId)).returning();
@@ -150,9 +187,42 @@ export class MenuAdminService {
   }
 
   private async apply(m: typeof menus.$inferSelect, doc: MenuDoc) {
+    doc = this.normalizeDoc(doc);
     await this.db.transaction(async (tx) => {
       const existingCats = await tx.select().from(menuCategories).where(eq(menuCategories.menuId, m.id));
       const keepItems = new Set<string>();
+      // 7.7-M modifier groups: upsert groups and options by id (a group used by another merchant's menu is copied, never edited).
+      const groupMap = new Map<string, string>();
+      const itemLinks: [string, string[]][] = [];
+      if (doc.modifierGroups) {
+        const ids = doc.modifierGroups.map((g) => g.id!);
+        // a group is ours to edit when no other merchant's item uses it and it is new or already used by this merchant
+        const usedBy = ids.length ? await tx.selectDistinct({ id: itemModifierGroups.groupId, org: menus.organizationId }).from(itemModifierGroups).innerJoin(menuItems, eq(menuItems.id, itemModifierGroups.itemId)).innerJoin(menuCategories, eq(menuCategories.id, menuItems.categoryId)).innerJoin(menus, eq(menus.id, menuCategories.menuId)).where(inArray(itemModifierGroups.groupId, ids)) : [];
+        const existing = ids.length ? (await tx.select({ id: modifierGroups.id }).from(modifierGroups).where(inArray(modifierGroups.id, ids))).map((x) => x.id) : [];
+        const foreign = new Set(existing.filter((id) => usedBy.some((u) => u.id === id && u.org !== m.organizationId) || !usedBy.some((u) => u.id === id && u.org === m.organizationId)));
+        // an existing group nobody uses yet (e.g. created by this menu's earlier version and unlinked) stays editable when a version of this menu carried it
+        const known = new Set((await tx.select({ d: menuVersions.document }).from(menuVersions).where(and(eq(menuVersions.menuId, m.id), inArray(menuVersions.status, ['PUBLISHED', 'SUPERSEDED'])))).flatMap((v) => ((v.d as MenuDoc).modifierGroups || []).map((g) => g.id!)));
+        for (const id of [...foreign]) if (known.has(id) && !usedBy.some((u) => u.id === id && u.org !== m.organizationId)) foreign.delete(id);
+        for (const g of doc.modifierGroups) {
+          const gv = { name: g.name, minSelect: g.minSelect, maxSelect: g.maxSelect, required: g.required };
+          let gid = foreign.has(g.id!) ? randomUUID() : g.id!;
+          const [ex] = await tx.select({ id: modifierGroups.id }).from(modifierGroups).where(eq(modifierGroups.id, gid)).limit(1);
+          if (ex) await tx.update(modifierGroups).set(gv).where(eq(modifierGroups.id, gid));
+          else gid = (await tx.insert(modifierGroups).values({ id: gid, ...gv }).returning())[0].id;
+          groupMap.set(g.id!, gid);
+          const existingOpts = await tx.select().from(modifierOptions).where(eq(modifierOptions.groupId, gid));
+          const keepOpts = new Set<string>();
+          for (const o of g.options || []) {
+            const ov = { name: o.name, priceCents: o.priceCents, soldOut: o.soldOut ?? false, ingredientId: o.ingredientId ?? null };
+            if (o.id && existingOpts.some((x) => x.id === o.id)) { await tx.update(modifierOptions).set(ov).where(eq(modifierOptions.id, o.id)); keepOpts.add(o.id); continue; }
+            const [taken] = o.id ? await tx.select({ id: modifierOptions.id }).from(modifierOptions).where(eq(modifierOptions.id, o.id)).limit(1) : [];
+            const [n] = await tx.insert(modifierOptions).values({ ...(o.id && !taken ? { id: o.id } : {}), groupId: gid, ...ov }).returning();
+            keepOpts.add(n.id);
+          }
+          const drop = existingOpts.map((x) => x.id).filter((x) => !keepOpts.has(x));
+          if (drop.length) await tx.delete(modifierOptions).where(inArray(modifierOptions.id, drop));
+        }
+      }
       let cs = 0;
       for (const c of doc.categories) {
         let catId = c.id && existingCats.some((x) => x.id === c.id) ? c.id : null;
@@ -163,13 +233,16 @@ export class MenuAdminService {
         for (const i of c.items) {
           const vals = Object.fromEntries(DOC_FIELDS.filter((f) => (i as Record<string, unknown>)[f] !== undefined).map((f) => [f, (i as Record<string, unknown>)[f]]));
           const [ex] = i.id ? await tx.select({ id: menuItems.id }).from(menuItems).innerJoin(menuCategories, eq(menuCategories.id, menuItems.categoryId)).where(and(eq(menuItems.id, i.id), eq(menuCategories.menuId, m.id))).limit(1) : [];
+          let itemId: string;
           if (ex) {
             await tx.update(menuItems).set({ ...vals, categoryId: catId, sortOrder: i.sortOrder ?? is, isActive: i.isActive ?? true } as never).where(eq(menuItems.id, ex.id));
-            keepItems.add(ex.id);
+            itemId = ex.id;
           } else {
             const [n] = await tx.insert(menuItems).values({ ...vals, name: i.name, priceCents: i.priceCents, categoryId: catId, sortOrder: i.sortOrder ?? is } as never).returning();
-            keepItems.add(n.id);
+            itemId = n.id;
           }
+          keepItems.add(itemId);
+          if (doc.modifierGroups && i.modifierGroupIds) itemLinks.push([itemId, i.modifierGroupIds.map((g) => groupMap.get(g)).filter(Boolean) as string[]]);
           is++;
         }
       }
@@ -178,6 +251,10 @@ export class MenuAdminService {
         const live = await tx.select({ id: menuItems.id }).from(menuItems).where(inArray(menuItems.categoryId, allCatIds));
         const off = live.map((x) => x.id).filter((id) => !keepItems.has(id));
         if (off.length) await tx.update(menuItems).set({ isActive: false }).where(inArray(menuItems.id, off));
+      }
+      for (const [itemId, gids] of itemLinks) {
+        await tx.delete(itemModifierGroups).where(eq(itemModifierGroups.itemId, itemId));
+        if (gids.length) await tx.insert(itemModifierGroups).values([...new Set(gids)].map((groupId, sortOrder) => ({ itemId, groupId, sortOrder }))).onConflictDoNothing();
       }
     });
   }
@@ -205,10 +282,34 @@ export class MenuAdminService {
     const removed = [...a.entries()].filter(([k, i]) => !b.has(k) && i.isActive !== false).map(([, i]) => ({ name: i.name, category: i.category }));
     const changed = [...b.entries()].filter(([k]) => a.has(k)).map(([k, i]) => {
       const o = a.get(k)!;
-      const fields = (['name', 'category', ...DOC_FIELDS] as string[]).filter((f) => f !== 'sortOrder' && JSON.stringify((i as Record<string, unknown>)[f] ?? null) !== JSON.stringify((o as Record<string, unknown>)[f] ?? null) && (i as Record<string, unknown>)[f] !== undefined);
+      const fields = (['name', 'category', ...DOC_FIELDS, 'modifierGroupIds'] as string[]).filter((f) => f !== 'sortOrder' && JSON.stringify((i as Record<string, unknown>)[f] ?? null) !== JSON.stringify((o as Record<string, unknown>)[f] ?? null) && (i as Record<string, unknown>)[f] !== undefined);
       return { name: i.name, fields: fields.map((f) => ({ field: f, from: (o as Record<string, unknown>)[f] ?? null, to: (i as Record<string, unknown>)[f] ?? null })) };
     }).filter((x) => x.fields.length);
-    return { version: v.version, added, removed, changed, validation: this.validateDoc(v.document as MenuDoc) };
+    return { version: v.version, added, removed, changed, modifiers: this.modifierDiff(live, v.document as MenuDoc, changed), validation: this.validateDoc(v.document as MenuDoc) };
+  }
+
+  /** 7.7-M modifier group changes between the live menu and a version (null for documents that predate versioned modifiers). */
+  private modifierDiff(live: MenuDoc, doc: MenuDoc, changedItems: { name: string; fields: { field: string; from: unknown; to: unknown }[] }[]) {
+    if (!doc.modifierGroups) return null;
+    const ga = new Map((live.modifierGroups || []).map((g) => [g.id!, g])), gb = new Map(doc.modifierGroups.map((g, i) => [g.id || `new:${i}`, g]));
+    const names = new Map([...ga.entries(), ...gb.entries()].map(([k, g]) => [k, g.name]));
+    for (const c of changedItems) for (const f of c.fields) if (f.field === 'modifierGroupIds') { f.from = ((f.from as string[] | null) || []).map((x) => names.get(x) || x); f.to = ((f.to as string[] | null) || []).map((x) => names.get(x) || x); }
+    const added = [...gb.entries()].filter(([k]) => !ga.has(k)).map(([, g]) => ({ name: g.name, options: g.options.map((o) => ({ name: o.name, priceCents: o.priceCents })) }));
+    const removed = [...ga.entries()].filter(([k]) => !gb.has(k)).map(([, g]) => ({ name: g.name }));
+    const changed = [...gb.entries()].filter(([k]) => ga.has(k)).map(([k, g]) => {
+      const o = ga.get(k)!;
+      const fields = (['name', 'minSelect', 'maxSelect', 'required'] as const).filter((f) => g[f] !== o[f]).map((f) => ({ field: f, from: o[f], to: g[f] }));
+      const oa = new Map(o.options.map((x) => [x.id!, x])), ob = new Map(g.options.map((x, i) => [x.id || `new:${i}`, x]));
+      const optionsAdded = [...ob.entries()].filter(([x]) => !oa.has(x)).map(([, x]) => ({ name: x.name, priceCents: x.priceCents }));
+      const optionsRemoved = [...oa.entries()].filter(([x]) => !ob.has(x)).map(([, x]) => ({ name: x.name }));
+      const optionsChanged = [...ob.entries()].filter(([x]) => oa.has(x)).map(([x, n]) => {
+        const p = oa.get(x)!;
+        const f = (['name', 'priceCents', 'soldOut', 'ingredientId'] as const).filter((key) => (n[key] ?? null) !== (p[key] ?? null) && !(key === 'soldOut' && !n[key] && !p[key])).map((key) => ({ field: key, from: p[key] ?? null, to: n[key] ?? null }));
+        return { name: n.name, fields: f };
+      }).filter((x) => x.fields.length);
+      return { name: g.name, fields, optionsAdded, optionsRemoved, optionsChanged };
+    }).filter((x) => x.fields.length || x.optionsAdded.length || x.optionsRemoved.length || x.optionsChanged.length);
+    return { added, removed, changed };
   }
 
   /** Menu version of each item's menu, frozen into the order snapshot (11.8). */

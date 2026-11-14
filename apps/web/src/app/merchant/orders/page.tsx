@@ -4,6 +4,7 @@ import { api, money, when, ago } from '@/lib/api';
 import { useApi, useAction } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, statusTone, Tabs } from '@/components/ui';
 import { useMerchant } from '../context';
+import { PrintButton } from '@/components/capacity-printers';
 
 interface Line { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null; status: string; label: string | null }
 interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; scheduledFor: string | null; createdAt: string; pickupCode: string | null; specialInstructions: string | null; lines: Line[]; delivery: { status: string } | null }
@@ -51,7 +52,7 @@ export default function OrdersInbox() {
             <div className="mt-2 flex items-center justify-between text-sm"><span className="font-semibold">{money(o.totalCents)}</span>{o.pickupCode && <span className="font-mono text-xs">code {o.pickupCode}</span>}</div>
             <div className="mt-3 flex flex-wrap gap-1">
               {o.status === 'SUBMITTED' && (<><Select value={prep} onChange={(e) => setPrep(Number(e.target.value))} className="w-24">{[10, 15, 20, 30, 45, 60].map((m) => <option key={m} value={m}>{m} min</option>)}</Select><Button disabled={busy} onClick={() => act(() => api.post(`/orders/${o.id}/accept`, { prepMinutes: prep }))}>Accept</Button><Button variant="danger" onClick={() => setReject(o)}>Reject</Button></>)}
-              {['ACCEPTED', 'PREPARING'].includes(o.status) && (<><Button onClick={() => act(() => api.post(`/orders/${o.id}/ready`, {}))}>Mark ready</Button><Button variant="secondary" onClick={() => act(() => api.post(`/orders/${o.id}/prep-time`, { prepMinutes: 15 }))}>+15 min</Button></>)}
+              {['ACCEPTED', 'PREPARING'].includes(o.status) && (<><Button onClick={() => act(() => api.post(`/orders/${o.id}/ready`, {}))}>Mark ready</Button><Button variant="secondary" onClick={() => act(() => api.post(`/orders/${o.id}/prep-time`, { prepMinutes: 15 }))}>+15 min</Button><PrintButton path={`/orders/${o.id}/print-tickets`} label="Print tickets" size="md" /></>)}
               {o.status === 'READY' && <Button onClick={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))}>{o.fulfillmentType === 'DELIVERY' ? 'Courier collected' : 'Handed to customer'}</Button>}
               {!['COMPLETED', 'CANCELED', 'REJECTED', 'SUBMITTED'].includes(o.status) && <Button variant="ghost" onClick={() => act(() => api.post(`/orders/${o.id}/staff-cancel`, { reason: 'Merchant canceled', funder: 'MERCHANT' }))}>Cancel & refund</Button>}
               {['ACCEPTED', 'PREPARING'].includes(o.status) && o.lines.filter((l) => l.status !== 'UNAVAILABLE').length > 1 && <Select value="" onChange={(e) => e.target.value && act(() => api.post(`/order-lines/${e.target.value}/unavailable`, { note: 'Out of stock' }))} className="w-40"><option value="">Mark item 86…</option>{o.lines.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>}

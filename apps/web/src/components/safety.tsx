@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { api, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, statusTone, Table, Tabs } from '@/components/ui';
+import { SensorsCard } from '@/components/followups-c';
 
 interface Template { id: string; organizationId: string | null; name: string; kind: string; frequency: string; items: { key: string; label: string; requiresValue?: boolean }[] }
 interface Action { id: string; source: string; title: string; status: string; dueAt: string | null; overdue: boolean; evidenceNote: string | null; evidenceUrl: string | null; completedById: string | null }
@@ -34,6 +35,7 @@ function Temperatures({ kitchenId }: { kitchenId: string }) {
       <Card title="Log a temperature">
         <div className="grid gap-2 sm:grid-cols-5"><Select label="Check" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="STORAGE">Storage</option><option value="RECEIVING">Receiving</option><option value="HOT_HOLD">Hot holding</option><option value="COOLING">Cooling</option></Select><Select label="Where" value={f.areaId} onChange={(e) => setF({ ...f, areaId: e.target.value })}><option value="">—</option>{areas?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select><Input label="°C" value={f.temp} onChange={(e) => setF({ ...f, temp: e.target.value })} /><Input label="Note" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /><Button className="self-end" disabled={f.temp === ''} onClick={() => run(async () => { const r = await api.post<{ inRange: boolean; minC: number | null; maxC: number | null; quarantined: boolean }>(`/kitchens/${kitchenId}/temperatures`, { kind: f.kind, tempC: Number(f.temp), storageAreaId: f.areaId || undefined, note: f.note || undefined }); setMsg(r.inRange ? 'In range.' : `Out of range (${r.minC ?? '—'}…${r.maxC ?? '—'} °C): an alert and a corrective action were raised${r.quarantined ? '; the delivery is quarantined' : ''}.`); setF({ ...f, temp: '', note: '' }); await reload(); })}>Log</Button></div>
       </Card>
+      <SensorsCard kitchenId={kitchenId} />
       <Table rows={data || []} empty="No readings this week." cols={[{ key: 'd', label: 'When', render: (t) => <span className="text-xs">{when(t.createdAt)}</span> }, { key: 'k', label: 'Check', render: (t) => `${t.kind.toLowerCase().replace('_', ' ')}${t.storageArea ? ` · ${t.storageArea}` : ''}` }, { key: 't', label: '°C', render: (t) => <span className={t.inRange ? '' : 'font-semibold text-red-700'}>{t.tempC}</span> }, { key: 'r', label: 'Safe range', render: (t) => `${t.minC ?? '—'} … ${t.maxC ?? '—'}` }, { key: 'n', label: 'Note', render: (t) => <span className="text-xs">{t.note}</span> }]} />
     </div>
   );

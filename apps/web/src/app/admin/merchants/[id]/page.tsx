@@ -28,7 +28,7 @@ export default function MerchantDetail() {
   const { data: d, reload } = useApi<Detail>(`/admin/merchants/${id}`);
   const { data: staff } = useApi<{ id: string; email: string; roles: string[] }[]>(can('security.read') ? '/admin/security/staff' : null);
   const { run, error } = useAction();
-  const [inv, setInv] = useState({ email: '', role: 'MERCHANT_MANAGER' });
+  const [inv, setInv] = useState<{ email: string; role: string; locationIds: string[]; limit: string }>({ email: '', role: 'MERCHANT_MANAGER', locationIds: [], limit: '' });
   if (!d) return null;
   const o = d.organization;
   const manage = can('merchants.manage');
@@ -74,7 +74,14 @@ export default function MerchantDetail() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Merchant admins & team">
           <ul className="text-sm">{d.members.map((m) => <li key={m.id} className="flex items-center justify-between py-1"><span>{m.email} <Badge>{m.role.replace('MERCHANT_', '').toLowerCase()}</Badge>{m.locationIds.length ? <span className="text-xs text-ink-500"> {m.locationIds.length} location(s)</span> : null}{m.approvalLimitCents ? <span className="text-xs text-ink-500"> · limit {money(m.approvalLimitCents)}</span> : null}</span>{manage && <button className="text-xs text-red-600" onClick={() => run(async () => { await api.delete(`/organizations/${id}/members/${m.id}`); reload(); })}>Remove</button>}</li>)}</ul>
-          {manage && <div className="mt-2 grid grid-cols-[1fr_150px_auto] gap-2"><Input placeholder="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /><Select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>{['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'KITCHEN', 'PACKER', 'HOST'].map((r) => <option key={r} value={r}>{r.replace('MERCHANT_', '').toLowerCase()}</option>)}</Select><Button size="sm" onClick={() => run(async () => { await api.post(`/organizations/${id}/members`, inv); setInv({ email: '', role: 'MERCHANT_MANAGER' }); reload(); })}>Invite</Button></div>}
+          {manage && (
+            <div className="mt-2 space-y-2 rounded-lg border border-ink-100 p-2">
+              <div className="grid grid-cols-[1fr_150px] gap-2"><Input placeholder="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /><Select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>{['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'KITCHEN', 'PACKER', 'HOST', 'DISPATCHER'].map((r) => <option key={r} value={r}>{r.replace('MERCHANT_', '').toLowerCase()}</option>)}</Select></div>
+              {inv.role !== 'MERCHANT_OWNER' && d.locations.length > 0 && <div><div className="text-xs text-ink-500">Locations (none selected = all locations)</div><div className="mt-1 flex flex-wrap gap-1">{d.locations.map((l) => <button key={l.id} type="button" onClick={() => setInv({ ...inv, locationIds: inv.locationIds.includes(l.id) ? inv.locationIds.filter((x) => x !== l.id) : [...inv.locationIds, l.id] })} className={`rounded-md px-2 py-1 text-xs ${inv.locationIds.includes(l.id) ? 'bg-brand-600 text-white' : 'bg-ink-100'}`}>{l.name} · {l.city}</button>)}</div></div>}
+              {['MERCHANT_OWNER', 'MERCHANT_MANAGER'].includes(inv.role) && <Input label="Approval limit for refunds and credits (USD, blank = none)" value={inv.limit} onChange={(e) => setInv({ ...inv, limit: e.target.value })} />}
+              <Button size="sm" disabled={!inv.email} onClick={() => run(async () => { await api.post(`/organizations/${id}/members`, { email: inv.email, role: inv.role, locationIds: inv.role === 'MERCHANT_OWNER' ? [] : inv.locationIds, approvalLimitCents: inv.limit ? Math.round(Number(inv.limit) * 100) : undefined }); setInv({ email: '', role: 'MERCHANT_MANAGER', locationIds: [], limit: '' }); reload(); })}>Invite</Button>
+            </div>
+          )}
         </Card>
         <Card title="Support cases & change requests">
           {d.cases.slice(0, 8).map((c) => <div key={c.id} className="flex justify-between border-b border-ink-50 py-1 text-sm"><span>{c.category.toLowerCase().replace(/_/g, ' ')} <span className="text-xs text-ink-500">by {c.reporterType.toLowerCase()} · {c.description.slice(0, 60)}</span></span><Badge tone={statusTone(c.status)}>{c.status}</Badge></div>)}

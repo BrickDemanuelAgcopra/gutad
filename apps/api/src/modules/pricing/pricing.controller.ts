@@ -32,6 +32,7 @@ export class PricingController {
   @Get('admin/pricing/fees') fees(@CurrentUser() u: JwtPayload) { return this.svc.fees(u); }
   @Post('admin/pricing/fees') requestFees(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ rules: FeeRulesDto, reason: z.string().min(5) }))) b: { rules: CustomerFeeRules; reason: string }) { return this.svc.requestFees(u, b.rules, b.reason); }
   @Get('admin/pricing/overview') overview(@CurrentUser() u: JwtPayload) { return this.svc.overview(u); }
+  @Get('admin/pricing/tax-engine') taxEngine(@CurrentUser() u: JwtPayload) { return this.svc.taxEngineInfo(u); }
   @Post('pricing/simulate') simulate(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ cart: CartDto, draft: DraftDto }))) b: { cart: z.infer<typeof CartDto>; draft: z.infer<typeof DraftDto> }) { return this.svc.simulate(u, b.cart as never, b.draft); }
   @Get('tax-rates') taxRates(@CurrentUser() u: JwtPayload, @Query('locationId') locationId?: string) { return this.svc.taxRates(u, locationId); }
   @Post('admin/tax-rates') upsertTax(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ id: z.string().uuid().optional(), locationId: z.string().uuid().nullable().optional(), region: z.string().nullable().optional(), category: z.string(), rateBps: z.number().int().min(0).max(5000), label: z.string().optional() }))) b: { id?: string; locationId?: string | null; region?: string | null; category: string; rateBps: number; label?: string }) { return this.svc.upsertTaxRate(u, b); }

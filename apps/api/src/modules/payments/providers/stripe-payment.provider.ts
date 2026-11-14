@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import { loadConfig } from '../../../config/config';
-import type { CreateIntentInput, IntentResult, PaymentProvider, ProviderEvent, SetupResult } from './payment-provider';
+import type { CardDetails, CreateIntentInput, IntentResult, PaymentProvider, ProviderEvent, SetupResult } from './payment-provider';
 
 /**
  * Stripe Connect adapter using destination charges: the platform is the merchant of record for the charge,
@@ -51,6 +51,9 @@ export class StripePaymentProvider implements PaymentProvider {
     }
     if (input.paymentMethodId) {
       params.payment_method = input.paymentMethodId;
+      // 10.3-P a card saved through a SetupIntent belongs to a processor customer; the charge must name it
+      const owner = await this.stripe.paymentMethods.retrieve(input.paymentMethodId).then((pm) => (typeof pm.customer === 'string' ? pm.customer : pm.customer?.id || null)).catch(() => null);
+      if (owner) params.customer = owner;
       params.confirm = true;
       if (input.offSession) params.off_session = true;
     }
@@ -79,6 +82,39 @@ export class StripePaymentProvider implements PaymentProvider {
     const customer = customerEmail ? await this.stripe.customers.create({ email: customerEmail }) : null;
     const si = await this.stripe.setupIntents.create({ customer: customer?.id, usage: 'off_session', automatic_payment_methods: { enabled: true, allow_redirects: 'never' } });
     return { providerSetupId: si.id, clientSecret: si.client_secret, paymentMethodId: typeof si.payment_method === 'string' ? si.payment_method : null };
+  }
+
+  // ───── 10.3-P / 18.9-S tokenization for saved cards ─────
+
+  private async customerFor(email: string | null, customerRef: string | null) {
+    if (customerRef) return customerRef;
+    return (await this.stripe.customers.create(email ? { email } : {})).id;
+  }
+
+  async setupForCustomer(input: { email: string | null; customerRef: string | null; idempotencyKey?: string }) {
+    const customer = await this.customerFor(input.email, input.customerRef);
+    const si = await this.stripe.setupIntents.create({ customer, usage: 'off_session', payment_method_types: ['card'] }, input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined);
+    return { providerSetupId: si.id, clientSecret: si.client_secret, paymentMethodId: typeof si.payment_method === 'string' ? si.payment_method : null, customerRef: customer };
+  }
+
+  async hostedSetup(input: { email: string | null; customerRef: string | null; successUrl: string; cancelUrl: string }) {
+    const customer = await this.customerFor(input.email, input.customerRef);
+    const s = await this.stripe.checkout.sessions.create({ mode: 'setup', customer, payment_method_types: ['card'], currency: loadConfig().DEFAULT_CURRENCY.toLowerCase(), success_url: input.successUrl, cancel_url: input.cancelUrl });
+    if (!s.url) throw new Error('Processor did not return a setup page');
+    return { sessionId: s.id, url: s.url, customerRef: customer };
+  }
+
+  async completeHostedSetup(sessionId: string) {
+    const s = await this.stripe.checkout.sessions.retrieve(sessionId, { expand: ['setup_intent'] });
+    const si = s.setup_intent && typeof s.setup_intent === 'object' ? (s.setup_intent as Stripe.SetupIntent) : null;
+    if (s.status !== 'complete' || !si || si.status !== 'succeeded' || !si.payment_method) return null;
+    return { paymentMethodId: typeof si.payment_method === 'string' ? si.payment_method : si.payment_method.id, customerRef: typeof s.customer === 'string' ? s.customer : s.customer?.id || null };
+  }
+
+  async describePaymentMethod(paymentMethodId: string): Promise<CardDetails | null> {
+    const pm = await this.stripe.paymentMethods.retrieve(paymentMethodId).catch(() => null);
+    if (!pm || pm.type !== 'card' || !pm.card) return null;
+    return { paymentMethodId: pm.id, brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year, customerRef: typeof pm.customer === 'string' ? pm.customer : pm.customer?.id || null };
   }
 
   async createConnectedAccount(input: { legalName: string; email: string; country: string; returnUrl: string; refreshUrl: string }) {

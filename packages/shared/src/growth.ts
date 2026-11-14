@@ -27,7 +27,7 @@ export const DEFAULT_MEMBERSHIP_DUNNING: MembershipDunning = { retryDays: [1, 3,
 export interface ReferralRules { rewardPoints: number; reviewOnSignals: boolean }
 export const DEFAULT_REFERRAL_RULES: ReferralRules = { rewardPoints: 500, reviewOnSignals: true };
 
-export const OFFER_KINDS = ['PERCENT', 'FIXED', 'FREE_DELIVERY'] as const;
+export const OFFER_KINDS = ['PERCENT', 'FIXED', 'FREE_DELIVERY', 'BOGO', 'FREE_ITEM'] as const;
 export type OfferKind = (typeof OFFER_KINDS)[number];
 export const OFFER_STACKING = ['EXCLUSIVE', 'STACKABLE'] as const;
 export type OfferStacking = (typeof OFFER_STACKING)[number];
@@ -57,3 +57,7 @@ export interface PaymentMix {
 
 export const MEMBERSHIP_STATUS_LABELS: Record<string, string> = { TRIALING: 'Free trial', ACTIVE: 'Active', PAST_DUE: 'Payment failed', SUSPENDED: 'Suspended', CANCELED: 'Canceled' };
 export const REFERRAL_STATUS_LABELS: Record<string, string> = { PENDING: 'Waiting for first order', REVIEW: 'Under review', REWARDED: 'Rewarded', REJECTED: 'Not eligible' };
+
+/** Setting `giftcards.escheat` (25.9-E): dormancy before a balance is reportable, by US state (default otherwise). */
+export interface EscheatRules { defaultDormancyYears: number; byState: Record<string, number> }
+export const DEFAULT_ESCHEAT_RULES: EscheatRules = { defaultDormancyYears: 5, byState: { CA: 3, NY: 5, NJ: 3, TX: 3, FL: 5, IL: 5 } };

@@ -49,7 +49,18 @@ export interface PaymentProvider {
   transfer(input: { accountId: string; amountCents: number; currency: string; idempotencyKey: string; description: string }): Promise<{ transferId: string; status: 'paid' | 'pending' | 'failed'; failureReason?: string }>;
   /** Verify and parse a webhook. Returns a normalized event or null when the signature fails. */
   parseWebhook(rawBody: Buffer, signature: string | undefined): Promise<ProviderEvent | null>;
+  // 10.3-P / 18.9-S live-processor tokenization (optional: the mock processor uses test cards instead)
+  /** SetupIntent for a saved card on the processor customer (created when `customerRef` is null). */
+  setupForCustomer?(input: { email: string | null; customerRef: string | null; idempotencyKey?: string }): Promise<SetupResult & { customerRef: string | null }>;
+  /** Processor-hosted card setup page (for apps without the native sheet); returns its URL. */
+  hostedSetup?(input: { email: string | null; customerRef: string | null; successUrl: string; cancelUrl: string }): Promise<{ sessionId: string; url: string; customerRef: string | null }>;
+  /** The card saved by a finished hosted setup, or null while it is not complete. */
+  completeHostedSetup?(sessionId: string): Promise<{ paymentMethodId: string; customerRef: string | null } | null>;
+  /** Masked details of a tokenized card, as the processor reports them. */
+  describePaymentMethod?(paymentMethodId: string): Promise<CardDetails | null>;
 }
+
+export interface CardDetails { paymentMethodId: string; brand: string | null; last4: string | null; expMonth: number | null; expYear: number | null; customerRef: string | null }
 
 export interface ProviderEvent {
   id: string;

@@ -20,3 +20,6 @@ export * from './delivery-admin';
 export * from './finance-admin';
 export * from './operations';
 export * from './growth';
+export * from './followups-a';
+export * from './followups-b';
+export * from './followups-c';

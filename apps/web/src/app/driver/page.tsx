@@ -1,10 +1,11 @@
 'use client';
 import Link from 'next/link';
 import { useState } from 'react';
-import { COURIER_DOC_KINDS, COURIER_DOC_LABELS, type CourierDocKind } from '@gutad/shared';
+import { COURIER_DOC_LABELS, type CourierDocKind } from '@gutad/shared';
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Spinner, statusTone } from '@/components/ui';
+import { CourierDocUpload, DocLink } from '@/components/courier-docs';
 
 interface Job { id: string; status: string; pickupAddress: { line1: string }; dropoffAddress: { line1: string; instructions?: string }; tipCents: number; batchId: string | null; arrivedPickupAt: string | null; arrivedDropoffAt: string | null; requirements: string[]; exception: { kind: string; attempts: { at: string; method?: string }[]; waitUntil: string; resolution?: string } | null }
 interface Standing { status: string; suspendedReason: string | null; appealStatus: string; appealDecisionNote: string | null; vehicleType: string; capabilities: string[]; missingDocs: string[]; metrics?: { acceptanceRate: number | null; completionRate: number | null; onTimeRate: number | null; delivered: number } }
@@ -90,15 +91,11 @@ function Appeal({ standing, onDone }: { standing: Standing; onDone: () => void }
 }
 
 function Documents() {
-  const { data, reload } = useApi<{ id: string; kind: string; status: string; expiresAt: string | null; reviewNote: string | null }[]>('/driver/documents');
-  const { run, error } = useAction();
-  const [f, setF] = useState({ kind: 'LICENSE', fileUrl: '', expiresAt: '' });
+  const { data, reload } = useApi<{ id: string; kind: string; status: string; expiresAt: string | null; reviewNote: string | null; fileUrl: string; fileId: string | null }[]>('/driver/documents');
   return (
     <Card title="Documents">
-      {error && <Alert>{error}</Alert>}
-      {data?.map((d) => <div key={d.id} className="flex justify-between text-sm"><span>{COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind}{d.expiresAt ? ` · expires ${when(d.expiresAt)}` : ''}{d.reviewNote && d.status === 'REJECTED' ? ` · ${d.reviewNote}` : ''}</span><Badge tone={statusTone(d.status)}>{d.status}</Badge></div>)}
-      <div className="mt-2 grid gap-2 sm:grid-cols-3"><Select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>{COURIER_DOC_KINDS.map((k) => <option key={k} value={k}>{COURIER_DOC_LABELS[k]}</option>)}</Select><Input placeholder="Link to the scanned file" value={f.fileUrl} onChange={(e) => setF({ ...f, fileUrl: e.target.value })} /><Input type="date" value={f.expiresAt} onChange={(e) => setF({ ...f, expiresAt: e.target.value })} /></div>
-      <Button className="mt-2" size="sm" disabled={f.fileUrl.length < 4} onClick={() => run(async () => { await api.post('/driver/documents', { kind: f.kind, fileUrl: f.fileUrl, expiresAt: f.expiresAt ? new Date(`${f.expiresAt}T23:59:00Z`).toISOString() : undefined }); setF({ ...f, fileUrl: '', expiresAt: '' }); await reload(); })}>Upload</Button>
+      {data?.map((d) => <div key={d.id} className="flex justify-between text-sm"><span><DocLink doc={d} label={COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind} />{d.expiresAt ? ` · expires ${when(d.expiresAt)}` : ''}{d.reviewNote && d.status === 'REJECTED' ? ` · ${d.reviewNote}` : ''}</span><Badge tone={statusTone(d.status)}>{d.status}</Badge></div>)}
+      <CourierDocUpload onDone={() => void reload()} />
     </Card>
   );
 }

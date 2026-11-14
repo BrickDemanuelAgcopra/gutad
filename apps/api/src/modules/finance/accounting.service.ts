@@ -1,12 +1,13 @@
 import { GiftCardsService } from '../growth/gift-cards.service';
-import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
-import { agingBucket, AGING_BUCKETS, CLOSE_CHECKLIST, DEFAULT_GL_MAP, PNL_LINES } from '@gutad/shared';
+import { agingBucket, AGING_BUCKETS, CLOSE_CHECKLIST, DEFAULT_GL_MAP, DEFAULT_LEDGER_LOCK, PNL_LINES, type LedgerLockConfig } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
 import { auditLogs, budgets, closePeriods, customerCredits, disputes, glAccounts, invoices, journalEntries, kitchens, laborEntries, locations, payments, payouts, purchaseOrders, unmatchedItems } from '../../db/schema';
 import { assertCan, JwtPayload } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
-import { LedgerService } from '../../core/ledger.service';
+import { LedgerService, type LedgerAccount } from '../../core/ledger.service';
+import { SettingsService } from '../../core/settings.service';
 import { ApprovalsService } from '../security/approvals.service';
 
 const rows = <T,>(r: unknown) => (r as { rows: T[] }).rows;
@@ -17,7 +18,7 @@ const monthRange = (period: string) => { const [y, m] = period.split('-').map(Nu
 /** Phase H, section 20: accounting, treasury and financial control. */
 @Injectable()
 export class AccountingService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly ledger: LedgerService, private readonly audit: AuditService, private readonly approvals: ApprovalsService, private readonly gifts: GiftCardsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly ledger: LedgerService, private readonly audit: AuditService, private readonly approvals: ApprovalsService, private readonly gifts: GiftCardsService, private readonly settings: SettingsService) {}
 
   // ───── 20.1 chart of accounts & journal export ─────
 
@@ -229,15 +230,57 @@ export class AccountingService {
     return this.closeStatus(user, period);
   }
 
-  async closeMonth(user: JwtPayload, period: string) {
+  /**
+   * Close a finished month. From then on LedgerService redirects (or refuses) postings dated in it (20.7-L).
+   * `force` (platform admins, with a reason) closes despite open checklist items and is audited separately.
+   */
+  async closeMonth(user: JwtPayload, period: string, opts: { force?: boolean; reason?: string } = {}) {
     assertCan(user, 'finance.manage');
     const st = await this.closeStatus(user, period);
     if (st.status === 'CLOSED') throw new ConflictException('Already closed');
     const open = st.checklist.filter((c) => !c.done);
-    if (open.length) throw new ConflictException({ message: `Not ready to close: ${open.map((c) => c.label).join('; ')}`, code: 'CLOSE_NOT_READY', open: open.map((c) => c.key) });
+    if (opts.force) {
+      if (!user.roles.includes('PLATFORM_ADMIN')) throw new ForbiddenException('Only a platform admin can force a close');
+      if (!opts.reason || opts.reason.trim().length < 5) throw new BadRequestException('Give a reason for forcing the close');
+    } else if (open.length) throw new ConflictException({ message: `Not ready to close: ${open.map((c) => c.label).join('; ')}`, code: 'CLOSE_NOT_READY', open: open.map((c) => c.key) });
+    if (period >= new Date().toISOString().slice(0, 7)) throw new ConflictException({ message: 'Only finished months can be closed', code: 'PERIOD_NOT_ENDED' });
     const [u] = await this.db.update(closePeriods).set({ status: 'CLOSED', closedById: user.sub, closedAt: new Date() }).where(eq(closePeriods.period, period)).returning();
-    await this.audit.log({ actorId: user.sub, action: 'finance.month_close', entityType: 'close_period', entityId: period });
+    this.ledger.invalidateClosedPeriods();
+    await this.audit.log({ actorId: user.sub, action: opts.force ? 'finance.month_close_forced' : 'finance.month_close', entityType: 'close_period', entityId: period, after: opts.force ? { openItems: open.map((c) => c.key) } : undefined, reason: opts.reason });
     return u;
+  }
+
+  /** 20.7-L audited override: reopen a closed month so postings dated in it land there again. */
+  async reopenMonth(user: JwtPayload, period: string, reason: string) {
+    assertCan(user, 'finance.manage');
+    if (!user.roles.includes('PLATFORM_ADMIN') && !user.roles.includes('FINANCE')) throw new ForbiddenException('Only a platform or finance admin can reopen a closed month');
+    const [row] = await this.db.select().from(closePeriods).where(eq(closePeriods.period, period)).limit(1);
+    if (!row || row.status !== 'CLOSED') throw new ConflictException('This month is not closed');
+    const [u] = await this.db.update(closePeriods).set({ status: 'OPEN', reopenedById: user.sub, reopenedAt: new Date(), reopenReason: reason }).where(eq(closePeriods.period, period)).returning();
+    this.ledger.invalidateClosedPeriods();
+    await this.audit.log({ actorId: user.sub, action: 'finance.month_reopen', entityType: 'close_period', entityId: period, before: { status: 'CLOSED', closedById: row.closedById, closedAt: row.closedAt }, after: { status: 'OPEN' }, reason });
+    return u;
+  }
+
+  /** Closed months and how postings dated in them are handled. */
+  async ledgerLock(user: JwtPayload) {
+    assertCan(user, 'finance.read');
+    const closed = await this.db.select().from(closePeriods).where(eq(closePeriods.status, 'CLOSED')).orderBy(desc(closePeriods.period));
+    const reopened = await this.db.select().from(closePeriods).where(isNotNull(closePeriods.reopenedAt)).orderBy(desc(closePeriods.reopenedAt)).limit(20);
+    return { policy: await this.settings.getObject<LedgerLockConfig>('accounting.ledgerLock', DEFAULT_LEDGER_LOCK), closed: closed.map((c) => ({ period: c.period, closedAt: c.closedAt, closedById: c.closedById })), reopened: reopened.map((c) => ({ period: c.period, status: c.status, reopenedAt: c.reopenedAt, reopenedById: c.reopenedById, reason: c.reopenReason })) };
+  }
+
+  /** Manual journal (accountant adjustment) with an accounting date; subject to the closed-month lock. */
+  async manualJournal(user: JwtPayload, input: { date: string; memo: string; currency?: string; lines: { account: string; debitCents?: number; creditCents?: number; memo?: string }[] }) {
+    assertCan(user, 'finance.manage');
+    const valid = new Set<string>(journalEntries.account.enumValues);
+    const bad = input.lines.find((l) => !valid.has(l.account));
+    if (bad) throw new BadRequestException(`Unknown ledger account ${bad.account}`);
+    const date = new Date(`${input.date}T12:00:00Z`);
+    if (Number.isNaN(date.getTime())) throw new BadRequestException('Date is YYYY-MM-DD');
+    const r = await this.ledger.postDetailed({ currency: input.currency || 'USD', effectiveAt: date }, input.lines.map((l) => ({ account: l.account as LedgerAccount, debitCents: l.debitCents, creditCents: l.creditCents, memo: l.memo || input.memo })));
+    await this.audit.log({ actorId: user.sub, action: 'finance.manual_journal', entityType: 'journal', entityId: r.batchId, after: { date: input.date, period: r.period, redirectedFrom: r.redirectedFrom, lines: input.lines }, reason: input.memo });
+    return r;
   }
 
   // ───── 20.8 budgets, approval limits, audit export ─────

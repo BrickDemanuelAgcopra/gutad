@@ -12,6 +12,10 @@ import { AuditService } from '../../core/audit.service';
 import { haversineKm, pointInPolygon } from '../../common/utils';
 import { DELIVERY_PROVIDER } from './delivery.constants';
 import type { Address, DeliveryProvider, DeliveryProviderEvent } from './providers/delivery-provider';
+import { DeliveryProviderRegistry } from './providers/provider-registry';
+import { RoutingService } from './routing.service';
+import { LiveService } from './live.service';
+import { RedisService } from '../../core/redis.service';
 
 type Status = (typeof deliveryJobs.status.enumValues)[number];
 
@@ -27,7 +31,25 @@ export class DeliveryService {
     private readonly audit: AuditService,
     private readonly settings: SettingsService,
     private readonly moduleRef: ModuleRef,
+    private readonly providers: DeliveryProviderRegistry,
+    private readonly routing: RoutingService,
+    private readonly live: LiveService,
+    private readonly redis: RedisService,
   ) {}
+
+  // ───── 17.9-M partner providers in priority order ─────
+
+  /** Third-party providers for a location, by priority (provider_connections for its region or everywhere); else the configured provider. */
+  async partnerChain(loc: { regionId: string | null }, tx: DbOrTx = this.db): Promise<string[]> {
+    const conns = await tx.select().from(providerConnections).where(and(eq(providerConnections.isActive, true), loc.regionId ? or(isNull(providerConnections.regionId), eq(providerConnections.regionId, loc.regionId)) : isNull(providerConnections.regionId))).orderBy(providerConnections.priority);
+    const names = Array.from(new Set(conns.map((c) => c.provider).filter((p) => p !== 'PLATFORM' && this.providers.has(p))));
+    return names.length ? names : [this.provider.name];
+  }
+
+  /** 17.1-R push a job change to live maps (best effort). */
+  private pushJob(j: typeof deliveryJobs.$inferSelect, organizationId: string | null = null) {
+    this.live.publish({ type: 'job', jobId: j.id, orderId: j.orderId, locationId: j.locationId, organizationId, status: j.status, fleet: j.fleet, provider: j.provider, driverId: j.driverId, at: new Date().toISOString() });
+  }
 
   // ───── zones ─────
 
@@ -119,13 +141,23 @@ export class DeliveryService {
     const pickup = this.pickupAddress(loc);
     let providerCostCents = 0;
     let providerQuoteId: string | null = null;
-    // 15.3 travel time; 15.4 courier availability
-    const travel = Math.round((km ?? 3) * (zone?.travelMinutesPerKm ?? cfg.travelMinutesPerKm)) + 5;
+    // 15.3 travel time (15.3-R by road when a routing provider is configured); 15.4 courier availability
+    const mpk = zone?.travelMinutesPerKm ?? cfg.travelMinutesPerKm;
+    const road = km !== null ? await this.routing.travel({ lat: loc.lat!, lng: loc.lng! }, { lat: dropoff.lat, lng: dropoff.lng }, mpk) : null;
+    const travel = Math.round(road ? road.minutes : 3 * mpk) + 5;
     let courierWait = 3;
     let etaMinutes = travel + courierWait + addMinutes;
     let expiresAt = new Date(Date.now() + 5 * 60_000);
+    let partner: string | null = null;
     if (loc.deliveryFleet === 'PARTNER') {
-      const q = await this.provider.quote({ externalId: `q_${locationId}_${Date.now()}`, pickup, dropoff, orderValueCents, tipCents });
+      // 17.9-M first provider (by priority) that gives a quote
+      let q: Awaited<ReturnType<DeliveryProvider['quote']>> | null = null;
+      let lastErr: Error | null = null;
+      for (const name of await this.partnerChain(loc, tx)) {
+        try { q = await this.providers.get(name).quote({ externalId: `q_${locationId}_${Date.now()}`, pickup, dropoff, orderValueCents, tipCents }); partner = name; break; } catch (e) { lastErr = e as Error; }
+      }
+      if (!q) this.unavailable(`No delivery partner can take this order right now${lastErr ? ` (${lastErr.message})` : ''}`);
+      await this.redis.setJson(`dq:${q.providerQuoteId}`, { provider: partner }, 3600);
       providerCostCents = q.feeCents;
       providerQuoteId = q.providerQuoteId;
       etaMinutes = q.etaMinutes + addMinutes;
@@ -139,7 +171,7 @@ export class DeliveryService {
         etaMinutes = travel + courierWait + addMinutes;
       }
     }
-    return { retailFeeCents, providerCostCents, providerQuoteId, etaMinutes, expiresAt, fleet: loc.deliveryFleet, zoneId: zone?.id ?? null, distanceKm: km, etaParts: { travel, courierWait, restriction: addMinutes }, pickup };
+    return { retailFeeCents, providerCostCents, providerQuoteId, etaMinutes, expiresAt, fleet: loc.deliveryFleet, zoneId: zone?.id ?? null, distanceKm: km, etaParts: { travel, courierWait, restriction: addMinutes, routing: road?.source ?? 'straight' }, pickup, provider: partner };
   }
 
   /** 15.6 scheduled delivery windows with remaining capacity for a day (location time). */
@@ -177,13 +209,16 @@ export class DeliveryService {
     if (existing) return existing;
     const zone = input.dropoff.lat !== undefined && input.dropoff.lng !== undefined ? (await this.zonesServing(loc!, tx)).find((z) => z.kind !== 'EXCLUSION' && z.polygon && pointInPolygon(input.dropoff.lng!, input.dropoff.lat!, z.polygon as { coordinates: number[][][] })) : undefined;
     const distanceKm = loc?.lat != null && loc?.lng != null && input.dropoff.lat !== undefined && input.dropoff.lng !== undefined ? haversineKm(loc.lat, loc.lng, input.dropoff.lat, input.dropoff.lng) : null;
+    // 17.9-M the partner that priced the quote takes the job
+    const quoted = input.fleet === 'PARTNER' && input.providerQuoteId ? (await this.redis.getJson<{ provider: string }>(`dq:${input.providerQuoteId}`))?.provider : null;
+    const partner = quoted && this.providers.has(quoted) ? quoted : input.fleet === 'PARTNER' && loc ? (await this.partnerChain(loc, tx))[0] : this.provider.name;
     const [job] = await tx
       .insert(deliveryJobs)
       .values({
         orderId: input.orderId,
         locationId: input.locationId,
         fleet: input.fleet,
-        provider: input.fleet === 'PARTNER' ? this.provider.name : input.fleet === 'PLATFORM' ? 'platform' : 'merchant',
+        provider: input.fleet === 'PARTNER' ? partner : input.fleet === 'PLATFORM' ? 'platform' : 'merchant',
         providerQuoteId: input.providerQuoteId,
         status: 'QUOTED',
         quoteExpiresAt: input.expiresAt,
@@ -206,25 +241,25 @@ export class DeliveryService {
    * Dispatch: request the courier. A lost API response triggers lookup by external id before retrying,
    * so two couriers are never dispatched for one job.
    */
-  async dispatch(jobId: string, tx: DbOrTx = this.db) {
+  async dispatch(jobId: string, tx: DbOrTx = this.db): Promise<typeof deliveryJobs.$inferSelect> {
     const [job] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.id, jobId)).limit(1);
     if (!job) throw new NotFoundException('Delivery job not found');
     if (job.status !== 'QUOTED' && job.status !== 'UNASSIGNED' && job.status !== 'QUOTE_EXPIRED') return job; // already dispatched
     const [o] = job.orderId ? await tx.select().from(orders).where(eq(orders.id, job.orderId)).limit(1) : [null];
     const externalId = job.id;
     if (job.fleet === 'PARTNER') {
-      let result = await this.provider.findByExternalId(externalId);
+      const provider = this.providers.get(job.provider);
+      let result = await provider.findByExternalId(externalId);
       if (!result) {
         try {
-          result = await this.provider.createJob({ externalId, pickup: job.pickupAddress as Address, dropoff: job.dropoffAddress as Address, orderValueCents: o?.subtotalCents || 0, tipCents: job.tipCents, providerQuoteId: job.providerQuoteId, idempotencyKey: `dispatch:${job.id}`, pickupReadyAt: o?.promiseAt ?? null });
+          result = await provider.createJob({ externalId, pickup: job.pickupAddress as Address, dropoff: job.dropoffAddress as Address, orderValueCents: o?.subtotalCents || 0, tipCents: job.tipCents, providerQuoteId: job.providerQuoteId, idempotencyKey: `dispatch:${job.id}`, pickupReadyAt: o?.promiseAt ?? null });
         } catch (e) {
           // uncertain response: look up before surfacing the failure
-          result = await this.provider.findByExternalId(externalId);
+          result = await provider.findByExternalId(externalId);
           if (!result) {
-            await this.event(job.id, 'DISPATCH_FAILED', { error: (e as Error).message }, tx);
-            await this.outbox.publish('delivery.failed', job.id, { orderId: job.orderId, reason: (e as Error).message, stage: 'dispatch' }, tx);
-            const [u] = await tx.update(deliveryJobs).set({ status: 'UNASSIGNED', cancelReason: (e as Error).message }).where(eq(deliveryJobs.id, job.id)).returning();
-            return u;
+            await this.event(job.id, 'DISPATCH_FAILED', { provider: provider.name, error: (e as Error).message }, tx);
+            // 17.9-M fail over to the next configured partner; with none left the job is UNASSIGNED with a dispatcher alert
+            return this.failover(job, tx, `${provider.name}: ${(e as Error).message}`);
           }
         }
       }
@@ -233,8 +268,9 @@ export class DeliveryService {
         .set({ status: result.status === 'REQUESTED' ? 'REQUESTED' : (result.status as Status), providerJobId: result.providerJobId, trackingUrl: result.trackingUrl, etaAt: result.etaAt })
         .where(eq(deliveryJobs.id, job.id))
         .returning();
-      await this.event(job.id, 'REQUESTED', { provider: this.provider.name, providerJobId: result.providerJobId }, tx);
+      await this.event(job.id, 'REQUESTED', { provider: provider.name, providerJobId: result.providerJobId }, tx);
       await this.outbox.publish('delivery.requested', job.id, { orderId: job.orderId }, tx);
+      this.pushJob(u);
       return u;
     }
     if (job.fleet === 'PLATFORM') {
@@ -260,7 +296,7 @@ export class DeliveryService {
     const job = await this.db.transaction(async (tx) => {
       const [j] = await tx
         .insert(deliveryJobs)
-        .values({ locationId, externalOrderId: input.externalOrderId, fleet: q.fleet, provider: q.fleet === 'PARTNER' ? this.provider.name : q.fleet.toLowerCase(), providerQuoteId: q.providerQuoteId, status: 'QUOTED', quoteExpiresAt: q.expiresAt, retailFeeCents: q.retailFeeCents, providerCostCents: q.providerCostCents, tipCents: input.tipCents || 0, pickupAddress: q.pickup, dropoffAddress: input.dropoff, idempotencyKey: input.idempotencyKey || `ext:${locationId}:${input.externalOrderId}`, costOwner: 'MERCHANT' })
+        .values({ locationId, externalOrderId: input.externalOrderId, fleet: q.fleet, provider: q.fleet === 'PARTNER' ? q.provider || this.provider.name : q.fleet.toLowerCase(), providerQuoteId: q.providerQuoteId, status: 'QUOTED', quoteExpiresAt: q.expiresAt, retailFeeCents: q.retailFeeCents, providerCostCents: q.providerCostCents, tipCents: input.tipCents || 0, pickupAddress: q.pickup, dropoffAddress: input.dropoff, idempotencyKey: input.idempotencyKey || `ext:${locationId}:${input.externalOrderId}`, costOwner: 'MERCHANT' })
         .returning();
       // merchant owes the platform the provider cost + logistics fee for delivery-only jobs
       await this.ledger.post({ currency: loc.currency }, [
@@ -296,6 +332,7 @@ export class DeliveryService {
     if (data.trackingUrl) patch.trackingUrl = data.trackingUrl as string;
     const [u] = await tx.update(deliveryJobs).set(patch).where(eq(deliveryJobs.id, jobId)).returning();
     await this.event(jobId, status, data, tx);
+    this.pushJob(u);
     const topic = status === 'ASSIGNED' ? 'delivery.assigned' : status === 'PICKED_UP' ? 'delivery.picked_up' : status === 'DELIVERED' ? 'delivery.delivered' : status === 'FAILED' || status === 'CANCELED' ? 'delivery.failed' : null;
     if (topic) await this.outbox.publish(topic, jobId, { orderId: job.orderId, status, ...data }, tx);
     if (status === 'DELIVERED') {
@@ -364,7 +401,7 @@ export class DeliveryService {
       assertOrgAccess(user, loc!.organizationId, job.locationId);
     }
     let feeCents = 0;
-    if (job.fleet === 'PARTNER' && job.providerJobId) feeCents = (await this.provider.cancel(job.providerJobId)).feeCents;
+    if (job.fleet === 'PARTNER' && job.providerJobId) feeCents = (await this.providers.get(job.provider).cancel(job.providerJobId)).feeCents;
     return this.db.transaction(async (tx) => {
       const u = await this.transition(jobId, 'CANCELED', { reason, costOwner, lateCancelFeeCents: feeCents }, tx);
       if (feeCents > 0) {
@@ -387,10 +424,13 @@ export class DeliveryService {
 
   // ───── provider webhooks ─────
 
-  async ingestWebhook(rawBody: Buffer, headers: Record<string, string | undefined>) {
-    const ev = await this.provider.parseWebhook(rawBody, headers);
+  async ingestWebhook(rawBody: Buffer, headers: Record<string, string | undefined>, providerName?: string) {
+    // 17.9-M each partner posts to /webhooks/delivery/:provider; the legacy route is the configured provider
+    const provider = providerName ? (this.providers.has(providerName) ? this.providers.get(providerName) : null) : this.provider;
+    if (!provider) throw new BadRequestException('Unknown delivery provider');
+    const ev = await provider.parseWebhook(rawBody, headers);
     if (!ev) throw new BadRequestException('Invalid delivery webhook');
-    const [inserted] = await this.db.insert(inboxEvents).values({ provider: `delivery:${this.provider.name}`, eventId: ev.id, type: ev.status, payload: ev as unknown as Record<string, unknown> }).onConflictDoNothing().returning();
+    const [inserted] = await this.db.insert(inboxEvents).values({ provider: `delivery:${provider.name}`, eventId: ev.id, type: ev.status, payload: ev as unknown as Record<string, unknown> }).onConflictDoNothing().returning();
     if (!inserted) return { duplicate: true };
     try {
       await this.applyProviderEvent(ev);
@@ -493,6 +533,7 @@ export class DeliveryService {
     if (d.status !== 'APPROVED') throw new ForbiddenException(d.status === 'SUSPENDED' ? `Account suspended: ${d.suspendedReason || 'see your messages'}` : 'Driver not approved');
     if (isAvailable && (await this.driversWithExpiredDocs(this.db)).has(d.id)) throw new ForbiddenException({ message: 'A required document has expired. Upload a current one to go online.', code: 'DOCS_EXPIRED' });
     const [u] = await this.db.update(drivers).set({ isAvailable, lastLat: lat ?? d.lastLat, lastLng: lng ?? d.lastLng, lastSeenAt: new Date() }).where(eq(drivers.id, d.id)).returning();
+    if (u.lastLat !== null && u.lastLng !== null) this.live.publish({ type: 'courier', driverId: u.id, lat: u.lastLat, lng: u.lastLng, isAvailable, jobIds: [], locationIds: [], at: new Date().toISOString() });
     return u;
   }
 
@@ -506,8 +547,14 @@ export class DeliveryService {
       const remainingKm = target.lat !== undefined && target.lng !== undefined ? Math.round(haversineKm(lat, lng, target.lat, target.lng) * 100) / 100 : null;
       await this.event(j.id, 'LOCATION', { lat, lng, remainingKm });
       // 17.6 route progress refreshes the ETA once the order is on its way
-      if (j.status === 'PICKED_UP' && remainingKm !== null) await this.db.update(deliveryJobs).set({ etaAt: new Date(Date.now() + Math.max(1, Math.round(remainingKm * cfg.travelMinutesPerKm)) * 60_000) }).where(eq(deliveryJobs.id, j.id));
+      // 15.3-R by road when a routing provider is configured
+      if (j.status === 'PICKED_UP' && remainingKm !== null) {
+        const t = await this.routing.travel({ lat, lng }, { lat: target.lat!, lng: target.lng! }, cfg.travelMinutesPerKm);
+        await this.db.update(deliveryJobs).set({ etaAt: new Date(Date.now() + Math.max(1, Math.round(t.minutes)) * 60_000) }).where(eq(deliveryJobs.id, j.id));
+      }
     }
+    // 17.1-R push the position to live maps
+    this.live.publish({ type: 'courier', driverId: d.id, lat, lng, isAvailable: d.isAvailable, jobIds: active.map((j) => j.id), locationIds: Array.from(new Set(active.map((j) => j.locationId))), at: new Date().toISOString() });
     return { ok: true };
   }
 
@@ -595,25 +642,33 @@ export class DeliveryService {
   }
 
   /** 17.9 provider failover: own fleet → connected providers in priority order for the region; then a dispatcher alert. */
-  async failover(job: typeof deliveryJobs.$inferSelect, tx: DbOrTx, reason: string) {
+  async failover(job: typeof deliveryJobs.$inferSelect, tx: DbOrTx, reason: string): Promise<typeof deliveryJobs.$inferSelect> {
     const [loc] = await tx.select().from(locations).where(eq(locations.id, job.locationId)).limit(1);
     const conns = await tx.select().from(providerConnections).where(and(eq(providerConnections.isActive, true), loc?.regionId ? or(isNull(providerConnections.regionId), eq(providerConnections.regionId, loc.regionId)) : isNull(providerConnections.regionId))).orderBy(providerConnections.priority);
     const chain = conns.length ? conns.map((c) => c.provider) : ['PLATFORM', this.provider.name];
     const current = job.fleet === 'PLATFORM' ? 'PLATFORM' : job.provider;
     const tried = new Set([...job.providerChain, current]);
-    const next = chain.find((p) => !tried.has(p) && (p === this.provider.name));
     await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.status, 'OFFERED')));
-    if (next && job.fleet !== 'PARTNER') {
-      const o = job.orderId ? (await tx.select().from(orders).where(eq(orders.id, job.orderId)).limit(1))[0] : null;
-      const q = await this.provider.quote({ externalId: `fo_${job.id}`, pickup: job.pickupAddress as Address, dropoff: job.dropoffAddress as Address, orderValueCents: o?.subtotalCents || 0, tipCents: job.tipCents });
-      await tx.update(deliveryJobs).set({ fleet: 'PARTNER', provider: this.provider.name, providerCostCents: q.feeCents, providerQuoteId: q.providerQuoteId, status: 'QUOTED', driverId: null, providerChain: [...tried], quoteExpiresAt: q.expiresAt }).where(eq(deliveryJobs.id, job.id));
+    // 17.9-M next third-party provider by priority (own fleet → partner A → partner B …); a partner that cannot quote is skipped
+    const o = job.orderId ? (await tx.select().from(orders).where(eq(orders.id, job.orderId)).limit(1))[0] : null;
+    for (const next of chain.filter((p) => p !== 'PLATFORM' && !tried.has(p) && this.providers.has(p))) {
+      let q: Awaited<ReturnType<DeliveryProvider['quote']>>;
+      try {
+        q = await this.providers.get(next).quote({ externalId: `fo_${job.id}`, pickup: job.pickupAddress as Address, dropoff: job.dropoffAddress as Address, orderValueCents: o?.subtotalCents || 0, tipCents: job.tipCents });
+      } catch (e) {
+        tried.add(next);
+        await this.event(job.id, 'FAILOVER_QUOTE_FAILED', { provider: next, error: (e as Error).message }, tx);
+        continue;
+      }
+      await tx.update(deliveryJobs).set({ fleet: 'PARTNER', provider: next, providerCostCents: q.feeCents, providerQuoteId: q.providerQuoteId, providerJobId: null, status: 'QUOTED', driverId: null, providerChain: [...tried], quoteExpiresAt: q.expiresAt }).where(eq(deliveryJobs.id, job.id));
       await this.event(job.id, 'FAILOVER', { from: current, to: next, reason, costCents: q.feeCents }, tx);
       return this.dispatch(job.id, tx);
     }
-    const [u] = await tx.update(deliveryJobs).set({ status: 'UNASSIGNED', providerChain: [...tried] }).where(eq(deliveryJobs.id, job.id)).returning();
+    const [u] = await tx.update(deliveryJobs).set({ status: 'UNASSIGNED', providerChain: [...tried], cancelReason: reason }).where(eq(deliveryJobs.id, job.id)).returning();
     await this.event(job.id, 'DISPATCH_EXHAUSTED', { reason, tried: [...tried] }, tx);
     await tx.insert(opsAlerts).values({ type: 'DISPATCH_FAILED', severity: 'HIGH', title: 'No courier for a delivery', detail: `${reason}. Tried: ${[...tried].join(' → ')}. Assign a courier manually or cancel.`, subjectType: 'delivery_job', subjectId: job.id, organizationId: loc?.organizationId ?? null, locationId: job.locationId, dedupeKey: `dispatch:${job.id}`, ownerRole: 'DISPATCHER', escalateAt: new Date(Date.now() + 10 * 60_000), history: [{ at: new Date().toISOString(), by: null, action: 'RAISED', note: reason }] }).onConflictDoNothing();
-    await this.outbox.publish('delivery.failed', job.id, { orderId: job.orderId, reason, stage: 'offer' }, tx);
+    await this.outbox.publish('delivery.failed', job.id, { orderId: job.orderId, reason, stage: job.fleet === 'PARTNER' ? 'dispatch' : 'offer' }, tx);
+    this.pushJob(u, loc?.organizationId ?? null);
     return u;
   }
 
@@ -801,7 +856,7 @@ export class DeliveryService {
   /** Mock provider simulation: advance requested jobs so pilots can see tracking end to end. */
   async simulateMock(now = new Date()) {
     if (this.provider.name !== 'mock') return 0;
-    const jobs = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.provider, 'mock'), inArray(deliveryJobs.status, ['REQUESTED', 'ASSIGNED', 'PICKED_UP'])));
+    const jobs = await this.db.select().from(deliveryJobs).where(and(inArray(deliveryJobs.provider, ['mock', 'mock-b']), inArray(deliveryJobs.status, ['REQUESTED', 'ASSIGNED', 'PICKED_UP'])));
     let n = 0;
     for (const j of jobs) {
       const ageMin = (now.getTime() - (j.pickedUpAt || j.assignedAt || j.updatedAt).getTime()) / 60_000;

@@ -10,6 +10,7 @@ import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
 import { LedgerService } from '../../core/ledger.service';
 import { redeemGift, restoreGift } from '../growth/gift-tender';
+import { assertCashLimit } from '../customers/limits';
 import { PaymentsService } from '../payments/payments.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { KitchenService } from '../kitchen/kitchen.service';
@@ -82,6 +83,7 @@ export class OrdersService {
     if (user) {
       const [blocked] = await this.db.select({ id: customerRestrictions.id }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, user.sub), eq(customerRestrictions.kind, 'ORDERING_BLOCKED'), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), sql`${customerRestrictions.expiresAt} > now()`))).limit(1);
       if (blocked) throw new ForbiddenException({ message: 'Ordering is paused on this account. See Account → Help to appeal.', code: 'ACCOUNT_RESTRICTED' });
+      await assertCashLimit(this.db, user.sub, q.totalCents); // 10.8-L limit set after the quote was priced
       if (input.savedPaymentMethodId) {
         const [pm] = await this.db.select().from(paymentMethods).where(and(eq(paymentMethods.id, input.savedPaymentMethodId), eq(paymentMethods.userId, user.sub))).limit(1);
         if (!pm) throw new BadRequestException('Saved card not found');
@@ -134,7 +136,8 @@ export class OrdersService {
           promiseAt: q.promiseAt,
           pickupCode: q.fulfillmentType === 'PICKUP' ? shortCode(4) : null,
           specialInstructions: input.specialInstructions ?? null,
-          tableNumber: q.fulfillmentType === 'DINE_IN' ? input.tableNumber ?? null : null,
+          // 14.8-K a kiosk order keeps its pager number for take-away too
+          tableNumber: q.fulfillmentType === 'DINE_IN' || q.channel === 'KIOSK' ? input.tableNumber ?? null : null,
           utensils: !!input.utensils,
           deliveryAddress: snap.deliveryAddress,
           groupOrderId: input.groupOrderId ?? null,

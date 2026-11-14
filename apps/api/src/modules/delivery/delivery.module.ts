@@ -7,10 +7,16 @@ import { DeliveryAdminService } from './delivery-admin.service';
 import { DoorDashDriveProvider } from './providers/doordash-drive.provider';
 import { MockDeliveryProvider } from './providers/mock-delivery.provider';
 import { UberDirectProvider } from './providers/uber-direct.provider';
+import { DeliveryProviderRegistry } from './providers/provider-registry';
+import { RoutingService } from './routing.service';
+import { LiveService } from './live.service';
+import { CourierFilesService } from './courier-files.service';
+import { DeliveryFollowupsController } from './delivery-followups.controller';
+import { StorageService } from '../../core/storage.service';
 
 @Global()
 @Module({
-  controllers: [DeliveryController],
+  controllers: [DeliveryController, DeliveryFollowupsController],
   providers: [
     MockDeliveryProvider,
     DoorDashDriveProvider,
@@ -25,9 +31,14 @@ import { UberDirectProvider } from './providers/uber-direct.provider';
       },
       inject: [MockDeliveryProvider, DoorDashDriveProvider, UberDirectProvider],
     },
+    DeliveryProviderRegistry,
+    RoutingService,
+    LiveService,
+    StorageService,
     DeliveryService,
     DeliveryAdminService,
+    CourierFilesService,
   ],
-  exports: [DeliveryService, DeliveryAdminService],
+  exports: [DeliveryService, DeliveryAdminService, DeliveryProviderRegistry, RoutingService, LiveService, StorageService],
 })
 export class DeliveryModule {}

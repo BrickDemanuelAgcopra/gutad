@@ -88,6 +88,10 @@ export const closePeriods = pgTable('close_periods', {
   checklist: jsonb('checklist').notNull().default([]),
   closedById: uuid('closed_by_id'),
   closedAt: ts('closed_at'),
+  /** 20.7-L audited override: who reopened a closed month, when and why */
+  reopenedById: uuid('reopened_by_id'),
+  reopenedAt: ts('reopened_at'),
+  reopenReason: text('reopen_reason'),
   createdAt: createdAt(),
 }, (t) => [uniqueIndex('close_periods_period').on(t.period)]);
 
