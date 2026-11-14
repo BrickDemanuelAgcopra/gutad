@@ -1,10 +1,10 @@
 'use client';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DEFAULT_APPROVAL_THRESHOLDS } from '@gutad/shared';
-import { api, money } from '@/lib/api';
+import { api, API_URL, money, session } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
-import { Alert, Button, Card, Input } from '@/components/ui';
+import { Alert, Button, Card, Input, Select } from '@/components/ui';
 import { askReason, pendingNotice, SectionTitle } from '@/components/admin-ui';
 
 export default function AdminSettings() {
@@ -51,15 +51,27 @@ export default function AdminSettings() {
 
 type ChannelStatus = { provider: string; from?: string | null; fromName?: string; replyTo?: string | null; configured: boolean };
 
-/** Email/SMS provider status plus a test send, so a new Brevo/Twilio setup can be checked without placing an order. */
+/** Email/SMS provider status, template previews and test sends, so a new Brevo/Twilio setup can be checked without placing an order. */
 function MessagingCard() {
   const { data } = useApi<{ email: ChannelStatus; sms: ChannelStatus }>('/admin/messaging');
+  const { data: templates } = useApi<{ key: string; subject: string }[]>('/admin/messaging/templates');
   const { run, error, busy } = useAction();
   const [to, setTo] = useState({ EMAIL: '', SMS: '' });
+  const [template, setTemplate] = useState('');
+  const [html, setHtml] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  useEffect(() => {
+    if (!template) { setHtml(null); return; }
+    let live = true;
+    fetch(`${API_URL}/admin/messaging/templates/${encodeURIComponent(template)}/html`, { headers: session.token() ? { Authorization: `Bearer ${session.token()}` } : {} })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`Preview failed (${r.status})`))))
+      .then((h) => live && setHtml(h))
+      .catch((e: Error) => live && setResult(e.message));
+    return () => { live = false; };
+  }, [template]);
   const send = (channel: 'EMAIL' | 'SMS') => run(async () => {
     setResult(null);
-    const r = await api.post<{ provider: string; id?: string; note?: string }>('/admin/messaging/test', { channel, to: to[channel] });
+    const r = await api.post<{ provider: string; id?: string; note?: string }>('/admin/messaging/test', { channel, to: to[channel], template: template || undefined });
     setResult(r.note || `Accepted by ${r.provider}${r.id ? ` (id ${r.id})` : ''}. Check the inbox or phone.`);
   });
   const row = (label: string, channel: 'EMAIL' | 'SMS', st?: ChannelStatus) => (
@@ -79,11 +91,16 @@ function MessagingCard() {
     <Card title="Messaging">
       {error && <Alert>{error}</Alert>}
       {result && <Alert tone="info">{result}</Alert>}
-      <div className="grid gap-3 md:grid-cols-2">
+      <Select label="Template (for preview and test sends)" value={template} onChange={(e) => setTemplate(e.target.value)}>
+        <option value="">Plain delivery test</option>
+        {templates?.map((t) => <option key={t.key} value={t.key}>{t.key}: {t.subject}</option>)}
+      </Select>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
         {row('Email', 'EMAIL', data?.email)}
         {row('SMS', 'SMS', data?.sms)}
       </div>
-      <p className="mt-2 text-xs text-ink-500">Providers and keys are set in the server environment (EMAIL_PROVIDER=brevo, BREVO_API_KEY, SMS_PROVIDER=twilio, TWILIO_*) and take effect after a restart.</p>
+      {html && <iframe title="Email preview" sandbox="" srcDoc={html} className="mt-3 h-[640px] w-full rounded border border-ink-100 bg-ink-50" />}
+      <p className="mt-2 text-xs text-ink-500">Previews and test sends use sample data. Providers and keys are set in the server environment (EMAIL_PROVIDER=brevo, BREVO_API_KEY, SMS_PROVIDER=twilio, TWILIO_*) and take effect after the api and worker are recreated.</p>
     </Card>
   );
 }

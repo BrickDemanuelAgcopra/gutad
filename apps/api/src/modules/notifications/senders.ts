@@ -1,19 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { loadConfig } from '../../config/config';
+import { blocksFromText, renderEmailHtml } from './email-layout';
 import type { Rendered } from './templates';
 
 const TIMEOUT_MS = 15_000;
 
-const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-/** Plain-text body → minimal HTML: escaped, links clickable, line breaks kept. */
-export function textToHtml(text: string): string {
-  const body = escapeHtml(text)
-    .replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)])/g, '<a href="$1">$1</a>')
-    .split(/\n{2,}/)
-    .map((p) => `<p style="margin:0 0 12px">${p.replace(/\n/g, '<br>')}</p>`)
-    .join('');
-  return `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1f2328">${body}</body></html>`;
+/** Full branded HTML for an email: the template's designed blocks, or its text in the same layout. */
+export function emailHtml(r: Rendered): string {
+  const cfg = loadConfig();
+  return renderEmailHtml(r.email || blocksFromText(r.subject, r.text), { webUrl: cfg.PUBLIC_WEB_URL, supportEmail: cfg.EMAIL_REPLY_TO || 'support@gutad.io', subject: r.subject });
 }
 
 /** Twilio wants E.164; tolerate spaces, dashes and brackets in stored numbers. */
@@ -46,7 +41,7 @@ export class Senders {
           ...(cfg.EMAIL_REPLY_TO ? { replyTo: { email: cfg.EMAIL_REPLY_TO } } : {}),
           subject: r.subject,
           textContent: r.text,
-          htmlContent: textToHtml(r.text),
+          htmlContent: emailHtml(r),
         }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
@@ -55,7 +50,7 @@ export class Senders {
       return { provider: 'brevo', id: j.messageId };
     }
     if (cfg.EMAIL_PROVIDER === 'smtp' && cfg.SMTP_URL.startsWith('http')) {
-      const res = await fetch(cfg.SMTP_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: cfg.EMAIL_FROM, to, subject: r.subject, text: r.text }), signal: AbortSignal.timeout(TIMEOUT_MS) });
+      const res = await fetch(cfg.SMTP_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: cfg.EMAIL_FROM, to, subject: r.subject, text: r.text, html: emailHtml(r) }), signal: AbortSignal.timeout(TIMEOUT_MS) });
       if (!res.ok) throw new Error(`email relay ${res.status}`);
       return { provider: 'smtp' };
     }

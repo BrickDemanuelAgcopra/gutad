@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { and, asc, desc, eq, isNull, lt, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
-import { locations, notifications, orders, orgMemberships, outboxEvents, users } from '../../db/schema';
+import { locations, notifications, orders, orgMemberships, outboxEvents, reservations, users, waitlistEntries } from '../../db/schema';
 import { NotifyService } from '../../core/notify.service';
 import { JwtPayload } from '../../common/auth';
 import { render } from './templates';
@@ -42,6 +42,10 @@ export class NotificationsService {
   private async handle(topic: string, aggregateId: string, payload: Record<string, unknown>) {
     // topic + aggregateId let the mobile app open the right screen when a push is tapped.
     const p: Record<string, unknown> = { ...payload, topic, aggregateId };
+    if (!p.timezone) {
+      const tz = await this.timezoneFor(topic, aggregateId, p).catch(() => null);
+      if (tz) p.timezone = tz;
+    }
     const userId = (p.userId as string) || null;
     const email = (p.email as string) || null;
     const phone = (p.phone as string) || null;
@@ -108,6 +112,18 @@ export class NotificationsService {
     }
   }
 
+  /** The location's IANA zone, so emails show local times: from locationId, the order, or the reservation/waitlist entry. */
+  private async timezoneFor(topic: string, aggregateId: string, p: Record<string, unknown>): Promise<string | null> {
+    let locationId = (p.locationId as string) || null;
+    const orderId = (p.orderId as string) || (topic.startsWith('order.') ? aggregateId : null);
+    if (!locationId && orderId) [{ locationId = null } = {}] = await this.db.select({ locationId: orders.locationId }).from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!locationId && topic.startsWith('reservation.')) [{ locationId = null } = {}] = await this.db.select({ locationId: reservations.locationId }).from(reservations).where(eq(reservations.id, aggregateId)).limit(1);
+    if (!locationId && topic.startsWith('waitlist.')) [{ locationId = null } = {}] = await this.db.select({ locationId: waitlistEntries.locationId }).from(waitlistEntries).where(eq(waitlistEntries.id, aggregateId)).limit(1);
+    if (!locationId) return null;
+    const [loc] = await this.db.select({ timezone: locations.timezone }).from(locations).where(eq(locations.id, locationId)).limit(1);
+    return loc?.timezone || null;
+  }
+
   private async resolveTarget(topic: string, aggregateId: string, userId: string | null, email: string | null, phone: string | null, p: Record<string, unknown>) {
     if (userId || email || phone) return { userId, email, phone };
     // fall back to the order's guest contact when the event carries only an order id
@@ -144,7 +160,7 @@ export class NotificationsService {
       const [claimed] = await this.db.update(notifications).set({ status: 'SENDING' }).where(and(eq(notifications.id, row.id), eq(notifications.status, 'QUEUED'))).returning();
       if (!claimed) continue;
       try {
-        const r = render(row.template, row.payload as Record<string, unknown>);
+        const r = render(row.template, row.payload as Record<string, unknown>, { recipient: row.recipient });
         if (row.channel === 'EMAIL') await this.senders.email(row.recipient, r);
         else if (row.channel === 'SMS') await this.senders.sms(row.recipient, r);
         else if (row.channel === 'PUSH') await this.senders.push(row.recipient, r, pushData(row.payload as Record<string, unknown>));
