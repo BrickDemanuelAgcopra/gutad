@@ -42,7 +42,9 @@ export class MerchantsService implements OnModuleInit {
         }
         p.changes = p.changes || {};
         const [before] = await this.db.select().from(legalSellers).where(eq(legalSellers.id, p.sellerId)).limit(1);
-        const [row] = await this.db.update(legalSellers).set(p.changes).where(eq(legalSellers.id, p.sellerId)).returning();
+        // 19.9 cooling-off: payouts to the new account wait `finance.controls.bankChangeHoldDays`
+        const holdDays = (await this.settings.getObject('finance.controls', { bankChangeHoldDays: 3 })).bankChangeHoldDays;
+        const [row] = await this.db.update(legalSellers).set({ ...p.changes, ...(holdDays > 0 ? { payoutHoldUntil: new Date(Date.now() + holdDays * 86400_000) } : {}) }).where(eq(legalSellers.id, p.sellerId)).returning();
         await this.audit.log({ organizationId: req.organizationId, actorId: req.decidedById, action: 'seller.bank_change', entityType: 'legal_seller', entityId: p.sellerId, before: { beneficiaryName: before?.beneficiaryName, bankLast4: before?.bankLast4, taxId: before?.taxId }, after: p.changes, reason: req.reason });
         return { id: row.id, beneficiaryName: row.beneficiaryName, bankLast4: row.bankLast4 };
       },

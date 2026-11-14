@@ -94,6 +94,9 @@ export const purchaseOrders = pgTable('purchase_orders', {
   status: text('status').notNull().default('DRAFT'), // DRAFT | ORDERED | RECEIVED | CANCELED
   totalCents: integer('total_cents').notNull().default(0),
   receivedAt: ts('received_at'),
+  /** 20.6 supplier bill: due date and payment */
+  billDueAt: ts('bill_due_at'),
+  billPaidAt: ts('bill_paid_at'),
   createdAt: createdAt(),
 });
 

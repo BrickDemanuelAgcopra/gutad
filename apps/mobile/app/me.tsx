@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CardField, type CardToken } from '@/card-field';
 import { Alert, ScrollView, Switch, Text, View } from 'react-native';
 import { api, when } from '@/api';
 import { useAction, useApi, useSession } from '@/hooks';
@@ -48,7 +49,7 @@ function Restrictions() {
 function Payments() {
   const { data, reload } = useApi<{ id: string; brand: string | null; last4: string | null; expMonth: number | null; expYear: number | null; isDefault: boolean }[]>('/me/payment-methods');
   const { run, error } = useAction();
-  const [num, setNum] = useState('');
+  const [card, setCard] = useState<CardToken | null>(null);
   if (!data) return <Loading />;
   return (
     <>
@@ -63,9 +64,9 @@ function Payments() {
         ))}
       </Card>
       <Card title="Add a card">
-        <Input label="Card number" keyboardType="number-pad" value={num} onChangeText={setNum} />
+        <CardField value={card} onChange={setCard} />
         <ErrorText msg={error} />
-        <Button title="Save card" disabled={num.replace(/\D/g, '').length < 12} onPress={() => run(async () => { const d = num.replace(/\D/g, ''); await api.post('/me/payment-methods', { paymentMethodId: `mock_pm_${d.slice(-4)}`, last4: d.slice(-4), brand: d.startsWith('4') ? 'visa' : d.startsWith('5') ? 'mastercard' : 'card' }); setNum(''); reload(); })} />
+        <Button title="Save card" disabled={!card} onPress={() => run(async () => { if (!card) return; await api.post('/me/payment-methods', { paymentMethodId: card.token, last4: card.last4, brand: card.brand }); await reload(); })} />
         <Muted>Your card is stored by our payment processor. Gutad keeps only a token and the last 4 digits.</Muted>
       </Card>
     </>

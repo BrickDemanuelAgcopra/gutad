@@ -9,10 +9,11 @@ import { shortCode } from '../../common/utils';
 import { ApprovalsService } from '../security/approvals.service';
 import { AuditService } from '../../core/audit.service';
 import { SettingsService } from '../../core/settings.service';
+import { LedgerService } from '../../core/ledger.service';
 
 @Injectable()
 export class KitchenService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService) {}
 
   onModuleInit() {
     this.approvals.register('PURCHASE_ORDER', {
@@ -141,7 +142,25 @@ export class KitchenService implements OnModuleInit {
     const bagCount = suggestBags(lineFlags);
     await tx.insert(packingTasks).values({ orderId, bagCode, checklist, handling, bagCount, bags: this.buildBags(bagCode, bagCount, handling) }).onConflictDoNothing();
     await this.consumeIngredients(lines, loc?.kitchenId ?? null, tx);
+    if (loc?.platformOperated) await this.postCogs(o, lines, items, tx);
     return tickets;
+  }
+
+  /** 20.3 Gutad-operated kitchens: cost of goods from recipe ingredients, posted when the order is fired. */
+  private async postCogs(o: typeof orders.$inferSelect, lines: (typeof orderLines.$inferSelect)[], items: { id: string; recipeId: string | null }[], tx: DbOrTx) {
+    const recipeIds = [...new Set(items.map((i) => i.recipeId).filter((x): x is string => !!x))];
+    if (!recipeIds.length) return;
+    const rl = await tx.select({ recipeId: recipeLines.recipeId, qty: recipeLines.quantity, cost: ingredients.costCentsPerUnit }).from(recipeLines).innerJoin(ingredients, eq(ingredients.id, recipeLines.ingredientId)).where(inArray(recipeLines.recipeId, recipeIds));
+    const rs = await tx.select({ id: recipes.id, y: recipes.yieldPortions }).from(recipes).where(inArray(recipes.id, recipeIds));
+    let cents = 0;
+    for (const l of lines) {
+      const r = items.find((i) => i.id === l.menuItemId)?.recipeId;
+      if (!r) continue;
+      const per = rl.filter((x) => x.recipeId === r).reduce((a, x) => a + x.qty * x.cost, 0) / (rs.find((x) => x.id === r)?.y || 1);
+      cents += per * l.quantity;
+    }
+    cents = Math.round(cents);
+    if (cents > 0) await this.ledger.post({ orderId: o.id, currency: o.currency }, [{ account: 'PLATFORM_EXPENSE_COGS', debitCents: cents, organizationId: o.organizationId, locationId: o.locationId, memo: `COGS ${o.number}` }, { account: 'INVENTORY', creditCents: cents, locationId: o.locationId, memo: `Ingredients used ${o.number}` }], tx);
   }
 
   private buildBags(bagCode: string, count: number, handling: string[]) {
@@ -677,7 +696,13 @@ export class KitchenService implements OnModuleInit {
         await tx.insert(ingredientStock).values({ kitchenId: po.kitchenId, ingredientId: l.ingredientId, onHand: qty }).onConflictDoUpdate({ target: [ingredientStock.kitchenId, ingredientStock.ingredientId], set: { onHand: sql`${ingredientStock.onHand} + ${qty}` } });
         await tx.update(ingredients).set({ costCentsPerUnit: l.unitCostCents }).where(eq(ingredients.id, l.ingredientId));
       }
-      const [u] = await tx.update(purchaseOrders).set({ status: 'RECEIVED', receivedAt: new Date() }).where(eq(purchaseOrders.id, poId)).returning();
+      const [u] = await tx.update(purchaseOrders).set({ status: 'RECEIVED', receivedAt: new Date(), billDueAt: po.billDueAt ?? new Date(Date.now() + 30 * 86400_000) }).where(eq(purchaseOrders.id, poId)).returning();
+      // 20.6 Gutad-operated kitchens: the supplier bill becomes a payable (inventory in, accounts payable)
+      const [own] = await tx.select({ id: locations.id }).from(locations).where(and(eq(locations.kitchenId, po.kitchenId), eq(locations.platformOperated, true))).limit(1);
+      if (own) {
+        const total = Math.round(lines.reduce((a, l) => a + (received.find((r) => r.lineId === l.id)?.receivedQty ?? l.quantity) * l.unitCostCents, 0));
+        if (total > 0) await this.ledger.post({ currency: 'USD' }, [{ account: 'INVENTORY', debitCents: total, memo: `PO ${po.id.slice(0, 8)} received` }, { account: 'SUPPLIER_PAYABLE', partyId: po.supplier, creditCents: total, memo: `Bill: ${po.supplier}` }], tx);
+      }
       return u;
     });
   }

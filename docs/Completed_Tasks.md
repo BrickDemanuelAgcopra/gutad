@@ -410,3 +410,48 @@ Verification:
 - **17.9** Provider failover: own fleet → the configured partner provider (per region, by priority), with the provider chain recorded on the job. **API W**
 - **17.10** Analysis by zone, provider or location: on-time share, courier wait at pickup, drive time, distance, cost per delivery, total cost, fees and subsidy. **W**
 
+## Phase H: payments, settlement, accounting (shipped 2026-11-13)
+
+Verification:
+- Typecheck is clean for API, web and mobile; `next build`: OK.
+- `npm run smoke` on a fresh database: **348/348 checks pass**, including 19 new Phase H checks in `scripts/smoke-admin-h.mjs`.
+- Migration `0013_finance_controls.sql`:
+  - new ledger accounts DISPUTE_RECEIVABLE, DEFERRED_REVENUE, PLATFORM_REVENUE_BREAKAGE, SUPPLIER_PAYABLE, INVENTORY, PLATFORM_ADJUSTMENTS
+  - new tables `payment_failures`, `disputes`, `payout_batches`, `statement_disputes`, `gl_accounts`, `close_periods`, `budgets`
+  - new columns on payments (split, retry count, last failure), refunds (allocation), payouts (batch), legal sellers (payout hold until) and purchase orders (bill due, bill paid)
+- New `FinanceModule` (`FinanceService` for payments operations, `AccountingService`); `SettlementService` gains batches, holds, reprocessing, transfer reconciliation, adjustments, statement disputes, ledger explorer, liabilities and royalty statements. Shared `packages/shared/src/finance.ts`.
+- **Fixed:** a merchant statement subtracted the previous payout again, so the next payout was short by the last payout's amount. Payout postings are now excluded from statements (a returned transfer re-opens the same payout instead).
+- Also done here: 2.6-P (payout release through the approval engine), 6.3-S (royalty accrual uses the brand's royalty rules), 16.7-P (courier payouts released in batches).
+
+### 18. Payments & transaction operations
+- **18.1** Payments console: search by order, intent, charge or id; status and purpose filters; 30-day totals; detail with split, refunds, dispute and ledger lines. Failed attempts (declines) are recorded even though the order rolls back. **W** Payments. **M** Ops → Finance.
+- **18.2** Enabled payment methods per region and channel (setting `payments.methods`); public endpoint for checkout; credits and points are refused where disabled (`METHOD_DISABLED`). **API W**
+- **18.3** Each order payment records its split (card, credits, points; gift balance with 25.9). **API W**
+- **18.4** Capture retry for open authorizations on accepted orders, capped (`finance.controls.maxCaptureRetries`); duplicate-charge report (same customer and amount within 5 minutes). **API W**
+- **18.5** Partial refunds are allocated back to the card and to credits in proportion to how the order was paid. **API W**
+- **18.6** Processor settlement file upload (CSV) and an unresolved-payments view (captured but unsettled, stale authorizations, unmatched lines). **W M**
+- **18.7** Disputes table from the processor webhook with an evidence deadline; the withdrawn funds move to DISPUTE_RECEIVABLE; the evidence packet comes from the order timeline (audited proof access); WON returns the funds, LOST books the loss to Gutad or the merchant. **API W M**
+- **18.8** Webhook monitor (rate, failures, pending, lag) and replay with a dry run first; replays are audited. **W M**
+- **18.9** Card numbers are never typed into Gutad: web and mobile checkout, saved cards, reservations, tickets and event deposits use a token field (test-card picker in test mode); the console masks payment-method ids and never returns client secrets. **W M**
+
+### 19. Merchant settlement, royalties & courier payouts
+- **19.1** Ledger explorer (account, party, order, batch, date) with totals and batch drill-down. **W**
+- **19.2** Merchant statements itemized by category (sales, tips, commission, promotions, refunds, credits, cover fees, delivery, royalties, adjustments, disputes). **W** merchant Finance, **M** merchant Finance.
+- **19.3** Brand royalty statements for a period from the brand's royalty rules, by channel. **W**
+- **19.4** Payout batches: eligible payouts are batched; above `approvals.thresholds.payoutCents` a PAYOUT_RELEASE approval is requested and a different person releases it. The weekly run batches automatically; a batch over the limit waits as a draft until finance requests release. **API W M**
+- **19.5** Processor transfer report reconciliation: a returned transfer re-opens the payable on the same payout; unknown transfers go to the unmatched queue. **W**
+- **19.6** Held or failed payouts can be reprocessed with a reason (attempts reset); held payouts are released automatically when their hold ends. **W M**
+- **19.7** Manual ledger-posted adjustments with a reason, and merchant statement disputes that finance accepts (with an adjustment) or rejects. **W M**
+- **19.8** Liabilities vs revenue: merchant, courier, provider, supplier, tax, credit, deposit and deferred-revenue balances; largest merchant balances; bank and clearing. **W M**
+- **19.9** Bank-detail changes (two-person, from Phase A) now start a cooling-off hold (`finance.controls.bankChangeHoldDays`, 3): payouts to the new account are HELD until it ends. **API W M**
+
+### 20. Accounting, treasury & financial control
+- **20.1** Chart-of-accounts mapping (ledger account → GL code and name per legal entity, with defaults) and a journal export in a general-journal CSV layout. **W**
+- **20.2** P&L by location, legal entity, channel or brand (brand splits order-level lines by the brand's share of the order). **W**
+- **20.3** Cost report: food cost (COGS posted from recipes when Gutad-operated kitchens fire an order), labor, delivery and processing. **W**
+- **20.4** Credit liability report (outstanding, expiring, by funder, ledger balance) and breakage: expired credits post to breakage revenue (daily job, or on demand). Gift-card liability lands with 25.9. **W**
+- **20.5** Straight-line deferred-revenue schedule for subscriptions and memberships, net of refunds, with an idempotent true-up posting. **W**
+- **20.6** Supplier bills from received purchase orders at Gutad-operated kitchens (inventory and accounts payable), bill payment, and receivables / payables aging. **W**
+- **20.7** 14-day cash forecast, bank reconciliation view, and a month-end close checklist with automatic checks that blocks closing until everything is done. **W**
+- **20.8** Budgets by cost center and category with budget vs actual, the approval limits in force, and a financial audit export (journal and finance-related audit log). **W**
+

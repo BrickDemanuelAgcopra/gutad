@@ -17,7 +17,6 @@ The plan is in [`ADMIN-PLATFORM-PLAN.md`](ADMIN-PLATFORM-PLAN.md). Finished work
 
 Phase A shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 - [ ] 2.4c-M [new] SSO sign-in on mobile (system-browser OIDC flow via expo-auth-session). Mobile staff use password + MFA today · M
-- [ ] 2.6-P [improve] Payout release goes through the approval engine (`PAYOUT_RELEASE`, two-person over `approvals.thresholds.payoutCents`). The engine and threshold are in place; the hook-up lands with 19.4 payout batches · API W M
 
 ---
 
@@ -33,7 +32,6 @@ Phase B shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 Phase C shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 - [ ] 5.1-L [improve] Location picker and approval limit when inviting merchant staff from the admin merchant page; the API accepts them, the admin form does not show them yet · W
-- [ ] 6.3-S [improve] Settlement royalty accrual (`ProgramsService.accrueRoyalties`) uses the brand royalty rules instead of the flat bps (with 19.3) · API
 - [ ] 4.3-T [verify] Smoke check for document expiry (needs a document upload in the smoke run) · API
 
 ---
@@ -72,7 +70,6 @@ Phase F shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 Phase G shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 - [ ] 15.3-R [improve] Road-network travel times from a routing provider (today: straight-line distance × minutes per km per zone) · API
 - [ ] 16.2-U [improve] Direct file upload for courier documents to storage (today: a link to the scanned file) · API W M
-- [ ] 16.7-P [improve] Courier payout runs from the payable balance (with 19.4 payout release) · API W M
 - [ ] 17.1-R [new] Push-based live map updates (today: polling every 10–15 seconds) · API W M
 - [ ] 17.9-M [improve] More than one partner provider at a time: failover between two configured third-party providers (today: own fleet → the configured provider) · API
 
@@ -80,37 +77,12 @@ Phase G shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase H: payments, settlement, accounting
 
-### 18. Payments & transaction operations
-- [ ] 18.1 [improve] Payments console: authorizations, captures, voids, refunds and failures with filters · API W M
-- [ ] 18.2 [new] Enabled payment methods per region or channel (settings), shown at checkout · API W
-- [ ] 18.3 [improve] Combined gift balance + credits + card split recorded per payment (with 25.9) · API W
-- [ ] 18.4 [improve] Retry controls on failed payments (capped), duplicate prevention report · API W
-- [ ] 18.5 [improve] Partial refunds allocated back to original methods (card / credits / gift balance) · API W
-- [ ] 18.6 [improve] Processor settlement file upload and unresolved-payment queue in admin · API W M
-- [ ] 18.7 [new] Disputes table: deadlines, evidence submission status, outcome, ledger posting · API W M
-- [ ] 18.8 [improve] Webhook monitor (rate, failures, lag) and safe replay with a dry-run check · API W M
-- [ ] 18.9 [improve] Card data never shown or typed raw; web checkout card field only uses the provider token flow, and masked display everywhere · W M
-
-### 19. Merchant settlement, royalties & courier payouts
-- [ ] 19.1 [improve] Ledger explorer (filter by account, party, order) · API W
-- [ ] 19.2 [improve] Merchant earnings statement with contractual deductions itemized · API W M
-- [ ] 19.3 [improve] Brand royalty and creator revenue-share statements (uses 6.3 rules) · API W M
-- [ ] 19.4 [new] Payout batches with approval (two-person over threshold) before submission · API W M
-- [ ] 19.5 [improve] Payout reconciliation against processor transfer reports and bank lines · API W
-- [ ] 19.6 [improve] Failed or held payouts: manual reprocess, release after bank info is corrected · API W M
-- [ ] 19.7 [new] Manual adjustments with a reason (ledger-posted) and merchant statement disputes · API W M
-- [ ] 19.8 [improve] Liabilities report: merchant, driver, provider payables vs platform revenue · API W M
-- [ ] 19.9 [new] Bank-account change verification: two-person approval + cooling-off hold before funds release · API W M
-
-### 20. Accounting, treasury & financial control
-- [ ] 20.1 [new] Chart-of-accounts mapping (ledger account → GL code per legal entity) and journal export · API W
-- [ ] 20.2 [new] P&L by location, brand, channel and legal entity · API W M
-- [ ] 20.3 [improve] Food, labor, delivery and processing cost reporting (COGS posted from recipes) · API W
-- [ ] 20.4 [new] Gift-card liability and outstanding promotional credit report; credit-expiry breakage posting · API W
-- [ ] 20.5 [new] Subscription revenue recognition schedule (deferred revenue) and refund adjustments · API W
-- [ ] 20.6 [new] Supplier accounts payable (bills from 21.8) and corporate accounts receivable aging · API W
-- [ ] 20.7 [new] Cash forecast, bank reconciliation view, month-end close checklist · API W M
-- [ ] 20.8 [new] Budgets by cost center, approval limits view, financial audit export (ledger + audit CSV) · API W
+Phase H shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 18.3-G [improve] Gift balance in the recorded payment split and in refund allocation (ships with 25.9 gift cards) · API W
+- [ ] 20.4-G [improve] Gift-card liability in the liability report (with 25.9) · API W
+- [ ] 18.9-S [new] Mount the processor's hosted card field / payment sheet (Stripe Elements on web, PaymentSheet on mobile) when the live processor is configured; test mode uses the test-card picker · W M
+- [ ] 20.1-L [new] Live push of journals to the general ledger once accounting-software credentials exist (today: CSV export in a general-journal layout) · API
+- [ ] 20.7-L [improve] Lock ledger postings dated in a closed month (today: the close is recorded and checked, postings are never back-dated) · API
 
 ---
 

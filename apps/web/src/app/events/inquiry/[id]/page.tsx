@@ -1,4 +1,5 @@
 'use client';
+import { CardField, type CardToken } from '@/components/card-field';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { api, money, when } from '@/lib/api';
@@ -8,7 +9,7 @@ import { Alert, Badge, Button, Card, Input, Spinner, statusTone } from '@/compon
 export default function InquiryPage() {
   const { id } = useParams<{ id: string }>();
   const { data: i, reload } = useApi<{ id: string; status: string; eventDate: string; partySize: number; finalHeadcount: number | null; proposalCents: number | null; depositCents: number; proposalExpiresAt: string | null; contractUrl: string | null; balanceCents: number }>(`/event-inquiries/${id}`, { poll: 15000 });
-  const [card, setCard] = useState('');
+  const [card, setCard] = useState<CardToken | null>(null);
   const [head, setHead] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   if (!i) return <Spinner />;
@@ -21,8 +22,8 @@ export default function InquiryPage() {
           <div className="mt-3 space-y-2">
             <p className="text-sm">Proposal: <b>{money(i.proposalCents || 0)}</b> with a <b>{money(i.depositCents)}</b> deposit. Valid until {when(i.proposalExpiresAt)}.</p>
             {i.contractUrl && <a className="text-sm underline" href={i.contractUrl} target="_blank" rel="noreferrer">Review contract</a>}
-            <Input placeholder="Card number for deposit" value={card} onChange={(e) => setCard(e.target.value)} />
-            <Button onClick={async () => { try { await api.post(`/event-inquiries/${i.id}/accept`, { paymentMethodId: `mock_pm_${card.slice(-4) || '4242'}` }); setMsg('Space confirmed!'); reload(); } catch (e) { setMsg((e as Error).message); } }}>Accept & pay deposit</Button>
+            <CardField label="Card for the deposit" value={card} onChange={setCard} />
+            <Button onClick={async () => { try { await api.post(`/event-inquiries/${i.id}/accept`, { paymentMethodId: card?.token }); setMsg('Space confirmed!'); reload(); } catch (e) { setMsg((e as Error).message); } }}>Accept & pay deposit</Button>
           </div>
         )}
         {i.status === 'CONFIRMED' && (

@@ -40,6 +40,8 @@ export default function RootLayout() {
         <Stack.Screen name="ops/kitchens" options={{ title: 'Kitchen operations' }} />
         <Stack.Screen name="ops/delivery" options={{ title: 'Delivery & dispatch' }} />
         <Stack.Screen name="ops/couriers" options={{ title: 'Couriers' }} />
+        <Stack.Screen name="ops/finance" options={{ title: 'Finance' }} />
+        <Stack.Screen name="merchant/finance" options={{ title: 'Finance' }} />
         <Stack.Screen name="ops/support" options={{ title: 'Support queue' }} />
         <Stack.Screen name="me" options={{ title: 'My account' }} />
         <Stack.Screen name="security" options={{ title: 'Security' }} />

@@ -25,6 +25,8 @@ export const legalSellers = pgTable('legal_sellers', {
   payoutProvider: text('payout_provider').notNull().default('mock'),
   payoutAccountId: text('payout_account_id'),
   payoutOnboardingState: text('payout_onboarding_state').notNull().default('NOT_STARTED'),
+    /** 19.9 payouts held until this time after a bank-detail change (cooling-off) */
+    payoutHoldUntil: ts('payout_hold_until'),
   bankLast4: text('bank_last4'),
   beneficiaryName: text('beneficiary_name'),
   billingContact: text('billing_contact'),

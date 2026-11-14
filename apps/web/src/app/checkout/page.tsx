@@ -7,6 +7,7 @@ import { api, money, newIdempotencyKey, when } from '@/lib/api';
 import { cartSubtotal, useCart } from '@/lib/cart';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input, Select, Textarea } from '@/components/ui';
+import { CardField, type CardToken } from '@/components/card-field';
 
 type Fulfillment = 'PICKUP' | 'DELIVERY' | 'DINE_IN';
 
@@ -20,7 +21,7 @@ export default function CheckoutPage() {
   const [promo, setPromo] = useState('');
   const [address, setAddress] = useState({ line1: '', city: '', region: '', postalCode: '', instructions: '', lat: 0, lng: 0 });
   const [guest, setGuest] = useState({ name: '', email: '', phone: '' });
-  const [card, setCard] = useState('4242424242424242');
+  const [card, setCard] = useState<CardToken | null>(null);
   const [savedCardId, setSavedCardId] = useState<string>('');
   const [saveCard, setSaveCard] = useState(false);
   const [declined, setDeclined] = useState(false);
@@ -83,10 +84,10 @@ export default function CheckoutPage() {
       if (!user) {
         if (!guest.email || !guest.name) throw new Error('Name and email are required for guest checkout');
       }
-      const digits = card.replace(/\D/g, '');
+      if (!(user && savedCardId && savedCardId !== 'new') && !card) throw new Error('Choose a card');
       const useSaved = !!user && !!savedCardId && savedCardId !== 'new';
-      if (user && saveCard && !useSaved) await api.post('/me/payment-methods', { paymentMethodId: `mock_pm_${digits.slice(-4)}`, last4: digits.slice(-4), brand: digits.startsWith('4') ? 'visa' : 'card' }).catch(() => undefined);
-      const order = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, tableNumber: fulfillment === 'DINE_IN' ? table || undefined : undefined, ...(useSaved ? { savedPaymentMethodId: savedCardId } : { paymentMethodId: `mock_pm_${digits.slice(-4)}` }), guest: user ? undefined : guest }, idem.current);
+      if (user && saveCard && !useSaved && card) await api.post('/me/payment-methods', { paymentMethodId: card.token, last4: card.last4, brand: card.brand }).catch(() => undefined);
+      const order = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, tableNumber: fulfillment === 'DINE_IN' ? table || undefined : undefined, ...(useSaved ? { savedPaymentMethodId: savedCardId } : { paymentMethodId: card!.token }), guest: user ? undefined : guest }, idem.current);
       setDeclined(false);
       clear();
       router.push(`/orders/${order.id}${user ? '' : `?email=${encodeURIComponent(guest.email)}`}`);
@@ -166,7 +167,7 @@ export default function CheckoutPage() {
               <option value="new">A different card</option>
             </Select>
           )}
-          {(!user || !cards?.length || savedCardId === 'new') && <Input className="mt-2" label="Card number" value={card} onChange={(e) => { setCard(e.target.value); setDeclined(false); }} />}
+          {(!user || !cards?.length || savedCardId === 'new') && <CardField value={card} onChange={(t) => { setCard(t); setDeclined(false); }} />}
           {user && (!cards?.length || savedCardId === 'new') && <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={saveCard} onChange={(e) => setSaveCard(e.target.checked)} /> Save this card for next time</label>}
           {declined && <div className="mt-2"><Alert>That card was declined. Your order is still held at the same price; choose another card and try again.</Alert></div>}
           <p className="mt-1 text-xs text-ink-300">Card is authorized now and captured only when the restaurant accepts. Test mode: numbers ending in 0002 are declined.</p>

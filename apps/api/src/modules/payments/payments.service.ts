@@ -1,7 +1,8 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { customerCredits, inboxEvents, legalSellers, locations, orders, payments, payouts, refunds } from '../../db/schema';
+import { customerCredits, disputes, inboxEvents, legalSellers, locations, orders, payments, payouts, refunds } from '../../db/schema';
+import { SettingsService } from '../../core/settings.service';
 import { LedgerService } from '../../core/ledger.service';
 import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
@@ -22,6 +23,7 @@ export class PaymentsService {
     private readonly outbox: OutboxService,
     private readonly audit: AuditService,
     private readonly approvals: ApprovalsService,
+    private readonly settings: SettingsService,
   ) {}
 
   get providerName() {
@@ -364,7 +366,17 @@ export class PaymentsService {
         });
       }
       if (ev.type === 'dispute.created') {
-        await this.db.update(payments).set({ status: 'DISPUTED', disputeId: (ev.raw as { data?: { object?: { id?: string } } })?.data?.object?.id ?? ev.id, disputeStatus: 'OPEN' }).where(eq(payments.id, p.id));
+        const disputeId = (ev.raw as { data?: { object?: { id?: string } } })?.data?.object?.id ?? ev.id;
+        const amount = ev.amountCents ?? p.capturedCents - p.refundedCents;
+        const reason = (ev.raw as { reason?: string; data?: { object?: { reason?: string } } })?.data?.object?.reason ?? (ev.raw as { reason?: string })?.reason ?? null;
+        const [o] = p.orderId ? await this.db.select({ org: orders.organizationId }).from(orders).where(eq(orders.id, p.orderId)).limit(1) : [null];
+        const days = (await this.settings.getObject('finance.controls', { disputeEvidenceDays: 7 })).disputeEvidenceDays;
+        await this.db.transaction(async (tx) => {
+          await tx.update(payments).set({ status: 'DISPUTED', disputeId, disputeStatus: 'OPEN' }).where(eq(payments.id, p.id));
+          const [d] = await tx.insert(disputes).values({ paymentId: p.id, orderId: p.orderId, organizationId: o?.org ?? null, providerDisputeId: disputeId, reason, amountCents: amount, currency: p.currency, evidenceDueAt: new Date(Date.now() + days * 86400_000) }).onConflictDoNothing().returning();
+          // 18.7 the processor withdraws the disputed funds until the outcome
+          if (d) await this.ledger.post({ paymentId: p.id, orderId: p.orderId, currency: p.currency }, [{ account: 'DISPUTE_RECEIVABLE', debitCents: amount, memo: `Dispute ${disputeId}` }, { account: 'PROCESSOR_CLEARING', creditCents: amount, memo: 'Disputed funds withdrawn' }], tx);
+        });
         await this.outbox.publish('payment.disputed', p.orderId || p.id, { paymentId: p.id, amountCents: ev.amountCents });
       }
       if (ev.type === 'dispute.closed') await this.db.update(payments).set({ disputeStatus: 'CLOSED' }).where(eq(payments.id, p.id));

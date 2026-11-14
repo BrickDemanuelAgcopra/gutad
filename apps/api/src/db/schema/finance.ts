@@ -42,6 +42,11 @@ export const payments = pgTable('payments', {
   clientSecret: text('client_secret'),
   disputeId: text('dispute_id'),
   disputeStatus: text('dispute_status'),
+  /** 18.3 how the order was paid: { cardCents, creditsCents, loyaltyCents, giftCents } */
+  split: jsonb('split'),
+  /** 18.4 capture retries (capped) */
+  retryCount: integer('retry_count').notNull().default(0),
+  lastFailureReason: text('last_failure_reason'),
   idempotencyKey: text('idempotency_key').unique(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -60,6 +65,8 @@ export const refunds = pgTable('refunds', {
   status: text('status').notNull().default('PENDING'), // PENDING | SUCCEEDED | FAILED
   approvedById: uuid('approved_by_id'),
   incidentId: uuid('incident_id'),
+  /** 18.5 { cardCents, creditsCents } */
+  allocation: jsonb('allocation'),
   createdAt: createdAt(),
 });
 
@@ -194,6 +201,8 @@ export const payouts = pgTable('payouts', {
   statementId: uuid('statement_id'),
   failureReason: text('failure_reason'),
   attempts: integer('attempts').notNull().default(0),
+  /** 19.4 payout batch */
+  batchId: uuid('batch_id'),
   submittedAt: ts('submitted_at'),
   paidAt: ts('paid_at'),
   reconciledAt: ts('reconciled_at'),

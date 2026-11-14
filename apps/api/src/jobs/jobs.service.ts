@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression, Interval } from '@nestjs/schedule';
 import { RedisService } from '../core/redis.service';
 import { NotificationsService } from '../modules/notifications/notifications.service';
+import { AccountingService } from '../modules/finance/accounting.service';
 import { KitchenService } from '../modules/kitchen/kitchen.service';
 import { OrdersService } from '../modules/orders/orders.service';
 import { DeliveryService } from '../modules/delivery/delivery.service';
@@ -37,6 +38,7 @@ export class JobsService {
     private readonly notifications: NotificationsService,
     private readonly orders: OrdersService,
     private readonly kitchen: KitchenService,
+    private readonly accounting: AccountingService,
     private readonly delivery: DeliveryService,
     private readonly reservations: ReservationsService,
     private readonly events: EventsService,
@@ -101,7 +103,7 @@ export class JobsService {
     return this.locked('daily', 30 * 60_000, async () => ({
       quotes: await this.orders.expireQuotes(),
       proposals: await this.events.expireProposals(),
-      credits: await this.payments.expireCredits(),
+      credits: await this.accounting.postBreakage(),
       points: await this.growth.expirePoints(),
       campaigns: await this.growth.stopExhaustedOrEnded(),
       subscriptions: (await this.contracts.billDueSubscriptions()).length,
@@ -118,13 +120,14 @@ export class JobsService {
       const start = addDays(end, -7);
       const merchants = await this.settlement.closePeriod(start, end);
       const drivers = await this.settlement.closeDriverPeriod(start, end);
-      const submitted = await this.settlement.submitPayouts();
+      // 19.4 the weekly run batches eligible payouts; over the release limit the batch waits for approval
+      const submitted = await this.settlement.createBatch(null, { note: 'Weekly settlement' });
       return { merchants: merchants.length, drivers: drivers.length, submitted };
     });
   }
 
   /** Retry failed payouts hourly with backoff handled in submitPayouts. */
-  @Cron(CronExpression.EVERY_HOUR) payoutRetry() { return this.locked('payout-retry', 10 * 60_000, () => this.settlement.submitPayouts()); }
+  @Cron(CronExpression.EVERY_HOUR) payoutRetry() { return this.locked('payout-retry', 10 * 60_000, async () => ({ holds: await this.settlement.releaseExpiredHolds(), ...(await this.settlement.submitPayouts()) })); }
 
   /** Monthly: cover invoices and creator royalties for the previous month. */
   @Cron('0 5 1 * *') monthly() {

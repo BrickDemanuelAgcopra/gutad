@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
+import { paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
 import { DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
@@ -153,7 +153,11 @@ export class OrdersService {
         // 11.7 — a declined card rolls the order back but keeps the quote, so the customer retries with another card (no duplicate order)
         try {
           await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
+          // 18.3 record how the order was paid
+          await tx.update(payments).set({ split: { cardCents: o.totalCents, creditsCents: snap.creditsCents || 0, loyaltyCents: snap.loyaltyCents || 0, giftCents: 0 } }).where(eq(payments.orderId, o.id));
         } catch (e) {
+          // 18.1 the failed attempt is kept even though the order rolls back
+          await this.db.insert(paymentFailures).values({ purpose: 'ORDER', quoteId: q.id, userId, locationId: loc.id, amountCents: o.totalCents, currency: o.currency, provider: this.payments.providerName, reason: (e as Error).message }).catch(() => undefined);
           throw new BadRequestException({ message: `Payment failed: ${(e as Error).message}. Try another card.`, code: 'PAYMENT_DECLINED', quoteId: q.id });
         }
       } else {

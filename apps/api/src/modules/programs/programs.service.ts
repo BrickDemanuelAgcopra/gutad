@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
+import { computeRoyalty, type RoyaltyRule } from '../merchant-admin/brands-admin.service';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { b2bOrders, brands, campusAccounts, campusLocations, invoices, kitchenBrands, locations, orders, payments, programs } from '../../db/schema';
 import { assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
@@ -135,13 +136,20 @@ export class ProgramsService {
   /** Monthly royalty accrual: contracted bps on net brand sales → PLATFORM_EXPENSE_ROYALTY / payable to creator org. */
   async accrueRoyalties(from: Date, to: Date, tx: DbOrTx = this.db) {
     const rows = await tx.execute(sql`
-      select b.id as brand_id, b.organization_id, b.royalty_bps, coalesce(sum(ol.line_total_cents),0)::int as cents
+      select b.id as brand_id, b.organization_id, b.royalty_bps, b.royalty_rules, o.channel, coalesce(sum(ol.line_total_cents),0)::int as cents, coalesce(sum(ol.quantity),0)::int as units
       from order_lines ol join orders o on o.id = ol.order_id join brands b on b.id = ol.brand_id
-      where o.status in ('COMPLETED','COLLECTED') and o.completed_at between ${from} and ${to} and b.royalty_bps > 0
-      group by b.id, b.organization_id, b.royalty_bps`);
+      where o.status in ('COMPLETED','COLLECTED') and o.completed_at between ${from} and ${to} and (b.royalty_bps > 0 or jsonb_array_length(b.royalty_rules) > 0) and ol.status not in ('CREDITED','UNAVAILABLE')
+      group by b.id, b.organization_id, b.royalty_bps, b.royalty_rules, o.channel`);
     const out: { brandId: string; cents: number }[] = [];
-    for (const r of rows.rows as { brand_id: string; organization_id: string; royalty_bps: number; cents: number }[]) {
-      const royalty = Math.round((r.cents * r.royalty_bps) / 10_000);
+    // 6.3-S royalties follow the brand's rules (per channel, per item, tiers, minimum guarantee), not just the flat rate
+    const byBrand = new Map<string, { brand_id: string; organization_id: string; royalty_bps: number; rules: RoyaltyRule[]; channels: { channel: string; salesCents: number; units: number }[] }>();
+    for (const r of rows.rows as { brand_id: string; organization_id: string; royalty_bps: number; royalty_rules: RoyaltyRule[]; channel: string; cents: number; units: number }[]) {
+      const b = byBrand.get(r.brand_id) || { brand_id: r.brand_id, organization_id: r.organization_id, royalty_bps: r.royalty_bps, rules: r.royalty_rules || [], channels: [] };
+      b.channels.push({ channel: r.channel, salesCents: Number(r.cents), units: Number(r.units) });
+      byBrand.set(r.brand_id, b);
+    }
+    for (const r of byBrand.values()) {
+      const royalty = computeRoyalty(r.rules, r.royalty_bps, r.channels).royaltyCents;
       if (!royalty) continue;
       await this.ledger.post({ currency: 'USD' }, [{ account: 'PLATFORM_EXPENSE_ROYALTY', debitCents: royalty, organizationId: r.organization_id, memo: `Royalty brand ${r.brand_id}` }, { account: 'MERCHANT_PAYABLE', partyId: r.organization_id, organizationId: r.organization_id, creditCents: royalty, memo: `Royalty brand ${r.brand_id}` }], tx);
       out.push({ brandId: r.brand_id, cents: royalty });

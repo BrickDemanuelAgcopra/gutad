@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CardField, type CardToken } from '@/card-field';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { api, money, when } from '@/api';
@@ -14,7 +15,7 @@ export default function Reserve() {
   const [party, setParty] = useState(2);
   const [slot, setSlot] = useState<{ time: string; iso: string } | null>(null);
   const [f, setF] = useState({ guestName: user?.name || '', guestEmail: user?.email || '', guestPhone: '', notes: '' });
-  const [card, setCard] = useState('');
+  const [card, setCard] = useState<CardToken | null>(null);
   const [done, setDone] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { data: avail, loading } = useApi<{ slots: { time: string; iso: string }[]; policy: { cancellationHours: number; requiresCardAbove: number | null; noShowFeeCents: number } | null; reason?: string }>(loc ? `/public/locations/${loc.id}/availability?date=${date}&partySize=${party}` : null, { deps: [loc?.id, date, party] });
@@ -32,9 +33,9 @@ export default function Reserve() {
         <Input label="Email" autoCapitalize="none" value={f.guestEmail} onChangeText={(v) => setF({ ...f, guestEmail: v })} />
         <Input label="Phone" value={f.guestPhone} onChangeText={(v) => setF({ ...f, guestPhone: v })} />
         <Input label="Notes" value={f.notes} onChangeText={(v) => setF({ ...f, notes: v })} />
-        {needsCard && <Input label="Card (guarantee only)" value={card} onChangeText={setCard} />}
+        {needsCard && <CardField value={card} onChange={setCard} />}
         <ErrorText msg={error} />
-        <Button title="Reserve" disabled={!slot || !f.guestName || !f.guestEmail} onPress={async () => { try { setDone(await api.post('/reservations', { locationId: loc.id, startAt: slot!.iso, partySize: party, ...f, channel: 'MARKETPLACE', paymentMethodId: card ? `mock_pm_${card.slice(-4)}` : undefined })); } catch (e) { setError((e as Error).message); } }} />
+        <Button title="Reserve" disabled={!slot || !f.guestName || !f.guestEmail} onPress={async () => { try { setDone(await api.post('/reservations', { locationId: loc.id, startAt: slot!.iso, partySize: party, ...f, channel: 'MARKETPLACE', paymentMethodId: card ? card.token : undefined })); } catch (e) { setError((e as Error).message); } }} />
       </Card>
     </ScrollView>
   );

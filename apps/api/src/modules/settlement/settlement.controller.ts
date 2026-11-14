@@ -24,7 +24,6 @@ export class SettlementController {
 
   @Roles('FINANCE', 'PLATFORM_ADMIN') @Post('finance/close-period') close(@Body(zod(PeriodDto)) b: z.infer<typeof PeriodDto>) { return this.svc.closePeriod(b.periodStart, b.periodEnd, b.organizationId); }
   @Roles('FINANCE', 'PLATFORM_ADMIN') @Post('finance/close-driver-period') closeDrivers(@Body(zod(PeriodDto)) b: z.infer<typeof PeriodDto>) { return this.svc.closeDriverPeriod(b.periodStart, b.periodEnd); }
-  @Roles('FINANCE', 'PLATFORM_ADMIN') @Post('finance/submit-payouts') submit() { return this.svc.submitPayouts(); }
   @Roles('FINANCE', 'PLATFORM_ADMIN') @Post('finance/reconcile/bank') bank(@CurrentUser() u: JwtPayload, @Body(zod(BankDto)) b: z.infer<typeof BankDto>) { return this.svc.reconcileBankLine(u, b); }
   @Roles('FINANCE', 'PLATFORM_ADMIN') @Post('finance/reconcile/processor') processor(@CurrentUser() u: JwtPayload, @Body(zod(ProcessorDto)) b: z.infer<typeof ProcessorDto>) { return this.svc.reconcileProcessorLines(u, b.lines); }
   @Roles('FINANCE', 'PLATFORM_ADMIN') @Post('finance/provider-invoices') providerInvoice(@CurrentUser() u: JwtPayload, @Body(zod(ProviderInvoiceDto)) b: z.infer<typeof ProviderInvoiceDto>) { return this.svc.ingestProviderInvoice(u, b); }

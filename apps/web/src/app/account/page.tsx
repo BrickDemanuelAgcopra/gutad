@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import type { AuthResponse, MfaChallenge } from '@gutad/shared';
 import { AccountSecurity } from '@/components/account-security';
+import { CardField, type CardToken } from '@/components/card-field';
 import { api, money, session, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Spinner, Tabs, statusTone, Textarea } from '@/components/ui';
@@ -199,21 +200,14 @@ interface SavedCard { id: string; brand: string | null; last4: string | null; ex
 
 function Payments() {
   const { data, reload } = useApi<SavedCard[]>('/me/payment-methods');
-  const [f, setF] = useState({ number: '', exp: '' });
+  const [card, setCard] = useState<CardToken | null>(null);
   const [err, setErr] = useState<string | null>(null);
   if (!data) return <Spinner />;
   const add = async () => {
     setErr(null);
-    const digits = f.number.replace(/\D/g, '');
-    if (digits.length < 12) { setErr('Enter a full card number.'); return; }
-    // Test mode: the card is tokenized client-side; only the token, brand and last 4 digits are sent to Gutad.
-    const [mm, yy] = f.exp.split('/').map((x) => Number(x.trim()));
-    const brand = digits.startsWith('4') ? 'visa' : digits.startsWith('5') ? 'mastercard' : digits.startsWith('3') ? 'amex' : 'card';
-    try {
-      await api.post('/me/payment-methods', { paymentMethodId: `mock_pm_${digits.slice(-4)}`, brand, last4: digits.slice(-4), expMonth: mm || undefined, expYear: yy ? (yy < 100 ? 2000 + yy : yy) : undefined });
-      setF({ number: '', exp: '' });
-      reload();
-    } catch (e) { setErr((e as Error).message); }
+    if (!card) return;
+    // 18.9 only the processor token, brand and last 4 digits are sent to Gutad
+    try { await api.post('/me/payment-methods', { paymentMethodId: card.token, brand: card.brand, last4: card.last4 }); reload(); } catch (e) { setErr((e as Error).message); }
   };
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -228,8 +222,7 @@ function Payments() {
       </Card>
       <Card title="Add a card">
         <div className="space-y-2">
-          <Input label="Card number" inputMode="numeric" autoComplete="cc-number" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} />
-          <Input label="Expiry (MM/YY)" autoComplete="cc-exp" value={f.exp} onChange={(e) => setF({ ...f, exp: e.target.value })} />
+          <CardField value={card} onChange={setCard} />
           {err && <Alert>{err}</Alert>}
           <Button onClick={add}>Save card</Button>
           <p className="text-xs text-ink-500">Your card is stored by our payment processor. Gutad keeps only a token and the last 4 digits.</p>

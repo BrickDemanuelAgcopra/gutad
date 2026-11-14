@@ -3,6 +3,7 @@ import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { brands, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
 import { brandSellable } from '../../common/brand-rules';
+import { DEFAULT_PAYMENT_METHODS, enabledMethods, type PaymentMethodsConfig } from '@gutad/shared';
 import { cartCompatibility, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
@@ -89,6 +90,12 @@ export class QuoteService {
     const restr = input.userId && !sim ? await tx.select({ kind: customerRestrictions.kind, reason: customerRestrictions.reason }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, input.userId), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), gt(customerRestrictions.expiresAt, new Date())))) : [];
     if (restr.some((r) => r.kind === 'ORDERING_BLOCKED')) throw new ForbiddenException({ message: 'Ordering is paused on this account. See Account → Help to appeal.', code: 'ACCOUNT_RESTRICTED' });
     if (input.promoCode && restr.some((r) => r.kind === 'PROMOTIONS_BLOCKED')) throw new BadRequestException({ message: 'Promotions are not available on this account', code: 'PROMOTIONS_BLOCKED' });
+    // 18.2 payment methods enabled for this region and channel
+    if (!sim && (input.useCreditsCents || input.useLoyaltyPoints)) {
+      const methods = enabledMethods(await this.settings.getObject<PaymentMethodsConfig>('payments.methods', DEFAULT_PAYMENT_METHODS), input.channel, loc.regionId);
+      if (input.useCreditsCents && !methods.includes('CREDITS')) throw new BadRequestException({ message: 'Credits can’t be used for this order', code: 'METHOD_DISABLED' });
+      if (input.useLoyaltyPoints && !methods.includes('LOYALTY')) throw new BadRequestException({ message: 'Points can’t be used for this order', code: 'METHOD_DISABLED' });
+    }
     if (input.channel === 'KIOSK' && !loc.acceptsKiosk) throw new BadRequestException({ message: 'Kiosk ordering is not enabled here', code: 'CHANNEL_UNAVAILABLE' });
     if (input.fulfillmentType === 'PICKUP' && !loc.acceptsPickup) throw new BadRequestException('Pickup not offered');
     if (input.fulfillmentType === 'DELIVERY' && !loc.acceptsDelivery) throw new BadRequestException('Delivery not offered');

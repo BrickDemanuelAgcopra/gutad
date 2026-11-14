@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CardField, type CardToken } from './card-field';
 import { Text, View } from 'react-native';
 import { api, money, when } from './api';
 import { Button, C, ErrorText, Input, Muted } from './ui';
@@ -8,7 +9,7 @@ import { Button, C, ErrorText, Input, Muted } from './ui';
  * Shown on the booking confirmation and on the Tables tab (POST /reservations/:id/confirm).
  */
 export function ConfirmHold({ reservation, onConfirmed }: { reservation: { id: string; holdExpiresAt?: string | null; policy?: { noShowFeeCents: number } | null }; onConfirmed: (r: Record<string, unknown>) => void }) {
-  const [card, setCard] = useState('');
+  const [card, setCard] = useState<CardToken | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const expired = !!reservation.holdExpiresAt && new Date(reservation.holdExpiresAt).getTime() < Date.now();
@@ -17,8 +18,7 @@ export function ConfirmHold({ reservation, onConfirmed }: { reservation: { id: s
     setBusy(true);
     setError(null);
     try {
-      // Same mock payment-method convention as checkout until the Stripe card sheet lands.
-      const r = await api.post<Record<string, unknown>>(`/reservations/${reservation.id}/confirm`, { paymentMethodId: `mock_pm_${card.replace(/\D/g, '').slice(-4)}` });
+      const r = await api.post<Record<string, unknown>>(`/reservations/${reservation.id}/confirm`, { paymentMethodId: card?.token });
       onConfirmed(r);
     } catch (e) {
       setError((e as Error).message);
@@ -31,9 +31,9 @@ export function ConfirmHold({ reservation, onConfirmed }: { reservation: { id: s
       <Text style={{ color: C.warn, marginBottom: 6 }}>
         Add a card to confirm{reservation.holdExpiresAt ? ` by ${when(reservation.holdExpiresAt)}` : ''}. Your card is only charged for a no-show{reservation.policy?.noShowFeeCents ? ` (${money(reservation.policy.noShowFeeCents)}/guest)` : ''}.
       </Text>
-      <Input label="Card number" keyboardType="number-pad" value={card} onChangeText={setCard} placeholder="4242 4242 4242 4242" />
+      <CardField value={card} onChange={setCard} />
       <ErrorText msg={error} />
-      <Button title={busy ? 'Confirming…' : 'Confirm with card'} disabled={busy || card.replace(/\D/g, '').length < 12} onPress={confirm} />
+      <Button title={busy ? 'Confirming…' : 'Confirm with card'} disabled={busy || !card} onPress={confirm} />
       <Muted>The table is held for you until then.</Muted>
     </View>
   );

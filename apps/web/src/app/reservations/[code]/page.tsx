@@ -1,4 +1,5 @@
 'use client';
+import { CardField, type CardToken } from '@/components/card-field';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { api, when, money } from '@/lib/api';
@@ -9,7 +10,7 @@ export default function ReservationPage() {
   const { code } = useParams<{ code: string }>();
   const email = useSearchParams().get('email') || '';
   const { data: r, reload, error } = useApi<{ id: string; status: string; confirmationCode: string; partySize: number; startAt: string; guestName: string; location: { name: string; addressLine1: string; city: string }; policy: { cancellationHours: number; noShowFeeCents: number; depositCents: number } | null; requiresPayment: boolean; depositCents: number }>(`/public/reservations/by-code/${code}?email=${encodeURIComponent(email)}`);
-  const [card, setCard] = useState('');
+  const [card, setCard] = useState<CardToken | null>(null);
   const [party, setParty] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   if (error) return <Alert>{error}</Alert>;
@@ -24,8 +25,8 @@ export default function ReservationPage() {
       </Card>
       {r.requiresPayment && (
         <Card title="Add a card to confirm">
-          <Input placeholder="4242 4242 4242 4242" value={card} onChange={(e) => setCard(e.target.value)} />
-          <Button className="mt-2" onClick={() => act(() => api.post(`/reservations/${r.id}/confirm`, { paymentMethodId: `mock_pm_${card.slice(-4) || '4242'}` }), 'Confirmed!')}>Confirm reservation</Button>
+          <CardField value={card} onChange={setCard} />
+          <Button className="mt-2" onClick={() => act(() => api.post(`/reservations/${r.id}/confirm`, { paymentMethodId: card?.token }), 'Confirmed!')}>Confirm reservation</Button>
         </Card>
       )}
       {['CONFIRMED', 'HELD'].includes(r.status) && (

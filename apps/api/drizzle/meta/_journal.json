@@ -92,6 +92,13 @@
       "when": 1794621172837,
       "tag": "0012_delivery_couriers",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794622741977,
+      "tag": "0013_finance_controls",
+      "breakpoints": true
     }
   ]
 }

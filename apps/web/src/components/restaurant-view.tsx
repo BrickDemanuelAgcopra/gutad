@@ -1,4 +1,5 @@
 'use client';
+import { CardField, type CardToken } from '@/components/card-field';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import type { LocationSummary, MenuDto, MenuItemDto } from '@gutad/shared';
@@ -231,7 +232,7 @@ export function ReserveTab({ loc, channel, compact }: { loc: LocationPage; chann
   const [party, setParty] = useState(2);
   const [slot, setSlot] = useState<{ time: string; iso: string } | null>(null);
   const [form, setForm] = useState({ guestName: '', guestEmail: '', guestPhone: '', notes: '', occasion: '' });
-  const [card, setCard] = useState('');
+  const [card, setCard] = useState<CardToken | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { data: avail, loading } = useApi<{ slots: { time: string; iso: string }[]; policy: { cancellationHours: number; depositCents: number; noShowFeeCents: number; requiresCardAbove: number | null } | null; reason?: string }>(`/public/locations/${loc.id}/availability?date=${date}&partySize=${party}`, { deps: [date, party] });
@@ -241,7 +242,7 @@ export function ReserveTab({ loc, channel, compact }: { loc: LocationPage; chann
     if (!slot) return;
     setError(null);
     try {
-      const r = await api.post<Record<string, unknown>>('/reservations', { locationId: loc.id, startAt: slot.iso, partySize: party, ...form, channel, paymentMethodId: card ? `mock_pm_${card.slice(-4)}` : undefined }, crypto.randomUUID());
+      const r = await api.post<Record<string, unknown>>('/reservations', { locationId: loc.id, startAt: slot.iso, partySize: party, ...form, channel, paymentMethodId: card?.token }, crypto.randomUUID());
       setResult(r);
     } catch (e) {
       setError((e as Error).message);
@@ -279,7 +280,7 @@ export function ReserveTab({ loc, channel, compact }: { loc: LocationPage; chann
           <Input label="Phone" value={form.guestPhone} onChange={(e) => setForm({ ...form, guestPhone: e.target.value })} />
           <Input label="Occasion (optional)" value={form.occasion} onChange={(e) => setForm({ ...form, occasion: e.target.value })} />
           <Textarea label="Notes" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-          {needsCard && <Input label="Card number (guarantee only — not charged unless no-show)" placeholder="4242 4242 4242 4242" value={card} onChange={(e) => setCard(e.target.value)} />}
+          {needsCard && <CardField label="Card (guarantee only — not charged unless no-show)" value={card} onChange={setCard} />}
           {error && <Alert>{error}</Alert>}
           <Button className="w-full" size="lg" disabled={!slot || !form.guestName || !form.guestEmail} onClick={book}>Reserve</Button>
         </div>
@@ -298,7 +299,7 @@ function ExperiencesTab({ loc }: { loc: LocationPage }) {
   const [addOns, setAddOns] = useState<string[]>([]);
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
-  const [card, setCard] = useState('');
+  const [card, setCard] = useState<CardToken | null>(null);
   const [done, setDone] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (!data) return <Spinner />;
@@ -307,7 +308,7 @@ function ExperiencesTab({ loc }: { loc: LocationPage }) {
   const submit = async () => {
     setError(null);
     try {
-      const t = await api.post<Record<string, unknown>>('/tickets', { sessionId: buy!.sessionId, spots, guestName: name, guestEmail: email, addOnIds: addOns, paymentMethodId: prepaid ? `mock_pm_${card.slice(-4) || '4242'}` : undefined }, crypto.randomUUID());
+      const t = await api.post<Record<string, unknown>>('/tickets', { sessionId: buy!.sessionId, spots, guestName: name, guestEmail: email, addOnIds: addOns, paymentMethodId: prepaid ? card?.token : undefined }, crypto.randomUUID());
       setDone(t);
     } catch (e) {
       setError((e as Error).message);
@@ -336,7 +337,7 @@ function ExperiencesTab({ loc }: { loc: LocationPage }) {
           {exp?.addOns.map((a) => <label key={a.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={addOns.includes(a.id)} onChange={(e) => setAddOns(e.target.checked ? [...addOns, a.id] : addOns.filter((x) => x !== a.id))} /> {a.name} (+{money(a.priceCents)} each)</label>)}
           <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} />
           <Input label="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          {prepaid && <Input label="Card number" placeholder="4242 4242 4242 4242" value={card} onChange={(e) => setCard(e.target.value)} />}
+          {prepaid && <CardField value={card} onChange={setCard} />}
           {prepaid && exp && <p className="text-xs text-ink-500">Total {money((exp.pricingMode === 'PREPAID_PER_PERSON' ? exp.priceCents * spots : exp.priceCents) + exp.addOns.filter((a) => addOns.includes(a.id)).reduce((s, a) => s + a.priceCents, 0) * spots)} + 2% service fee.</p>}
           {error && <Alert>{error}</Alert>}
           <Button className="w-full" onClick={submit} disabled={!name || !email}>{prepaid ? 'Pay & confirm' : 'Confirm'}</Button>

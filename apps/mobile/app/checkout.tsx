@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { CardField, type CardToken } from '@/card-field';
 import { ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
@@ -21,7 +22,7 @@ export default function Checkout() {
   const [promo, setPromo] = useState('');
   const [addr, setAddr] = useState({ line1: '', city: '', region: '', postalCode: '', lat: 0, lng: 0 });
   const [guest, setGuest] = useState({ name: '', email: '', phone: '' });
-  const [card, setCard] = useState('4242424242424242');
+  const [card, setCard] = useState<CardToken | null>(null);
   const { data: cards } = useApi<{ id: string; brand: string | null; last4: string | null; isDefault: boolean }[]>(user ? '/me/payment-methods' : null, { deps: [user?.id] });
   const [savedId, setSavedId] = useState<string>('');
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedId) setSavedId(d.id); }, [cards]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -54,9 +55,8 @@ export default function Checkout() {
     setBusy(true);
     try {
       const useSaved = !!user && !!savedId && savedId !== 'new';
-      const digits = card.replace(/\D/g, '');
-      if (user && saveCard && !useSaved) await api.post('/me/payment-methods', { paymentMethodId: `mock_pm_${digits.slice(-4)}`, last4: digits.slice(-4), brand: digits.startsWith('4') ? 'visa' : 'card' }).catch(() => undefined);
-      const o = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, ...(useSaved ? { savedPaymentMethodId: savedId } : { paymentMethodId: `mock_pm_${digits.slice(-4)}` }), guest: user ? undefined : guest }, idem.current);
+      if (user && saveCard && !useSaved && card) await api.post('/me/payment-methods', { paymentMethodId: card.token, last4: card.last4, brand: card.brand }).catch(() => undefined);
+      const o = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, ...(useSaved ? { savedPaymentMethodId: savedId } : { paymentMethodId: card?.token }), guest: user ? undefined : guest }, idem.current);
       setDeclined(false);
       clear();
       router.replace({ pathname: '/order/[id]', params: { id: o.id, email: user ? '' : guest.email } });
@@ -81,7 +81,7 @@ export default function Checkout() {
       <Card title="Payment">
         {!user && (<><Input label="Name" value={guest.name} onChangeText={(v) => setGuest({ ...guest, name: v })} /><Input label="Email" autoCapitalize="none" value={guest.email} onChangeText={(v) => setGuest({ ...guest, email: v })} /><Input label="Phone" value={guest.phone} onChangeText={(v) => setGuest({ ...guest, phone: v })} /></>)}
         {user && !!cards?.length && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>{cards.map((c) => <Button key={c.id} title={`${c.brand} •••• ${c.last4}`} variant={savedId === c.id ? 'primary' : 'secondary'} onPress={() => { setSavedId(c.id); setDeclined(false); }} />)}<Button title="Other card" variant={savedId === 'new' ? 'primary' : 'secondary'} onPress={() => setSavedId('new')} /></View>}
-        {(!user || !cards?.length || savedId === 'new') && <Input label="Card number" keyboardType="number-pad" value={card} onChangeText={(v) => { setCard(v); setDeclined(false); }} />}
+        {(!user || !cards?.length || savedId === 'new') && <CardField value={card} onChange={(t) => { setCard(t); setDeclined(false); }} />}
         {user && (!cards?.length || savedId === 'new') && <Button title={saveCard ? 'Will save this card ✓' : 'Save this card for next time'} variant="ghost" onPress={() => setSaveCard(!saveCard)} />}
         {declined && <Text style={{ color: C.bad, marginBottom: 6 }}>That card was declined. Your order is held at the same price; choose another card and try again.</Text>}
         <Muted>Authorized now, captured when the restaurant accepts.</Muted>
