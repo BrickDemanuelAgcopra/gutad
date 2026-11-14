@@ -30,6 +30,8 @@ const ItemDto = z.object({
   kind: z.enum(['ITEM', 'BUNDLE', 'BEVERAGE', 'EXTRA', 'PACKAGING']).optional(),
   taxCategory: z.string().optional(),
   maxPerOrder: z.number().int().min(1).nullable().optional(),
+  cookMinutes: z.number().int().min(0).max(240).nullable().optional(),
+  handling: z.array(z.enum(['HOT', 'COLD', 'FRAGILE', 'ALLERGEN'])).optional(),
   isActive: z.boolean().optional(),
   allergenReviewNeeded: z.boolean().optional(),
   reason: z.string().optional(),

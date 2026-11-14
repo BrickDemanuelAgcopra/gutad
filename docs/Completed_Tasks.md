@@ -334,3 +334,35 @@ Verification:
 - **24.7** One conversation per ticket for customers, merchants and staff, with internal notes and approved templates; a staff reply marks first response. **W** order page + admin. **M** order screen + `ops/support`.
 - **24.8** Root-cause report by category, dish, merchant, location, kitchen, delivery zone or owner, with compensation, SLA breaches and time to resolve. **W** Support → Root causes.
 
+## Phase F: kitchen display & packing (shipped 2026-11-13)
+
+Verification:
+- Typecheck is clean for API, web and mobile; `next build`: OK.
+- `npm run smoke` on a fresh database: **312/312 checks pass**, including 16 new Phase F checks in `scripts/smoke-admin-f.mjs`; the existing shared-kitchen check now also ticks the packing checklist.
+- Migration `0011_kitchen_packing.sql`:
+  - new tables `station_routes`, `kitchen_events`
+  - new columns on kitchens (default station, auto-throttle overrides, load level), stations (target minutes), kitchen tickets (kind, fire-at, ready-by, cook minutes, delayed-at), menu items (cook minutes, handling), order lines (handling, ready-at), orders (table number, utensils, shelf slot, handoff, no-show stage), packing tasks (checklist, bags, handling, verified-by, created-at) and locations (pickup shelves, packing extras, packing verification)
+- Shared `packages/shared/src/kitchen.ts`: handling flags, kitchen reason codes, auto-throttle and pickup-policy defaults, `fireAt()`, `suggestBags()`, `mentionsAllergy()`.
+- New worker jobs `kitchenLoad` and `pickupNoShow` (every minute), with manual triggers `POST /admin/jobs/kitchen-load` and `POST /admin/jobs/pickup-no-show`.
+- Fixed: the order response now includes each line's menu item id (the Phase E "which item?" picker needed it).
+
+### 13. Kitchen display & preparation
+- **13.1** Item-level bumps: each item on a ticket is bumped (or undone) on its own; the ticket finishes with its last item. **W M** station screens.
+- **13.2** Routing rules by item, category or brand (most specific wins), then the item's own station, then the kitchen's default station. **W** Kitchen → Setup.
+- **13.3** Cook minutes per item (or the recipe's prep minutes, or the station target) give each station ticket a fire-at time so every station finishes by the ready-by time. Tickets not yet due show "FIRE hh:mm" and can be fired early. **API W M**
+- **13.4** Expo board: every active order, the stations still holding it, items ready, finished food waiting and minutes late. **W M** (also in admin Kitchen operations).
+- **13.5** Prep targets per station; late tickets are flagged on the screen and by the load job. Performance shows average vs target, on-target share, remakes and ready-to-collected waiting time. **W M**
+- **13.6** Remakes, missing items and quality failures with reason codes. Remakes and missing items re-fire as a REMAKE ticket and come out of the bag; "86" records an out-of-stock event. **W M**
+- **13.7** Auto-throttle (setting `kitchen.autoThrottle`, per-kitchen overrides): BUSY adds prep minutes to new quotes, OVERLOADED stops ASAP orders (`KITCHEN_BUSY`) and raises an alert; it steps down on recovery and resolves the alert. **API W M** (admin Kitchen operations; checkout explains it).
+- **13.8** Degraded mode: the station screen keeps the last known queue on the device and shows an offline banner; bumps made offline are stored and replayed in order when the connection returns; tickets print from the browser; a printable offline runbook covers manual ticket mode. **W M**
+
+### 14. Packing, handoff, pickup & dine-in
+- **14.1** Every order gets a packing checklist: location extras (default napkins and receipt), utensils when the customer asked (new checkout option), drinks sealed, allergy label, tamper seal for delivery. **API W M**
+- **14.2** Bag count per order with per-bag handling; printable bag labels (bag n of N, handling, allergy notes; the pickup code is never printed). **W** (labels), **M** (bag count).
+- **14.3** Handling flags (hot, cold, fragile, allergen) on items, copied to lines (plus allergen when the customer's note mentions an allergy), shown on tickets, packing and labels; hot and cold go in separate bags. **W M**
+- **14.4** Every order has a packing task. At kitchen-backed locations (or wherever the location requires it) an order becomes ready only by releasing a verified bag, and the tablet "Ready" button refuses with `PACK_VERIFICATION_REQUIRED`. **API W M**
+- **14.5** Pickup shelves per location: released orders get the first free shelf, shown to the customer and on the pickup board, which flags orders waiting past the policy (setting `pickup.policy`). **W M**
+- **14.6** Handoff records who received it: customer (code verified), courier (from the delivery job), or table, plus the staff member and time. **API W M**
+- **14.7** Pickup no-shows: the customer is reminded after 20 minutes, then the order is resolved by policy after 60 minutes (default: charged and closed as a no-show; or canceled with a merchant-funded refund). **API**
+- **14.8** KIOSK channel for quotes and orders (where the location accepts kiosk orders), dine-in table numbers (checkout "Dine in" for QR/`?table=` links), and a runner view to serve orders to tables. **API W M**
+

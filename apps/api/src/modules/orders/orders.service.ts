@@ -1,7 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { deliveryJobs, devices, locations, orderEvents, orderLines, orders, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
+import { deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
+import { DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
+import { SettingsService } from '../../core/settings.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
@@ -27,6 +29,10 @@ export interface CheckoutInput {
   idempotencyKey?: string;
   groupOrderId?: string | null;
   campusAccountId?: string | null;
+  /** 14.8 dine-in table or kiosk pager */
+  tableNumber?: string | null;
+  /** 14.1 include utensils */
+  utensils?: boolean;
 }
 
 /** Internal actor for automatic transitions (auto-accept). */
@@ -47,6 +53,7 @@ export class OrdersService {
     private readonly outbox: OutboxService,
     private readonly audit: AuditService,
     private readonly redis: RedisService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ───── 07 checkout ─────
@@ -124,6 +131,8 @@ export class OrdersService {
           promiseAt: q.promiseAt,
           pickupCode: q.fulfillmentType === 'PICKUP' ? shortCode(4) : null,
           specialInstructions: input.specialInstructions ?? null,
+          tableNumber: q.fulfillmentType === 'DINE_IN' ? input.tableNumber ?? null : null,
+          utensils: !!input.utensils,
           deliveryAddress: snap.deliveryAddress,
           groupOrderId: input.groupOrderId ?? null,
           campusAccountId: input.campusAccountId ?? null,
@@ -232,27 +241,42 @@ export class OrdersService {
   async markReady(user: JwtPayload, orderId: string) {
     const o = await this.requireStaffOrder(user, orderId);
     if (!['ACCEPTED', 'PREPARING'].includes(o.status)) throw new ConflictException(`Order is ${o.status}`);
+    // 14.4 where packing verification is required, the order becomes ready only by releasing the bag
+    const [loc] = await this.db.select().from(locations).where(eq(locations.id, o.locationId)).limit(1);
+    const [pack] = await this.db.select().from(packingTasks).where(eq(packingTasks.orderId, orderId)).limit(1);
+    if (loc && pack && pack.status !== 'RELEASED' && this.kitchen.requiresPackVerification(loc)) throw new ConflictException({ message: 'Verify the bag on the packing screen before marking this order ready', code: 'PACK_VERIFICATION_REQUIRED' });
     await this.db.transaction(async (tx) => {
-      await tx.update(orders).set({ status: 'READY', readyAt: new Date() }).where(eq(orders.id, orderId));
-      await tx.update(orderLines).set({ status: 'READY' }).where(and(eq(orderLines.orderId, orderId), inArray(orderLines.status, ['PENDING', 'PREPARING'])));
+      await tx.update(orderLines).set({ status: 'READY', readyAt: new Date() }).where(and(eq(orderLines.orderId, orderId), inArray(orderLines.status, ['PENDING', 'PREPARING'])));
       await tx.execute(sql`update kitchen_tickets set status='DONE', done_at=now() where order_id=${orderId} and status in ('QUEUED','IN_PROGRESS')`);
+      await this.kitchen.markOrderReady(o, tx, user.sub);
       await this.event(orderId, 'READY', user.sub, 'MERCHANT', {}, tx);
-      await this.outbox.publish('order.ready', orderId, { number: o.number, pickupCode: o.pickupCode, userId: o.userId }, tx);
     });
     return this.present(orderId);
   }
 
   // ───── 11 pickup & on-site handoff ─────
 
-  async handoff(user: JwtPayload, orderId: string, pickupCode?: string) {
+  /** 14.6 handoff records who received the order: the customer (code checked), the courier, or a table. */
+  async handoff(user: JwtPayload, orderId: string, pickupCode?: string, receiver?: { receiverName?: string; courierId?: string; tableNumber?: string }) {
     const o = await this.requireStaffOrder(user, orderId);
     if (o.status !== 'READY') throw new ConflictException(`Order is ${o.status}, not READY`);
     if (o.fulfillmentType === 'PICKUP' && o.pickupCode && pickupCode && pickupCode.toUpperCase() !== o.pickupCode) throw new BadRequestException('Pickup code does not match');
+    let courierId = receiver?.courierId ?? null;
+    if (o.fulfillmentType === 'DELIVERY' && !courierId) {
+      const [j] = await this.db.select({ driverId: deliveryJobs.driverId }).from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+      courierId = j?.driverId ?? null;
+    }
+    const [courier] = courierId ? await this.db.select({ id: drivers.id, name: users.name }).from(drivers).innerJoin(users, eq(users.id, drivers.userId)).where(eq(drivers.id, courierId)).limit(1) : [null];
+    const handoff = o.fulfillmentType === 'DELIVERY'
+      ? { type: 'COURIER', courierId: courier?.id ?? null, name: courier?.name ?? receiver?.receiverName ?? null }
+      : o.fulfillmentType === 'DINE_IN'
+        ? { type: 'TABLE', tableNumber: receiver?.tableNumber ?? o.tableNumber }
+        : { type: 'CUSTOMER', name: receiver?.receiverName ?? o.guestName ?? null, codeVerified: !!(pickupCode && o.pickupCode && pickupCode.toUpperCase() === o.pickupCode) };
     await this.db.transaction(async (tx) => {
       const now = new Date();
       const final = o.fulfillmentType === 'DELIVERY' ? 'COLLECTED' : 'COMPLETED'; // courier collected vs customer collected
-      await tx.update(orders).set({ status: final, collectedAt: now, completedAt: final === 'COMPLETED' ? now : null }).where(eq(orders.id, orderId));
-      await this.event(orderId, 'COLLECTED', user.sub, 'MERCHANT', { pickupCode }, tx);
+      await tx.update(orders).set({ status: final, collectedAt: now, completedAt: final === 'COMPLETED' ? now : null, handoff: { ...handoff, by: user.sub, at: now.toISOString() }, shelfSlot: null }).where(eq(orders.id, orderId));
+      await this.event(orderId, 'COLLECTED', user.sub, 'MERCHANT', { pickupCode, handoff }, tx);
       await this.outbox.publish('order.collected', orderId, { number: o.number, userId: o.userId }, tx);
       if (final === 'COMPLETED') await this.onCompleted(o, tx);
     });
@@ -397,7 +421,7 @@ export class OrdersService {
       locationName: loc?.name,
       locationSlug: loc?.slug,
       locationPhone: loc?.phone,
-      lines: lines.map((l) => ({ id: l.id, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions, status: l.status, replacementNote: l.replacementNote, brandId: l.brandId })),
+      lines: lines.map((l) => ({ id: l.id, menuItemId: l.menuItemId, handling: l.handling, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions, status: l.status, replacementNote: l.replacementNote, brandId: l.brandId })),
       payment: p ? { status: p.status, amountCents: p.amountCents, capturedCents: p.capturedCents, refundedCents: p.refundedCents, clientSecret: p.status === 'REQUIRES_ACTION' ? p.clientSecret : undefined } : null,
       delivery: job ? { id: job.id, status: job.status, etaAt: job.etaAt, trackingUrl: job.trackingUrl, proofPhotoUrl: job.proofPhotoUrl, fleet: job.fleet } : null,
       canCancel: o.status === 'SUBMITTED',
@@ -437,6 +461,33 @@ export class OrdersService {
   // ───── worker helpers ─────
 
   /** Offline merchant escalation: SUBMITTED orders unacknowledged for > N minutes get escalated (and auto-rejected later). */
+  /**
+   * 14.7 pickup no-shows: remind the customer after `noShowNotifyMinutes`, then after `noShowResolveMinutes`
+   * resolve per policy: CHARGE (treated as collected; payment kept) or REFUND (canceled, merchant-funded refund).
+   */
+  async noShowSweep(now = new Date()) {
+    const policy = await this.settings.getObject<PickupPolicy>('pickup.policy', DEFAULT_PICKUP_POLICY);
+    const remind = await this.db.select().from(orders).where(and(eq(orders.status, 'READY'), eq(orders.fulfillmentType, 'PICKUP'), isNull(orders.noShowStage), lt(orders.readyAt, new Date(now.getTime() - policy.noShowNotifyMinutes * 60_000))));
+    for (const o of remind) {
+      await this.db.update(orders).set({ noShowStage: 'NOTIFIED', noShowNotifiedAt: now }).where(eq(orders.id, o.id));
+      await this.outbox.publish('order.pickup_reminder', o.id, { number: o.number, userId: o.userId, email: o.guestEmail, readyAt: o.readyAt, holdUntil: new Date(o.readyAt!.getTime() + policy.noShowResolveMinutes * 60_000), resolution: policy.noShowResolution });
+      await this.event(o.id, 'PICKUP_REMINDER', null, 'SYSTEM', {});
+    }
+    const resolve = await this.db.select().from(orders).where(and(eq(orders.status, 'READY'), eq(orders.fulfillmentType, 'PICKUP'), eq(orders.noShowStage, 'NOTIFIED'), lt(orders.readyAt, new Date(now.getTime() - policy.noShowResolveMinutes * 60_000))));
+    for (const o of resolve) {
+      if (policy.noShowResolution === 'REFUND') {
+        await this.cancelByStaff(SYSTEM_ACTOR, o.id, 'Not picked up (no-show)', 'MERCHANT');
+      } else {
+        await this.db.transaction(async (tx) => {
+          await tx.update(orders).set({ status: 'COMPLETED', completedAt: now, handoff: { type: 'NO_SHOW', at: now.toISOString() }, shelfSlot: null }).where(eq(orders.id, o.id));
+          await this.event(o.id, 'NO_SHOW', null, 'SYSTEM', { resolution: 'CHARGE' }, tx);
+        });
+      }
+      await this.db.update(orders).set({ noShowStage: 'RESOLVED' }).where(eq(orders.id, o.id));
+    }
+    return { reminded: remind.length, resolved: resolve.length };
+  }
+
   async escalateUnacknowledged(now = new Date()) {
     // per-location acceptance timeout (default 5 min); auto-reject at 4× the timeout
     const stale = await this.db.select({ o: orders, timeout: locations.acceptTimeoutMinutes }).from(orders).innerJoin(locations, eq(locations.id, orders.locationId)).where(and(eq(orders.status, 'SUBMITTED'), sql`${orders.createdAt} < ${now.toISOString()}::timestamptz - make_interval(mins => ${locations.acceptTimeoutMinutes})`, sql`${orders.scheduledFor} is null`)).then((r) => r.map((x) => Object.assign(x.o, { _timeout: x.timeout })));

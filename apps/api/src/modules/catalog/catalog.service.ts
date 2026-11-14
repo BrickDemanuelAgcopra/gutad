@@ -14,7 +14,7 @@ import { MenuAdminService } from './menu-admin.service';
 type Channel = (typeof menus.channels.enumValues)[number];
 
 /** Operator/program channels are always allowed; `menu.channels` only restricts consumer-facing entry points. */
-const ALWAYS_ALLOWED: Channel[] = ['PHONE', 'WALK_IN', 'CORPORATE', 'CAMPUS', 'API'];
+const ALWAYS_ALLOWED: Channel[] = ['PHONE', 'WALK_IN', 'CORPORATE', 'CAMPUS', 'API', 'KIOSK'];
 const channelAllowed = (m: { channels: Channel[] }, channel: Channel) => ALWAYS_ALLOWED.includes(channel) || m.channels.includes(channel);
 
 export interface ResolvedItem {

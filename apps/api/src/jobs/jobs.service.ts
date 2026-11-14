@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression, Interval } from '@nestjs/schedule';
 import { RedisService } from '../core/redis.service';
 import { NotificationsService } from '../modules/notifications/notifications.service';
+import { KitchenService } from '../modules/kitchen/kitchen.service';
 import { OrdersService } from '../modules/orders/orders.service';
 import { DeliveryService } from '../modules/delivery/delivery.service';
 import { ReservationsService } from '../modules/reservations/reservations.service';
@@ -35,6 +36,7 @@ export class JobsService {
     private readonly redis: RedisService,
     private readonly notifications: NotificationsService,
     private readonly orders: OrdersService,
+    private readonly kitchen: KitchenService,
     private readonly delivery: DeliveryService,
     private readonly reservations: ReservationsService,
     private readonly events: EventsService,
@@ -78,6 +80,8 @@ export class JobsService {
   @Interval(900_000) brandRights() { return this.locked('brand-rights', 300_000, () => this.brandsAdmin.expireRights()); }
   @Interval(60_000) priceChanges() { return this.locked('price-changes', 60_000, () => this.menuAdmin.applyDue()); }
   @Interval(60_000) supportSla() { return this.locked('support-sla', 60_000, () => this.support.slaSweep()); }
+  @Interval(60_000) kitchenLoad() { return this.locked('kitchen-load', 60_000, () => this.kitchen.loadSweep()); }
+  @Interval(60_000) pickupNoShow() { return this.locked('pickup-no-show', 60_000, () => this.orders.noShowSweep()); }
   @Interval(3_600_000) privacySweep() { return this.locked('privacy', 600_000, () => this.customers.privacySweep()); }
   @Interval(300_000) approvalExpiry() { return this.locked('approval-expiry', 60_000, () => this.approvals.expireStale()); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }

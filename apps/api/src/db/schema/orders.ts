@@ -68,6 +68,17 @@ export const orders = pgTable(
     groupOrderId: uuid('group_order_id'),
     campusAccountId: uuid('campus_account_id'),
     idempotencyKey: text('idempotency_key').unique(),
+    /** 14.8 dine-in table or kiosk pager number */
+    tableNumber: text('table_number'),
+    /** 14.1 customer asked for utensils */
+    utensils: boolean('utensils').notNull().default(false),
+    /** 14.5 pickup shelf slot the order sits in */
+    shelfSlot: text('shelf_slot'),
+    /** 14.6 who received it: { type: CUSTOMER|COURIER|TABLE, by, name?, courierId?, codeVerified, at } */
+    handoff: jsonb('handoff'),
+    /** 14.7 NOTIFIED | RESOLVED */
+    noShowStage: text('no_show_stage'),
+    noShowNotifiedAt: ts('no_show_notified_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -95,6 +106,9 @@ export const orderLines = pgTable('order_lines', {
   stationCode: text('station_code'),
   status: text('status').notNull().default('PENDING'), // PENDING | PREPARING | READY | UNAVAILABLE | REPLACED | CREDITED
   replacementNote: text('replacement_note'),
+  /** 14.3 handling flags copied from the item (plus ALLERGEN when the note mentions an allergy) */
+  handling: text('handling').array().notNull().default([]),
+  readyAt: ts('ready_at'),
   participantId: uuid('participant_id'),
   label: text('label'),
 });
@@ -142,7 +156,38 @@ export const stations = pgTable('stations', {
   maxConcurrent: integer('max_concurrent'),
   isAvailable: boolean('is_available').notNull().default(true),
   equipment: text('equipment').array().notNull().default([]),
+  /** 13.5 target minutes from fire to done */
+  targetMinutes: integer('target_minutes').notNull().default(10),
 });
+
+/** 13.2 routing: send an item, a category or a brand to a station. Most specific wins (item > category > brand). */
+export const stationRoutes = pgTable('station_routes', {
+  id: id(),
+  kitchenId: uuid('kitchen_id')
+    .notNull()
+    .references(() => kitchens.id, { onDelete: 'cascade' }),
+  matchType: text('match_type').notNull(), // ITEM | CATEGORY | BRAND
+  matchId: uuid('match_id').notNull(),
+  stationCode: text('station_code').notNull(),
+  createdAt: createdAt(),
+}, (t) => [index('station_routes_kitchen_idx').on(t.kitchenId)]);
+
+/** 13.6 remakes, missing items and quality failures with reason codes. */
+export const kitchenEvents = pgTable('kitchen_events', {
+  id: id(),
+  kitchenId: uuid('kitchen_id'),
+  locationId: uuid('location_id').notNull(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id, { onDelete: 'cascade' }),
+  orderLineId: uuid('order_line_id'),
+  stationCode: text('station_code'),
+  kind: text('kind').notNull(), // REMAKE | MISSING | QUALITY_FAIL
+  reasonCode: text('reason_code').notNull(),
+  note: text('note'),
+  createdById: uuid('created_by_id'),
+  createdAt: createdAt(),
+}, (t) => [index('kitchen_events_loc_idx').on(t.locationId, t.createdAt)]);
 
 export const kitchenTickets = pgTable('kitchen_tickets', {
   id: id(),
@@ -153,6 +198,14 @@ export const kitchenTickets = pgTable('kitchen_tickets', {
   stationCode: text('station_code'),
   lineIds: uuid('line_ids').array().notNull().default([]),
   status: text('status').notNull().default('QUEUED'), // QUEUED | IN_PROGRESS | DONE | VOID
+  /** NORMAL | REMAKE */
+  kind: text('kind').notNull().default('NORMAL'),
+  /** 13.3 when to start so every station finishes together */
+  fireAt: ts('fire_at'),
+  readyBy: ts('ready_by'),
+  cookMinutes: integer('cook_minutes'),
+  /** 13.5 set when the ticket passes its station target */
+  delayedAt: ts('delayed_at'),
   startedAt: ts('started_at'),
   doneAt: ts('done_at'),
   printedAt: ts('printed_at'),
@@ -170,4 +223,13 @@ export const packingTasks = pgTable('packing_tasks', {
   verifiedLineIds: uuid('verified_line_ids').array().notNull().default([]),
   blockedReason: text('blocked_reason'),
   releasedAt: ts('released_at'),
+  /** 14.1 [{ key, label, done }] — extras beyond the order lines */
+  checklist: jsonb('checklist').notNull().default([]),
+  /** 14.2 bags: [{ n, code, handling[] }] */
+  bagCount: integer('bag_count').notNull().default(1),
+  bags: jsonb('bags').notNull().default([]),
+  /** 14.3 union of line handling flags */
+  handling: text('handling').array().notNull().default([]),
+  verifiedById: uuid('verified_by_id'),
+  createdAt: createdAt(),
 });

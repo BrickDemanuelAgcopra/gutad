@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
-import { CurrentUser, JwtPayload, Public } from '../../common/auth';
+import { assertCan, CurrentUser, JwtPayload, Public } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { OrdersService } from './orders.service';
 import { QuoteService } from './quote.service';
@@ -9,7 +9,7 @@ import { QuoteService } from './quote.service';
 const AddressDto = z.object({ line1: z.string(), line2: z.string().optional(), city: z.string(), region: z.string(), postalCode: z.string(), country: z.string().optional(), lat: z.number().optional(), lng: z.number().optional(), instructions: z.string().optional(), contactName: z.string().optional(), contactPhone: z.string().optional() });
 const QuoteDto = z.object({
   locationId: z.string().uuid(),
-  channel: z.enum(['MARKETPLACE', 'DIRECT', 'WIDGET', 'QR', 'PARTNER', 'PHONE', 'WALK_IN', 'CAMPUS', 'CORPORATE', 'API']).default('MARKETPLACE'),
+  channel: z.enum(['MARKETPLACE', 'DIRECT', 'WIDGET', 'QR', 'KIOSK', 'PARTNER', 'PHONE', 'WALK_IN', 'CAMPUS', 'CORPORATE', 'API']).default('MARKETPLACE'),
   fulfillmentType: z.enum(['PICKUP', 'DELIVERY', 'DINE_IN', 'CATERING']).default('PICKUP'),
   lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1).max(50), modifierOptionIds: z.array(z.string().uuid()).optional(), specialInstructions: z.string().max(300).optional() })).min(1),
   scheduledFor: z.string().nullable().optional(),
@@ -19,7 +19,7 @@ const QuoteDto = z.object({
   useCreditsCents: z.number().int().min(0).optional(),
   useLoyaltyPoints: z.number().int().min(0).optional(),
 });
-const CheckoutDto = z.object({ quoteId: z.string().uuid(), paymentMethodId: z.string().optional(), savedPaymentMethodId: z.string().uuid().optional(), guest: z.object({ name: z.string(), email: z.string().email(), phone: z.string().optional() }).optional(), specialInstructions: z.string().max(500).optional(), groupOrderId: z.string().uuid().optional(), campusAccountId: z.string().uuid().optional() });
+const CheckoutDto = z.object({ tableNumber: z.string().max(10).optional(), utensils: z.boolean().optional(), quoteId: z.string().uuid(), paymentMethodId: z.string().optional(), savedPaymentMethodId: z.string().uuid().optional(), guest: z.object({ name: z.string(), email: z.string().email(), phone: z.string().optional() }).optional(), specialInstructions: z.string().max(500).optional(), groupOrderId: z.string().uuid().optional(), campusAccountId: z.string().uuid().optional() });
 const CounterDto = z.object({ lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1), modifierOptionIds: z.array(z.string().uuid()).optional() })).min(1), guestName: z.string(), guestPhone: z.string().optional(), fulfillmentType: z.enum(['PICKUP', 'DINE_IN']).optional(), channel: z.enum(['PHONE', 'WALK_IN']).optional() });
 const ReasonDto = z.object({ reason: z.string().min(2) });
 const StaffCancelDto = z.object({ reason: z.string().min(2), funder: z.enum(['MERCHANT', 'PLATFORM', 'PROVIDER', 'DRIVER']) });
@@ -50,6 +50,8 @@ export class OrdersController {
   @ApiBearerAuth() @Post('orders/:id/reject') reject(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ReasonDto)) b: z.infer<typeof ReasonDto>) { return this.svc.reject(u, id, b.reason); }
   @ApiBearerAuth() @Post('orders/:id/prep-time') prep(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ prepMinutes: z.number().int().positive() }))) b: { prepMinutes: number }) { return this.svc.adjustTime(u, id, b.prepMinutes); }
   @ApiBearerAuth() @Post('orders/:id/ready') ready(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.markReady(u, id); }
-  @ApiBearerAuth() @Post('orders/:id/handoff') handoff(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ pickupCode: z.string().optional() }))) b: { pickupCode?: string }) { return this.svc.handoff(u, id, b.pickupCode); }
+  /** Run the pickup no-show sweep now (normally every minute). `at` is honored only when ALLOW_BILLING_TIME_TRAVEL=true (tests). */
+  @ApiBearerAuth() @Post('admin/jobs/pickup-no-show') noShow(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ at: z.string().datetime().optional() }))) b: { at?: string }) { assertCan(u, 'ops.manage'); return this.svc.noShowSweep(b.at && process.env.ALLOW_BILLING_TIME_TRAVEL === 'true' ? new Date(b.at) : new Date()); }
+  @ApiBearerAuth() @Post('orders/:id/handoff') handoff(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ pickupCode: z.string().optional(), receiverName: z.string().max(80).optional(), courierId: z.string().uuid().optional(), tableNumber: z.string().max(10).optional() }))) b: { pickupCode?: string; receiverName?: string; courierId?: string; tableNumber?: string }) { return this.svc.handoff(u, id, b.pickupCode, b); }
   @ApiBearerAuth() @Post('orders/:id/staff-cancel') staffCancel(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(StaffCancelDto)) b: z.infer<typeof StaffCancelDto>) { return this.svc.cancelByStaff(u, id, b.reason, b.funder); }
 }

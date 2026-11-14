@@ -64,6 +64,9 @@ const LocationDto = z.object({
   scheduledSlotCapacity: z.number().int().min(1).nullable().optional(),
   scheduleLeadMinutes: z.number().int().min(0).max(10080).nullable().optional(),
   acceptTimeoutMinutes: z.number().int().min(2).max(30).optional(),
+  pickupShelves: z.array(z.string().min(1).max(10)).max(100).optional(),
+  packingExtras: z.array(z.string().min(1).max(60)).max(20).optional(),
+  requirePackVerification: z.boolean().nullable().optional(),
 });
 const HoursDto = z.object({ hours: z.array(z.object({ dayOfWeek: z.number().int().min(0).max(6), opens: z.string().regex(/^\d{2}:\d{2}$/), closes: z.string().regex(/^\d{2}:\d{2}$/), service: z.string().optional() })) });
 const StatusDto = z.object({ status: z.enum(['LIVE', 'PAUSED', 'SUSPENDED', 'OFFBOARDED']), reason: z.string().optional() });

@@ -9,7 +9,7 @@ import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Select, Spinner, statusTone, Textarea } from '@/components/ui';
 
 interface Order {
-  id: string; number: string; status: string; fulfillmentType: string; locationName: string; locationSlug: string; locationPhone: string | null; totalCents: number; subtotalCents: number; taxCents: number; tipCents: number; deliveryFeeCents: number; serviceFeeCents: number; discountCents: number; promiseAt: string | null; readyAt: string | null; pickupCode: string | null; canCancel: boolean; createdAt: string;
+  id: string; number: string; status: string; fulfillmentType: string; locationName: string; locationSlug: string; locationPhone: string | null; totalCents: number; subtotalCents: number; taxCents: number; tipCents: number; deliveryFeeCents: number; serviceFeeCents: number; discountCents: number; promiseAt: string | null; readyAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; createdAt: string;
   lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null; modifiers: { name: string }[] }[];
   payment: { status: string; capturedCents: number; refundedCents: number } | null;
   delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; proofPhotoUrl: string | null } | null;
@@ -84,7 +84,8 @@ export default function OrderPage() {
           ))}
         </ol>
       )}
-      {o.status === 'READY' && o.fulfillmentType === 'PICKUP' && <Alert tone="good">Ready for pickup — show code <b className="text-lg">{o.pickupCode}</b> at the counter.</Alert>}
+      {o.status === 'READY' && o.fulfillmentType === 'PICKUP' && <Alert tone="good">Ready for pickup{o.shelfSlot ? <> on shelf <b className="text-lg">{o.shelfSlot}</b></> : ''} — show code <b className="text-lg">{o.pickupCode}</b> at the counter.</Alert>}
+      {o.fulfillmentType === 'DINE_IN' && o.tableNumber && !terminalBad && o.status !== 'COMPLETED' && <Alert tone="info">Dine-in · we’ll bring it to table <b>{o.tableNumber}</b>.</Alert>}
       {o.promiseAt && !terminalBad && o.status !== 'COMPLETED' && <p className="text-sm text-ink-700">Estimated {o.fulfillmentType === 'DELIVERY' ? 'delivery' : 'ready'} time: <b>{when(o.promiseAt)}</b></p>}
       {unavailable.length > 0 && (
         <Card title="One item needs your decision">

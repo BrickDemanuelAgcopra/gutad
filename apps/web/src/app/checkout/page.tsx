@@ -8,7 +8,7 @@ import { cartSubtotal, useCart } from '@/lib/cart';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input, Select, Textarea } from '@/components/ui';
 
-type Fulfillment = 'PICKUP' | 'DELIVERY';
+type Fulfillment = 'PICKUP' | 'DELIVERY' | 'DINE_IN';
 
 export default function CheckoutPage() {
   const { cart, parked, setQty, clear, switchTo, discardParked, subtotal } = useCart();
@@ -26,11 +26,13 @@ export default function CheckoutPage() {
   const [declined, setDeclined] = useState(false);
   const [blocked, setBlocked] = useState<{ code: string; message: string; nextOpenAt?: string } | null>(null);
   const [useCredits, setUseCredits] = useState(0);
+  const [utensils, setUtensils] = useState(false);
+  const [table, setTable] = useState(() => (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('table') || '' : ''));
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idem = useRef(newIdempotencyKey());
-  const { data: loc } = useApi<{ id: string; name: string; acceptsDelivery: boolean; acceptsPickup: boolean; pickupTimes: { date: string; slots: string[] }[]; timezone: string }>(cart.locationId ? `/public/locations/${cart.locationId}` : null);
+  const { data: loc } = useApi<{ id: string; name: string; acceptsDelivery: boolean; acceptsPickup: boolean; acceptsDineIn?: boolean; pickupTimes: { date: string; slots: string[] }[]; timezone: string }>(cart.locationId ? `/public/locations/${cart.locationId}` : null);
   const { data: credits } = useApi<{ availableCents: number }>(user ? '/me/credits' : null);
   const { data: cards } = useApi<{ id: string; brand: string | null; last4: string | null; isDefault: boolean }[]>(user ? '/me/payment-methods' : null);
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedCardId) setSavedCardId(d.id); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [cards]);
@@ -84,7 +86,7 @@ export default function CheckoutPage() {
       const digits = card.replace(/\D/g, '');
       const useSaved = !!user && !!savedCardId && savedCardId !== 'new';
       if (user && saveCard && !useSaved) await api.post('/me/payment-methods', { paymentMethodId: `mock_pm_${digits.slice(-4)}`, last4: digits.slice(-4), brand: digits.startsWith('4') ? 'visa' : 'card' }).catch(() => undefined);
-      const order = await api.post<{ id: string }>('/orders', { quoteId: quote.id, ...(useSaved ? { savedPaymentMethodId: savedCardId } : { paymentMethodId: `mock_pm_${digits.slice(-4)}` }), guest: user ? undefined : guest }, idem.current);
+      const order = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, tableNumber: fulfillment === 'DINE_IN' ? table || undefined : undefined, ...(useSaved ? { savedPaymentMethodId: savedCardId } : { paymentMethodId: `mock_pm_${digits.slice(-4)}` }), guest: user ? undefined : guest }, idem.current);
       setDeclined(false);
       clear();
       router.push(`/orders/${order.id}${user ? '' : `?email=${encodeURIComponent(guest.email)}`}`);
@@ -124,7 +126,10 @@ export default function CheckoutPage() {
           <div className="flex gap-2">
             {loc?.acceptsPickup !== false && <Button variant={fulfillment === 'PICKUP' ? 'primary' : 'secondary'} onClick={() => setFulfillment('PICKUP')}>Pickup</Button>}
             {loc?.acceptsDelivery && <Button variant={fulfillment === 'DELIVERY' ? 'primary' : 'secondary'} onClick={() => setFulfillment('DELIVERY')}>Delivery</Button>}
+            {(cart.channel === 'QR' || !!table) && loc?.acceptsDineIn !== false && <Button variant={fulfillment === 'DINE_IN' ? 'primary' : 'secondary'} onClick={() => setFulfillment('DINE_IN')}>Dine in</Button>}
           </div>
+          {fulfillment === 'DINE_IN' && <Input className="mt-3 w-40" label="Table number" value={table} onChange={(e) => setTable(e.target.value)} />}
+          {fulfillment !== 'DINE_IN' && <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={utensils} onChange={(e) => setUtensils(e.target.checked)} /> Include utensils and napkins</label>}
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <Select label="When" value={schedule ? 'later' : 'now'} onChange={(e) => setSchedule(e.target.value === 'now' ? null : { date: loc?.pickupTimes?.[0]?.date || '', time: '' })}><option value="now">As soon as possible</option><option value="later">Schedule for later</option></Select>
             {schedule && <Select label="Day" value={schedule.date} onChange={(e) => setSchedule({ date: e.target.value, time: '' })}>{loc?.pickupTimes?.map((d) => <option key={d.date} value={d.date}>{d.date}</option>)}</Select>}
@@ -187,7 +192,7 @@ export default function CheckoutPage() {
               <p className="text-[11px] text-ink-300">Quote valid until {when(quote.expiresAt)}; prices revalidate automatically.</p>
             </div>
           ) : blocked ? (
-            <div className="space-y-2 text-sm"><Alert tone="info">{BLOCKED_TEXT[blocked.code] || blocked.message}{blocked.nextOpenAt ? ` Opens ${when(blocked.nextOpenAt)}.` : ''}</Alert>{['CLOSED', 'PAUSED', 'SCHEDULE_TOO_SOON', 'SLOT_FULL'].includes(blocked.code) && <p className="text-xs text-ink-500">Choose “Schedule for later” to pick another time.</p>}{blocked.code === 'ACCOUNT_RESTRICTED' && <Link className="text-xs underline" href="/account">See account notice</Link>}</div>
+            <div className="space-y-2 text-sm"><Alert tone="info">{BLOCKED_TEXT[blocked.code] || blocked.message}{blocked.nextOpenAt ? ` Opens ${when(blocked.nextOpenAt)}.` : ''}</Alert>{['CLOSED', 'PAUSED', 'SCHEDULE_TOO_SOON', 'SLOT_FULL', 'KITCHEN_BUSY'].includes(blocked.code) && <p className="text-xs text-ink-500">Choose “Schedule for later” to pick another time.</p>}{blocked.code === 'ACCOUNT_RESTRICTED' && <Link className="text-xs underline" href="/account">See account notice</Link>}</div>
           ) : (
             <p className="text-sm text-ink-500">{fulfillment === 'DELIVERY' && !address.lat ? 'Verify your address to get a delivery quote.' : 'Calculating…'}</p>
           )}
@@ -206,6 +211,7 @@ const BLOCKED_TEXT: Record<string, string> = {
   ITEM_UNAVAILABLE: 'Something in your cart is no longer available. Remove it to continue.',
   SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.',
   ACCOUNT_RESTRICTED: 'Ordering is paused on your account.',
+  KITCHEN_BUSY: 'The kitchen is at capacity right now. Schedule for a little later and it will be ready on time.',
 };
 
 function Row({ l, v }: { l: string; v: string }) {

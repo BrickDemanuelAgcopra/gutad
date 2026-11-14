@@ -7,6 +7,7 @@ export type DomainTopic =
   | 'order.accepted'
   | 'order.rejected'
   | 'order.ready'
+  | 'order.pickup_reminder'
   | 'order.collected'
   | 'order.completed'
   | 'order.canceled'

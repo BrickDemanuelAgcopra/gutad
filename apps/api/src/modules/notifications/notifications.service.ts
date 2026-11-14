@@ -55,6 +55,7 @@ export class NotificationsService {
       case 'order.accepted':
       case 'order.rejected':
       case 'order.ready':
+      case 'order.pickup_reminder':
       case 'order.collected':
       case 'order.completed':
       case 'order.canceled':

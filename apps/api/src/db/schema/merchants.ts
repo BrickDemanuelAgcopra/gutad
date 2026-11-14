@@ -44,6 +44,13 @@ export const kitchens = pgTable('kitchens', {
   lat: doublePrecision('lat'),
   lng: doublePrecision('lng'),
   isShared: boolean('is_shared').notNull().default(true),
+  /** 13.2 station used when no routing rule or item station matches */
+  defaultStationCode: text('default_station_code'),
+  /** 13.7 overrides for setting `kitchen.autoThrottle` */
+  autoThrottle: jsonb('auto_throttle'),
+  /** 13.7 NORMAL | BUSY | OVERLOADED, maintained by the load job */
+  loadLevel: text('load_level').notNull().default('NORMAL'),
+  loadChangedAt: ts('load_changed_at'),
   createdAt: createdAt(),
 });
 
@@ -117,6 +124,12 @@ export const locations = pgTable(
     scheduledSlotCapacity: integer('scheduled_slot_capacity'),
     /** minimum minutes between ordering and a scheduled time; null = default prep time */
     scheduleLeadMinutes: integer('schedule_lead_minutes'),
+    /** 14.5 pickup shelf / holding slot codes, e.g. A1..A6 */
+    pickupShelves: text('pickup_shelves').array().notNull().default([]),
+    /** 14.1 extra packing checklist items (napkins, sauces, receipt…) */
+    packingExtras: text('packing_extras').array().notNull().default([]),
+    /** 14.4 null = required for kitchen-backed locations, optional otherwise */
+    requirePackVerification: boolean('require_pack_verification'),
     /** per-order packaging fee charged to the customer and paid to the merchant; null = platform rule */
     packagingFeeCents: integer('packaging_fee_cents'),
     /** minutes before an unaccepted order escalates; auto-reject happens at 4× this */

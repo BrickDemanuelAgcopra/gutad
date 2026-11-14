@@ -60,25 +60,10 @@ Phase E shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
 
 ## Phase F: kitchen & packing
 
-### 13. Kitchen display & preparation
-- [ ] 13.1 [improve] Item-level work tickets in the station queue (line status per item) · API W M
-- [ ] 13.2 [improve] Station routing rules (by item, category or brand), with a default · API W
-- [ ] 13.3 [new] Cook-time sequencing: per-item cook minutes → fire-at times so all items finish together · API W M
-- [ ] 13.4 [improve] Order completion coordination view (which station is holding the order) · W M
-- [ ] 13.5 [new] Prep targets per station, delay flags, completed-food waiting time · API W M
-- [ ] 13.6 [new] Remakes, missing items and quality failures recorded with reason codes · API W M
-- [ ] 13.7 [new] Auto-throttle: lower incoming capacity when queue load passes a threshold; restore on recovery · API W M
-- [ ] 13.8 [new] Offline/degraded procedure: printable runbook, last-known queue cached on the device, manual ticket mode · W M
-
-### 14. Packing, handoff, pickup & dine-in
-- [ ] 14.1 [improve] Packing checklist for every order, including drinks, utensils and extras · API W M
-- [ ] 14.2 [improve] Bag labels (printable), multiple bags per order with bag count tracking · API W M
-- [ ] 14.3 [new] Handling flags: hot, cold, fragile, allergen-sensitive, from items onto bags and labels · API W M
-- [ ] 14.4 [improve] Final packing verification for single-ticket orders as well · API W M
-- [ ] 14.5 [new] Pickup shelves and holding slots, with an alert when an order has waited longer than X minutes · API W M
-- [ ] 14.6 [improve] Handoff confirmation records who received it (courier id or customer code) · API W M
-- [ ] 14.7 [new] Pickup no-show and abandoned-order job: notify, then hold, then resolve (refund or charge per policy) · API W M
-- [ ] 14.8 [new] Kiosk channel and dine-in table routing (table number on the order, runner view) · API W M
+Phase F shipped on 2026-11-13; see Completed_Tasks. These follow-ups remain:
+- [ ] 13.7-L [improve] Auto-throttle for independent restaurants without a production kitchen (today they use the per-15-minute order throttle) · API W
+- [ ] 13.8-P [new] Network ticket-printer integration (today: browser print of station tickets and bag labels) · API W
+- [ ] 14.8-K [new] Dedicated full-screen kiosk ordering app/mode (the API, KIOSK channel, table/pager routing and runner view are live; customers use the QR/web menu) · W M
 
 ---
 

@@ -10,7 +10,7 @@ import { loadConfig } from '../../config/config';
 import { addDays, invoiceNumber } from '../../common/utils';
 import { PlansService } from './plans.service';
 
-export type Channel = 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR' | 'PARTNER' | 'PHONE' | 'WALK_IN' | 'CAMPUS' | 'CORPORATE' | 'API';
+export type Channel = 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR' | 'PARTNER' | 'PHONE' | 'WALK_IN' | 'CAMPUS' | 'CORPORATE' | 'API' | 'KIOSK';
 
 export interface EffectiveTerms {
   contractId: string | null;

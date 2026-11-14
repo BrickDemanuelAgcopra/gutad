@@ -9,7 +9,7 @@ import { useApi } from '@/hooks';
 import { useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Input, Muted, s } from '@/ui';
 
-const BLOCKED: Record<string, string> = { PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.' };
+const BLOCKED: Record<string, string> = { KITCHEN_BUSY: 'The kitchen is at capacity right now. Try again shortly or order for later.', PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.' };
 const codeOf = (e: unknown) => (e instanceof GutadApiError ? (e.body as unknown as { code?: string; nextOpenAt?: string } | null) : null);
 
 export default function Checkout() {
@@ -27,6 +27,7 @@ export default function Checkout() {
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedId) setSavedId(d.id); }, [cards]); // eslint-disable-line react-hooks/exhaustive-deps
   const [saveCard, setSaveCard] = useState(false);
   const [declined, setDeclined] = useState(false);
+  const [utensils, setUtensils] = useState(false);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -55,7 +56,7 @@ export default function Checkout() {
       const useSaved = !!user && !!savedId && savedId !== 'new';
       const digits = card.replace(/\D/g, '');
       if (user && saveCard && !useSaved) await api.post('/me/payment-methods', { paymentMethodId: `mock_pm_${digits.slice(-4)}`, last4: digits.slice(-4), brand: digits.startsWith('4') ? 'visa' : 'card' }).catch(() => undefined);
-      const o = await api.post<{ id: string }>('/orders', { quoteId: quote.id, ...(useSaved ? { savedPaymentMethodId: savedId } : { paymentMethodId: `mock_pm_${digits.slice(-4)}` }), guest: user ? undefined : guest }, idem.current);
+      const o = await api.post<{ id: string }>('/orders', { quoteId: quote.id, utensils, ...(useSaved ? { savedPaymentMethodId: savedId } : { paymentMethodId: `mock_pm_${digits.slice(-4)}` }), guest: user ? undefined : guest }, idem.current);
       setDeclined(false);
       clear();
       router.replace({ pathname: '/order/[id]', params: { id: o.id, email: user ? '' : guest.email } });
@@ -70,6 +71,7 @@ export default function Checkout() {
       </Card>
       <Card title="Fulfillment">
         <View style={{ flexDirection: 'row', gap: 8 }}><Button title="Pickup" variant={fulfillment === 'PICKUP' ? 'primary' : 'secondary'} onPress={() => setFulfillment('PICKUP')} /><Button title="Delivery" variant={fulfillment === 'DELIVERY' ? 'primary' : 'secondary'} onPress={() => setFulfillment('DELIVERY')} /></View>
+        <Button title={utensils ? 'Utensils & napkins included ✓' : 'Include utensils & napkins'} variant="ghost" onPress={() => setUtensils(!utensils)} />
         {fulfillment === 'DELIVERY' && (<View style={{ marginTop: 8 }}><Input label="Street" value={addr.line1} onChangeText={(v) => setAddr({ ...addr, line1: v })} /><Input label="City" value={addr.city} onChangeText={(v) => setAddr({ ...addr, city: v })} /><View style={{ flexDirection: 'row', gap: 8 }}><View style={{ flex: 1 }}><Input label="State" value={addr.region} onChangeText={(v) => setAddr({ ...addr, region: v })} /></View><View style={{ flex: 1 }}><Input label="ZIP" value={addr.postalCode} onChangeText={(v) => setAddr({ ...addr, postalCode: v })} /></View></View><Button title={addr.lat ? 'Location set ✓' : 'Use my location'} variant="secondary" onPress={useMyLocation} /></View>)}
       </Card>
       <Card title="Tip & promo">

@@ -10,7 +10,7 @@ import { ApprovalsService } from '../security/approvals.service';
 
 type Item = typeof menuItems.$inferSelect;
 /** Fields a menu document carries for each item (modifier groups are managed separately and are not versioned). */
-const DOC_FIELDS = ['name', 'description', 'priceCents', 'imageUrl', 'photos', 'allergens', 'dietaryTags', 'isActive', 'sortOrder', 'servingSize', 'kind', 'taxCategory', 'maxPerOrder', 'nutrition', 'channelPrices', 'stationCode'] as const;
+const DOC_FIELDS = ['name', 'description', 'priceCents', 'imageUrl', 'photos', 'allergens', 'dietaryTags', 'isActive', 'sortOrder', 'servingSize', 'kind', 'taxCategory', 'maxPerOrder', 'nutrition', 'channelPrices', 'stationCode', 'cookMinutes', 'handling'] as const;
 export interface MenuDoc { categories: { id?: string; name: string; sortOrder?: number; items: (Partial<Pick<Item, (typeof DOC_FIELDS)[number]>> & { id?: string; name: string; priceCents: number })[] }[] }
 const csvCell = (v: unknown) => { const s = v === null || v === undefined ? '' : Array.isArray(v) ? v.join('|') : typeof v === 'object' ? JSON.stringify(v) : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 

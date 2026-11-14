@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
-import { CurrentUser, JwtPayload, RequiresPermission, Roles } from '../../common/auth';
+import { assertCan, CurrentUser, JwtPayload, RequiresPermission, Roles } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { KitchenService } from './kitchen.service';
 import { RecipesService } from './recipes.service';
@@ -27,6 +27,7 @@ const RecipeDto = z.object({ name: z.string(), yieldPortions: z.number().positiv
 const PoDto = z.object({ supplier: z.string(), lines: z.array(z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive(), unitCostCents: z.number().int().min(0) })) });
 const ReceiveDto = z.object({ received: z.array(z.object({ lineId: z.string().uuid(), receivedQty: z.number().min(0) })).default([]) });
 const WasteDto = z.object({ ingredientId: z.string().uuid(), quantity: z.number().positive(), reason: z.string().optional() });
+const KitchenEventDto = z.object({ orderId: z.string().uuid(), orderLineId: z.string().uuid().optional(), kind: z.enum(['REMAKE', 'MISSING', 'QUALITY_FAIL']), reasonCode: z.string(), note: z.string().max(500).optional(), refire: z.boolean().optional() });
 const LaborDto = z.object({ userId: z.string().uuid().optional(), hours: z.number().positive(), rateCents: z.number().int().positive(), date: z.coerce.date() });
 
 @ApiTags('09/10 Shared kitchen production, supply & costing')
@@ -44,6 +45,27 @@ export class KitchenController {
   @Get('kitchens/:id/packing') packing(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.packingQueue(u, id); }
   @Post('packing/:id/verify') verify(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ lineId: z.string().uuid() }))) b: { lineId: string }) { return this.svc.verifyLine(u, id, b.lineId); }
   @Post('packing/:id/release') release(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.releaseBag(u, id); }
+
+  // Phase F — KDS, routing, expo, remakes, performance, packing, pickup board, runner
+  @Post('order-lines/:id/bump') bump(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ ready: z.boolean().default(true) }))) b: { ready: boolean }) { return this.svc.bumpLine(u, id, b.ready); }
+  @Get('kitchens/:id/expo') expo(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.expo(u, id); }
+  @Get('kitchens/:id/performance') perf(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Query('days') days?: string) { return this.svc.performance(u, id, Number(days) || 7); }
+  @Get('kitchens/:id/events') kEvents(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Query('days') days?: string) { return this.svc.events(u, id, Number(days) || 7); }
+  @Post('kitchen-events') kEvent(@CurrentUser() u: JwtPayload, @Body(zod(KitchenEventDto)) b: z.infer<typeof KitchenEventDto>) { return this.svc.recordEvent(u, b); }
+  @Get('kitchens/:id/routes') routes(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.routes(u, id); }
+  @Post('kitchens/:id/routes') addRoute(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ matchType: z.enum(['ITEM', 'CATEGORY', 'BRAND']), matchId: z.string().uuid(), stationCode: z.string().min(1) }))) b: { matchType: 'ITEM' | 'CATEGORY' | 'BRAND'; matchId: string; stationCode: string }) { return this.svc.addRoute(u, id, b); }
+  @Delete('station-routes/:id') delRoute(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.removeRoute(u, id); }
+  @Patch('kitchens/:id/settings') kSettings(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ defaultStationCode: z.string().nullable().optional(), autoThrottle: z.object({ enabled: z.boolean().optional(), busyAtActiveTickets: z.number().int().min(1).optional(), overloadAtActiveTickets: z.number().int().min(1).optional(), busyExtraMinutes: z.number().int().min(0).max(120).optional(), recoverRatio: z.number().min(0.1).max(1).optional() }).nullable().optional() }))) b: { defaultStationCode?: string | null; autoThrottle?: Record<string, unknown> | null }) { return this.svc.updateKitchen(u, id, b); }
+  @Get('locations/:id/packing') locPacking(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.packingForLocation(u, id); }
+  @Post('packing/:id/checklist') check(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ key: z.string(), done: z.boolean() }))) b: { key: string; done: boolean }) { return this.svc.checkItem(u, id, b.key, b.done); }
+  @Post('packing/:id/bags') bags(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ count: z.number().int().min(1).max(12) }))) b: { count: number }) { return this.svc.setBags(u, id, b.count); }
+  @Get('packing/:id/labels') labels(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.labels(u, id); }
+  @Get('locations/:id/pickup-board') board(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.pickupBoard(u, id); }
+  @Get('admin/kitchens') adminKitchens(@CurrentUser() u: JwtPayload) { return this.svc.adminKitchens(u); }
+  /** Re-evaluate kitchen load now (normally every minute). */
+  @Post('admin/jobs/kitchen-load') loadNow(@CurrentUser() u: JwtPayload) { assertCan(u, 'kitchens.manage'); return this.svc.loadSweep(); }
+  @Get('locations/:id/packing-settings') packSettings(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.packingSettings(u, id); }
+  @Get('locations/:id/runner') runner(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.runner(u, id); }
 
   @Get('ingredients') ingredients(@CurrentUser() u: JwtPayload, @Query('organizationId') orgId?: string) { return this.recipes.listIngredients(u, orgId); }
   @Post('ingredients') ingredient(@CurrentUser() u: JwtPayload, @Body(zod(IngredientDto)) b: z.infer<typeof IngredientDto>) { return this.recipes.upsertIngredient(u, b); }

@@ -15,7 +15,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { addMinutes, bps, isWithin, localParts, zonedTimeToUtc } from '../../common/utils';
 import type { Address } from '../delivery/providers/delivery-provider';
 
-export type Channel = 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR' | 'PARTNER' | 'PHONE' | 'WALK_IN' | 'CAMPUS' | 'CORPORATE' | 'API';
+export type Channel = 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR' | 'PARTNER' | 'PHONE' | 'WALK_IN' | 'CAMPUS' | 'CORPORATE' | 'API' | 'KIOSK';
 export type Fulfillment = 'PICKUP' | 'DELIVERY' | 'DINE_IN' | 'CATERING';
 
 export interface QuoteInput {
@@ -89,6 +89,7 @@ export class QuoteService {
     const restr = input.userId && !sim ? await tx.select({ kind: customerRestrictions.kind, reason: customerRestrictions.reason }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, input.userId), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), gt(customerRestrictions.expiresAt, new Date())))) : [];
     if (restr.some((r) => r.kind === 'ORDERING_BLOCKED')) throw new ForbiddenException({ message: 'Ordering is paused on this account. See Account → Help to appeal.', code: 'ACCOUNT_RESTRICTED' });
     if (input.promoCode && restr.some((r) => r.kind === 'PROMOTIONS_BLOCKED')) throw new BadRequestException({ message: 'Promotions are not available on this account', code: 'PROMOTIONS_BLOCKED' });
+    if (input.channel === 'KIOSK' && !loc.acceptsKiosk) throw new BadRequestException({ message: 'Kiosk ordering is not enabled here', code: 'CHANNEL_UNAVAILABLE' });
     if (input.fulfillmentType === 'PICKUP' && !loc.acceptsPickup) throw new BadRequestException('Pickup not offered');
     if (input.fulfillmentType === 'DELIVERY' && !loc.acceptsDelivery) throw new BadRequestException('Delivery not offered');
     if (input.fulfillmentType === 'CATERING' && !loc.acceptsCatering) throw new BadRequestException('Catering not offered');
@@ -112,6 +113,9 @@ export class QuoteService {
     } else if (!sim?.ignoreHours && !(await this.openAt(loc, now, tx))) {
       throw new BadRequestException({ message: 'Restaurant is closed right now; schedule for later', code: 'CLOSED', nextOpenAt: await this.nextOpenAt(loc, now, tx) });
     }
+    // 13.7 kitchen auto-throttle
+    const load = sim ? null : await this.kitchen.loadFor(loc.kitchenId, tx);
+    if (load?.level === 'OVERLOADED' && !scheduledFor) throw new BadRequestException({ message: 'The kitchen is at capacity right now; schedule for later', code: 'KITCHEN_BUSY' });
 
     // items & modifiers
     const items = await this.catalog.resolveItems(loc.id, input.channel, input.lines.map((l) => l.menuItemId), sim?.ignoreHours ? undefined : scheduledFor ?? now);
@@ -172,7 +176,8 @@ export class QuoteService {
     let deliveryQuoteId: string | null = null;
     let deliveryExpiresAt: Date | null = null;
     let deliveryFleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM' = loc.deliveryFleet;
-    let etaMinutes = loc.defaultPrepMinutes;
+    let etaMinutes = loc.defaultPrepMinutes + (load?.level === 'BUSY' ? load.extraMinutes : 0);
+    if (load?.level === 'BUSY') warnings.push(`The kitchen is busy: about ${load.extraMinutes} extra minutes`);
     if (input.fulfillmentType === 'DELIVERY') {
       if (!input.deliveryAddress) throw new BadRequestException('Delivery address required');
       const q = await this.delivery.quoteForLocation(loc.id, input.deliveryAddress, subtotalCents, input.tipCents || 0, tx).catch((e: Error) => { throw new BadRequestException({ message: e.message, code: 'DELIVERY_UNAVAILABLE' }); });
@@ -181,7 +186,7 @@ export class QuoteService {
       deliveryQuoteId = q.providerQuoteId;
       deliveryExpiresAt = q.expiresAt;
       deliveryFleet = q.fleet;
-      etaMinutes = loc.defaultPrepMinutes + q.etaMinutes;
+      etaMinutes = etaMinutes + q.etaMinutes;
       if (await this.freeDeliveryForAll(tx)) {
         // platform-wide $0 delivery: the diner pays nothing, the full courier cost is a platform subsidy
         deliveryFeeCents = 0;

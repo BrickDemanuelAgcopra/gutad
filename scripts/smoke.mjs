@@ -11,6 +11,7 @@ import { adminPhaseB } from './smoke-admin-b.mjs';
 import { adminPhaseC } from './smoke-admin-c.mjs';
 import { adminPhaseD } from './smoke-admin-d.mjs';
 import { adminPhaseE } from './smoke-admin-e.mjs';
+import { adminPhaseF } from './smoke-admin-f.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -148,6 +149,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   const blocked = await call('POST', `/packing/${pack.id}/release`, {}, O);
   check('bag cannot release before all lines verified', blocked.status === 409, blocked.json);
   for (const l of pack.lines) await call('POST', `/packing/${pack.id}/verify`, { lineId: l.id }, O);
+  for (const c of pack.checklist) await call('POST', `/packing/${pack.id}/checklist`, { key: c.key, done: true }, O);
   const released = (await call('POST', `/packing/${pack.id}/release`, {}, O)).json;
   check('bag released → order READY', released.status === 'RELEASED', released);
   const stock = (await call('GET', `/kitchens/${kitchenId}/stock`, undefined, O)).json;
@@ -481,6 +483,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await adminPhaseC({ call, check, A, O, C, locId, demoOrgId });
   await adminPhaseD({ call, check, A, O, C, locId, demoOrgId });
   await adminPhaseE({ call, check, A, O, C, locId, demoOrgId });
+  await adminPhaseF({ call, check, A, O, C, locId, owner });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

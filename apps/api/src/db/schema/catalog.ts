@@ -190,6 +190,10 @@ export const menuItems = pgTable('menu_items', {
   kind: text('kind').notNull().default('ITEM'),
   taxCategory: text('tax_category').notNull().default('STANDARD'),
   maxPerOrder: integer('max_per_order'),
+  /** 13.3 minutes to cook; drives fire-at sequencing (null = recipe prep minutes or station default) */
+  cookMinutes: integer('cook_minutes'),
+  /** 14.3 HOT | COLD | FRAGILE | ALLERGEN */
+  handling: text('handling').array().notNull().default([]),
   /** set when a recipe change adds allergens the item does not list */
   allergenReviewNeeded: boolean('allergen_review_needed').notNull().default(false),
   recipeId: uuid('recipe_id').references(() => recipes.id),
