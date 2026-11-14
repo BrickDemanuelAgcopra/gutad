@@ -44,6 +44,8 @@ export async function followupsD({ call, check, A, O, C, locId, demoOrgId, API }
   // ── 25.7-P switch plans: upgrade now with proration, downgrade at renewal
   const plans = (await call('GET', '/public/membership/plans')).json;
   const monthly = plans.find((p) => p.interval === 'MONTH'), annual = plans.find((p) => p.interval === 'YEAR');
+  const tdays = (await call('PATCH', `/admin/membership-plans/${monthly.id}`, { trialDays: 7 }, A)).json;
+  check('staff can set free-trial days on a plan', tdays.trialDays === 7, tdays);
   const U = await reg('switcher');
   await call('POST', '/me/membership', { planId: monthly.id, paymentMethodId: 'mock_pm_4242' }, U.T); // first time: trial
   await call('POST', '/me/membership/cancel', { immediate: true }, U.T);

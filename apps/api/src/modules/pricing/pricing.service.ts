@@ -64,7 +64,7 @@ export class PricingService {
     return this.db.select().from(membershipPlans).orderBy(membershipPlans.priceCents);
   }
 
-  async updateMembershipPlan(user: JwtPayload, id: string, input: { name?: string; priceCents?: number; isActive?: boolean; benefits?: Record<string, unknown> }) {
+  async updateMembershipPlan(user: JwtPayload, id: string, input: { name?: string; priceCents?: number; isActive?: boolean; trialDays?: number; benefits?: Record<string, unknown> }) {
     assertCan(user, 'growth.manage');
     const [before] = await this.db.select().from(membershipPlans).where(eq(membershipPlans.id, id)).limit(1);
     if (!before) throw new NotFoundException();

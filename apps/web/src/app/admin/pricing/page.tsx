@@ -82,7 +82,7 @@ function TaxEngineNote() {
 
 function Members() {
   const { can } = useSession();
-  const { data, reload } = useApi<{ id: string; name: string; priceCents: number; interval: string; isActive: boolean; benefits: { freeDeliveryAboveCents?: number; serviceFeeWaived?: boolean; creditCentsPerMonth?: number; priorityWaitlist?: boolean } }[]>('/admin/membership-plans');
+  const { data, reload } = useApi<{ id: string; name: string; priceCents: number; interval: string; isActive: boolean; trialDays: number; benefits: { freeDeliveryAboveCents?: number; serviceFeeWaived?: boolean; creditCentsPerMonth?: number; priorityWaitlist?: boolean } }[]>('/admin/membership-plans');
   const { run, error } = useAction();
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -91,6 +91,7 @@ function Members() {
         <Card key={p.id} title={<span>{p.name} · {money(p.priceCents)}/{p.interval.toLowerCase()} {!p.isActive && <Badge>off</Badge>}</span>}>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <Input label="Free delivery above $" defaultValue={p.benefits.freeDeliveryAboveCents !== undefined ? usd(p.benefits.freeDeliveryAboveCents) : ''} disabled={!can('growth.manage')} onBlur={(e) => run(async () => { await api.patch(`/admin/membership-plans/${p.id}`, { benefits: { freeDeliveryAboveCents: cents(e.target.value) } }); reload(); })} />
+            <Input label="Free trial days (first-time members)" defaultValue={String(p.trialDays ?? 0)} disabled={!can('growth.manage')} onBlur={(e) => run(async () => { await api.patch(`/admin/membership-plans/${p.id}`, { trialDays: Math.max(0, Math.round(Number(e.target.value) || 0)) }); reload(); })} />
             <Input label="Monthly credit $" defaultValue={usd(p.benefits.creditCentsPerMonth || 0)} disabled={!can('growth.manage')} onBlur={(e) => run(async () => { await api.patch(`/admin/membership-plans/${p.id}`, { benefits: { creditCentsPerMonth: cents(e.target.value) } }); reload(); })} />
             <label className="flex items-center gap-2"><input type="checkbox" disabled={!can('growth.manage')} checked={!!p.benefits.serviceFeeWaived} onChange={(e) => run(async () => { await api.patch(`/admin/membership-plans/${p.id}`, { benefits: { serviceFeeWaived: e.target.checked } }); reload(); })} /> Service fee waived</label>
             <label className="flex items-center gap-2"><input type="checkbox" disabled={!can('growth.manage')} checked={!!p.benefits.priorityWaitlist} onChange={(e) => run(async () => { await api.patch(`/admin/membership-plans/${p.id}`, { benefits: { priorityWaitlist: e.target.checked } }); reload(); })} /> Priority waitlist</label>

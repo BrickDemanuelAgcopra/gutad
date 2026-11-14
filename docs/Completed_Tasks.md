@@ -540,7 +540,7 @@ Verification:
 
 Verification:
 - Typecheck clean for shared, API, web and mobile; `next build`: OK.
-- `npm run smoke` on a fresh database: **480/480 checks pass**, including 74 new checks in `scripts/smoke-followups-{a,b,c,d}.mjs`.
+- `npm run smoke` on a fresh database: **481/481 checks pass**, including 75 new checks in `scripts/smoke-followups-{a,b,c,d}.mjs`.
 - Migration `0016_followups_all.sql`. New tables: `user_devices`, `location_load_settings`, `printers`, `print_jobs`, `stored_files`, `gl_connections`, `gl_push_batches`, `supplier_access_tokens`, `supplier_invoice_submissions`, `temperature_sensors`, `payroll_connections`, `payroll_export_batches`, `equipment_vendor_links`, `equipment_vendor_events`. New columns on customer restrictions (limit, period), courier documents (stored file), close periods (reopen), coupons (buy/get quantities), member subscriptions (pending plan).
 - External providers are optional adapters that keep today's behaviour until configured: Stripe Elements / hosted setup, TaxJar / Avalara, OSRM / Google / Mapbox routing, QuickBooks / Xero, Gusto / ADP, Rational / Welbilt, S3-compatible storage, ESC/POS network printers. Their real API calls were written against the public API shapes and **have not been run against those services**; the mock / default paths are what the smoke tests cover.
 - Production note: courier document uploads default to local disk inside the API container. Set `STORAGE_DRIVER=s3` with a bucket before relying on uploads in production.
@@ -577,7 +577,7 @@ Verification:
 
 ### Phase J follow-ups
 - **25.1-B** Buy X get Y free (cheapest units free) and free-item offers. **API W**
-- **25.7-P** Switch membership plans: upgrades now with credit for unused time, downgrades at renewal. **API W M**
+- **25.7-P** Switch membership plans: upgrades now with credit for unused time, downgrades at renewal. Staff can set free-trial days per plan in Pricing. **API W M**
 - **25.9-M** Buy gift cards in the mobile app. **M**
 - **25.9-E** Unclaimed-property (escheat) report by state with dormancy rules (`giftcards.escheat`) and CSV. **API W**
 - **25.10-P** Gutad-wide email/SMS campaigns to platform customer segments (marketing consent only) with a holdout. **API W**
