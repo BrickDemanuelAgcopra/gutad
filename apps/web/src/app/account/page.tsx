@@ -9,6 +9,7 @@ import { CardField, type CardToken } from '@/components/card-field';
 import { api, money, session, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Spinner, Tabs, statusTone, Textarea } from '@/components/ui';
+import { SmsNotice } from '@/components/legal';
 
 function AuthForm() {
   const [mode, setMode] = useState<'login' | 'register' | 'recover'>('login');
@@ -53,6 +54,7 @@ function AuthForm() {
           <Input label="Email" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
           {mode !== 'recover' && <Input label="Password" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && submit()} />}
           {mode === 'register' && <Input label="Phone (for SMS updates)" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />}
+          {mode === 'register' && <SmsNotice />}
           {mode === 'register' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.marketingConsent} onChange={(e) => setF({ ...f, marketingConsent: e.target.checked })} /> Send me offers from restaurants I order from</label>}
           {error && <Alert>{error}</Alert>}
           {info && <Alert tone="info">{info}</Alert>}
@@ -136,6 +138,7 @@ function Profile() {
         <div className="space-y-2">
           <Input label="Name" value={String(v.name)} onChange={(e) => setF({ ...v, name: e.target.value })} />
           <Input label="Phone" value={String(v.phone)} onChange={(e) => setF({ ...v, phone: e.target.value })} />
+          <SmsNotice />
           <Textarea label="Dietary notes" value={String(v.dietaryNotes)} onChange={(e) => setF({ ...v, dietaryNotes: e.target.value })} />
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.marketingConsent} onChange={(e) => setF({ ...v, marketingConsent: e.target.checked })} /> Marketing email</label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.smsConsent} onChange={(e) => setF({ ...v, smsConsent: e.target.checked })} /> Marketing SMS</label>

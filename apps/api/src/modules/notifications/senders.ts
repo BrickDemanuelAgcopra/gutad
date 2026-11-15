@@ -63,7 +63,9 @@ export class Senders {
     if (cfg.SMS_PROVIDER === 'twilio') {
       if (!cfg.TWILIO_ACCOUNT_SID || !cfg.TWILIO_AUTH_TOKEN) throw new Error('SMS_PROVIDER=twilio but TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN is empty');
       if (!cfg.TWILIO_MESSAGING_SERVICE_SID && !cfg.TWILIO_FROM) throw new Error('Set TWILIO_FROM or TWILIO_MESSAGING_SERVICE_SID');
-      const params = new URLSearchParams({ To: toE164(to), Body: r.sms });
+      // Carriers require the sender to be identified in every message (A2P 10DLC).
+      const body = /^gutad\b/i.test(r.sms) ? r.sms : `Gutad: ${r.sms}`;
+      const params = new URLSearchParams({ To: toE164(to), Body: body });
       if (cfg.TWILIO_MESSAGING_SERVICE_SID) params.set('MessagingServiceSid', cfg.TWILIO_MESSAGING_SERVICE_SID);
       else params.set('From', cfg.TWILIO_FROM);
       const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${cfg.TWILIO_ACCOUNT_SID}/Messages.json`, {

@@ -8,6 +8,7 @@ import { useApi, useSession } from '@/lib/hooks';
 import { useCart } from '@/lib/cart';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Tabs, Textarea, Spinner, Empty } from './ui';
 import { GBadge, MadeAtGutad } from './made-at-gutad';
+import { SmsNotice } from './legal';
 
 type PublicMenu = MenuDto & { brand?: { id: string; slug: string; name: string; description: string | null } | null };
 
@@ -286,6 +287,7 @@ export function ReserveTab({ loc, channel, compact }: { loc: LocationPage; chann
           <Input label="Name" value={form.guestName} onChange={(e) => setForm({ ...form, guestName: e.target.value })} />
           <Input label="Email" type="email" value={form.guestEmail} onChange={(e) => setForm({ ...form, guestEmail: e.target.value })} />
           <Input label="Phone" value={form.guestPhone} onChange={(e) => setForm({ ...form, guestPhone: e.target.value })} />
+          <SmsNotice />
           <Input label="Occasion (optional)" value={form.occasion} onChange={(e) => setForm({ ...form, occasion: e.target.value })} />
           <Textarea label="Notes" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           {needsCard && <CardField label="Card (guarantee only — not charged unless no-show)" value={card} onChange={setCard} />}

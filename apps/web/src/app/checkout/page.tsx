@@ -7,6 +7,7 @@ import { api, money, newIdempotencyKey, when } from '@/lib/api';
 import { cartSubtotal, useCart } from '@/lib/cart';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input, Select, Textarea } from '@/components/ui';
+import { SmsNotice } from '@/components/legal';
 import { CardField, type CardToken } from '@/components/card-field';
 
 type Fulfillment = 'PICKUP' | 'DELIVERY' | 'DINE_IN';
@@ -171,6 +172,7 @@ export default function CheckoutPage() {
               <Input label="Name" value={guest.name} onChange={(e) => setGuest({ ...guest, name: e.target.value })} />
               <Input label="Email" value={guest.email} onChange={(e) => setGuest({ ...guest, email: e.target.value })} />
               <Input label="Phone" value={guest.phone} onChange={(e) => setGuest({ ...guest, phone: e.target.value })} />
+              <SmsNotice className="sm:col-span-3" />
               <p className="text-xs text-ink-500 sm:col-span-3">Checking out as a guest. <Link href="/account" className="underline">Sign in</Link> to save addresses and earn points.</p>
             </div>
           )}

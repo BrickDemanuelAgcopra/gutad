@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import type { AuthResponse, MfaChallenge } from '@gutad/shared';
 import { api, session } from '@/api';
 import { Button, Card, ErrorText, Input, Muted, s } from '@/ui';
+import { SmsNotice } from '@/legal';
 import { BrandLogo } from '@/brand';
 import { useApi } from '@/hooks';
 import { signInWithSso } from '@/sso';
@@ -55,6 +56,7 @@ export default function Login() {
         <Input label="Email" autoCapitalize="none" keyboardType="email-address" value={f.email} onChangeText={(v) => setF({ ...f, email: v })} />
         <Input label="Password" secureTextEntry value={f.password} onChangeText={(v) => setF({ ...f, password: v })} />
         {mode === 'register' && <Input label="Phone" keyboardType="phone-pad" value={f.phone} onChangeText={(v) => setF({ ...f, phone: v })} />}
+        {mode === 'register' && <SmsNotice />}
         <ErrorText msg={error} />
         <Button title={mode === 'login' ? 'Sign in' : 'Create account'} onPress={submit} />
         {mode === 'login' && sso?.enabled && <Button title={ssoBusy ? 'Opening sign-in…' : sso.label} variant="secondary" disabled={ssoBusy} onPress={startSso} />}

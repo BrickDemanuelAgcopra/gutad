@@ -6,6 +6,7 @@ import { api, money, when } from '@/api';
 import { ConfirmHold } from '@/hold';
 import { useApi, useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Input, Loading, Muted, s } from '@/ui';
+import { SmsNotice } from '@/legal';
 
 export default function Reserve() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
@@ -32,6 +33,7 @@ export default function Reserve() {
         <Input label="Name" value={f.guestName} onChangeText={(v) => setF({ ...f, guestName: v })} />
         <Input label="Email" autoCapitalize="none" value={f.guestEmail} onChangeText={(v) => setF({ ...f, guestEmail: v })} />
         <Input label="Phone" value={f.guestPhone} onChangeText={(v) => setF({ ...f, guestPhone: v })} />
+        <SmsNotice />
         <Input label="Notes" value={f.notes} onChangeText={(v) => setF({ ...f, notes: v })} />
         {needsCard && <CardField value={card} onChange={setCard} />}
         <ErrorText msg={error} />

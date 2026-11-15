@@ -9,6 +9,7 @@ import { cartSubtotal, useCart } from '@/cart';
 import { useApi } from '@/hooks';
 import { useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Input, Muted, s } from '@/ui';
+import { SmsNotice } from '@/legal';
 
 const BLOCKED: Record<string, string> = { KITCHEN_BUSY: 'The kitchen is at capacity right now. Try again shortly or order for later.', PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.' };
 const codeOf = (e: unknown) => (e instanceof GutadApiError ? (e.body as unknown as { code?: string; nextOpenAt?: string } | null) : null);
@@ -82,7 +83,7 @@ export default function Checkout() {
         {!!gifts?.balanceCents && <Button title={useGift ? `Using gift balance (${money(gifts.balanceCents)}) ✓` : `Use gift balance (${money(gifts.balanceCents)})`} variant={useGift ? 'primary' : 'secondary'} onPress={() => setUseGift(!useGift)} />}
       </Card>
       <Card title="Payment">
-        {!user && (<><Input label="Name" value={guest.name} onChangeText={(v) => setGuest({ ...guest, name: v })} /><Input label="Email" autoCapitalize="none" value={guest.email} onChangeText={(v) => setGuest({ ...guest, email: v })} /><Input label="Phone" value={guest.phone} onChangeText={(v) => setGuest({ ...guest, phone: v })} /></>)}
+        {!user && (<><Input label="Name" value={guest.name} onChangeText={(v) => setGuest({ ...guest, name: v })} /><Input label="Email" autoCapitalize="none" value={guest.email} onChangeText={(v) => setGuest({ ...guest, email: v })} /><Input label="Phone" value={guest.phone} onChangeText={(v) => setGuest({ ...guest, phone: v })} /><SmsNotice /></>)}
         {user && !!cards?.length && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>{cards.map((c) => <Button key={c.id} title={`${c.brand} •••• ${c.last4}`} variant={savedId === c.id ? 'primary' : 'secondary'} onPress={() => { setSavedId(c.id); setDeclined(false); }} />)}<Button title="Other card" variant={savedId === 'new' ? 'primary' : 'secondary'} onPress={() => setSavedId('new')} /></View>}
         {(!user || !cards?.length || savedId === 'new') && <CardField value={card} onChange={(t) => { setCard(t); setDeclined(false); }} />}
         {user && (!cards?.length || savedId === 'new') && <Button title={saveCard ? 'Will save this card ✓' : 'Save this card for next time'} variant="ghost" onPress={() => setSaveCard(!saveCard)} />}
