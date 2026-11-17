@@ -105,5 +105,7 @@ export const Role = {
   CULINARY: 'CULINARY',
   MARKETING: 'MARKETING',
   IT: 'IT',
+  CHEF: 'CHEF',
+  KITCHEN_ASSISTANT: 'KITCHEN_ASSISTANT',
 } as const;
 export type Role = (typeof Role)[keyof typeof Role];

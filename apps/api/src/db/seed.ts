@@ -9,6 +9,7 @@ import { createDb, createPool } from './db.module';
 import * as s from './schema';
 import { loadConfig } from '../config/config';
 import { seedPlanCatalog } from '../modules/contracts/plans.service';
+import { CHEF_AGREEMENT_VERSION } from '@gutad/shared';
 
 async function main() {
   const cfg = loadConfig();
@@ -59,6 +60,8 @@ async function main() {
     await pool.end();
     return;
   }
+
+  await seedDemoChef(db, log);
 
   // demo merchant
   const [existingOrg] = await db.select().from(s.organizations).where(eq(s.organizations.slug, 'demo-bistro')).limit(1);
@@ -188,6 +191,33 @@ async function main() {
 
   log(`demo ready: location ${loc.id} (${loc.slug}), kitchen location ${kloc.id}, owner owner@demo.gutad.io / merchant12345, customer customer@demo.gutad.io / customer12345, admin ${adminEmail}`);
   await pool.end();
+}
+
+/** Gutad Chef Network demo: Chef Carlos, approved, payouts connected, accepting orders (idempotent). */
+async function seedDemoChef(db: ReturnType<typeof createDb>, log: (m: string) => void) {
+  const email = 'carlos@demo.gutad.io';
+  const [exists] = await db.select().from(s.users).where(eq(s.users.email, email)).limit(1);
+  if (exists) return;
+  const [u] = await db.insert(s.users).values({ email, passwordHash: await argon2.hash('chef12345'), name: 'Carlos Mendes', phone: '+12125550188', roles: ['CUSTOMER', 'CHEF'], emailVerifiedAt: new Date() }).returning();
+  const data = {
+    account: { phone: '+12125550188', agreementVersion: CHEF_AGREEMENT_VERSION, agreedAt: new Date().toISOString() },
+    identity: { legalName: 'Carlos Mendes', displayName: 'Chef Carlos', businessType: 'INDIVIDUAL' },
+    profile: { bio: 'Italian-Brazilian home-style pasta and celebration cakes, made from scratch in a licensed Brooklyn commissary.', cuisines: ['Italian', 'Bakery & desserts'], experienceYears: 12, languages: ['English', 'Portuguese', 'Italian'], serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12 },
+    kitchen: { kitchenType: 'SHARED_COMMISSARY', name: 'Brooklyn Commissary', operatorName: 'Brooklyn Commissary LLC', addressLine1: '200 Flushing Ave', city: 'Brooklyn', region: 'NY', postalCode: '11205', pickupAccess: 'Gate B, ring Kitchen 4', dailyCapacity: 40 },
+    operating: { cookingDays: [2, 3, 4, 5, 6], cutoffHour: 12, minLeadDays: 1, dailyCapacity: 30, instantOrders: false, scheduledOrders: true, pickup: true, delivery: true, maxAdvanceDays: 45 },
+    payments: { country: 'US', earningsAgreementAccepted: true },
+    menu: { dishes: [{ name: 'Spaghetti', priceCents: 1600, portion: '1 bowl (450 g)', allergens: ['wheat', 'milk', 'egg'], mode: 'CUSTOMIZABLE' }] },
+    readiness: { packagingAck: true, handlingTrainingAck: true, allergenTrainingAck: true },
+  };
+  const [app] = await db.insert(s.chefApplications).values({ userId: u.id, status: 'APPROVED', data, displayName: 'Chef Carlos', region: 'NY', city: 'Brooklyn', kitchenType: 'SHARED_COMMISSARY', percentComplete: 100, submittedAt: new Date(), decidedAt: new Date(), decisionReason: 'Demo chef', history: [{ at: new Date().toISOString(), action: 'APPROVED', note: 'Demo chef' }] }).returning();
+  const [org] = await db.insert(s.organizations).values({ name: 'Chef Carlos', slug: 'chef-carlos-demo', kind: 'CHEF', status: 'LIVE', featureFlags: {} }).returning();
+  await db.insert(s.orgMemberships).values({ userId: u.id, organizationId: org.id, role: 'MERCHANT_OWNER', acceptedAt: new Date() });
+  await db.update(s.chefApplications).set({ organizationId: org.id }).where(eq(s.chefApplications.id, app.id));
+  const [seller] = await db.insert(s.legalSellers).values({ organizationId: org.id, legalName: 'Carlos Mendes', country: 'US', payoutProvider: 'mock', payoutAccountId: 'mock_acct_chef_carlos', payoutOnboardingState: 'COMPLETE', bankLast4: '6789', beneficiaryName: 'Carlos Mendes' }).returning();
+  const [loc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Chef Carlos’s kitchen', slug: 'chef-carlos-kitchen', description: data.profile.bio, cuisine: ['italian', 'bakery'], phone: '+12125550188', addressLine1: '200 Flushing Ave', city: 'Brooklyn', region: 'NY', postalCode: '11205', lat: 40.6981, lng: -73.9712, timezone: 'America/New_York', pickupInstructions: 'Gate B, ring Kitchen 4', courierInstructions: 'Gate B, ring Kitchen 4', status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, chefKitchen: true, defaultPrepMinutes: 45, scheduleLeadMinutes: 24 * 60, deliveryRadiusKm: 12, taxRateBps: 888 }).returning();
+  await db.insert(s.openingHours).values([2, 3, 4, 5, 6].map((d) => ({ locationId: loc.id, dayOfWeek: d, opens: '09:00', closes: '20:00', service: 'ALL' })));
+  await db.insert(s.chefProfiles).values({ organizationId: org.id, userId: u.id, applicationId: app.id, locationId: loc.id, displayName: 'Chef Carlos', slug: 'chef-carlos', legalName: 'Carlos Mendes', bio: data.profile.bio, cuisines: data.profile.cuisines, languages: data.profile.languages, experienceYears: 12, serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12, kitchenType: 'SHARED_COMMISSARY', operating: { cookingDays: [2, 3, 4, 5, 6], cutoffHour: 12, minLeadDays: 1, dailyCapacity: 30, instantOrders: false, scheduledOrders: true, maxAdvanceDays: 45 }, verifiedCredentials: ['GOV_ID', 'FOOD_HANDLER', 'KITCHEN_PERMIT', 'KITCHEN_USE_AGREEMENT', 'LIABILITY_INSURANCE'], brandAgreementAcceptedAt: new Date(), status: 'ACTIVE', acceptingOrders: true });
+  log(`demo chef ready: ${email} / chef12345 (Chef Carlos, location ${loc.id})`);
 }
 
 main().catch((e) => {

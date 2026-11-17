@@ -419,6 +419,39 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
         details: [['Role', p.role as string], ['Note', p.note as string]],
         cta: { label: 'Open the console', url: `${web}/admin` },
       });
+    // ── Chef Network ────────────────────────────────────────────────────────
+    case 'chef.application.received':
+      return sub('We received your Gutad chef application', 'Thanks for applying to the Gutad Chef Network. Our team reviews your kitchen, documents and first menu, usually within 3 business days.', {
+        eyebrow: 'Chef Network', heading: 'Application received',
+        paragraphs: ['Thanks for applying to the Gutad Chef Network. Our team now reviews your kitchen, documents and first menu. This usually takes about 3 business days.', 'We will email you if we need anything else.'],
+        cta: { label: 'View your application', url: `${web}/chefs/apply` },
+      });
+    case 'chef.application.changes':
+      return sub('Your chef application needs a few changes', `Please update: ${p.steps}. Note from our team: ${p.note}`, {
+        eyebrow: 'Chef Network', tone: 'warning', heading: 'A few changes are needed',
+        paragraphs: ['Our reviewers need a few corrections before they can continue.'],
+        details: [['Steps to update', p.steps as string], ['Note', p.note as string]],
+        cta: { label: 'Update your application', url: `${web}/chefs/apply` },
+      });
+    case 'chef.application.approved':
+      return sub('Welcome to the Gutad Chef Network', `Your application is approved. Connect payouts and open your availability to start selling as ${p.displayName}.`, {
+        eyebrow: 'Chef Network', tone: 'success', heading: `Welcome, ${p.displayName || 'Chef'}`,
+        paragraphs: ['Your application is approved. Next: connect payouts securely, add your dishes and open your availability.'],
+        cta: { label: 'Open your chef dashboard', url: `${web}/chef` },
+      });
+    case 'chef.application.rejected':
+      return sub('About your Gutad chef application', `We could not approve your application: ${p.reason}. You can appeal from your application page.`, {
+        eyebrow: 'Chef Network', tone: 'danger', heading: 'We could not approve your application',
+        details: [['Reason', p.reason as string]],
+        paragraphs: ['If you think this is a mistake or your situation has changed, you can appeal from your application page.'],
+        cta: { label: 'View or appeal', url: `${web}/chefs/apply` },
+      });
+    case 'chef.application.waitlisted':
+      return sub('You are on the Gutad Chef Network waitlist', `Gutad is not onboarding chefs in your area yet${p.reason ? ` (${p.reason})` : ''}. We saved your application and will contact you when we open.`, {
+        eyebrow: 'Chef Network', heading: 'You are on our waitlist',
+        paragraphs: ['We are not onboarding chefs in your area yet. Your application is saved and we will contact you as soon as we open.'],
+        cta: { label: 'View your application', url: `${web}/chefs/apply` },
+      });
     default:
       return sub(template, JSON.stringify(p));
   }
@@ -427,6 +460,11 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
 /** Representative payloads for previews and test sends (Admin → Settings → Messaging). */
 export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'account.recovery': { link: 'https://gutad.io/account/recover?token=sample' },
+  'chef.application.received': { displayName: 'Chef Carlos', region: 'NY' },
+  'chef.application.changes': { steps: 'Documents, First menu', note: 'Upload a current food handler card and add allergens to your lasagna.' },
+  'chef.application.approved': { displayName: 'Chef Carlos' },
+  'chef.application.rejected': { reason: 'The kitchen permit does not cover meals prepared for sale.' },
+  'chef.application.waitlisted': { reason: 'not open in WY yet' },
   'order.submitted': { number: 'G-10482', locationName: 'Mama Put Kitchen', totalCents: 2840, orderId: 'sample' },
   'order.accepted': { number: 'G-10482', promiseAt: new Date(Date.now() + 25 * 60_000).toISOString(), orderId: 'sample' },
   'order.rejected': { number: 'G-10482', reason: 'KITCHEN_CLOSED', orderId: 'sample' },

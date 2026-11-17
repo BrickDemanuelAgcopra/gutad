@@ -33,7 +33,9 @@ export type RoleName =
   | 'OPERATIONS'
   | 'CULINARY'
   | 'MARKETING'
-  | 'IT';
+  | 'IT'
+  | 'CHEF'
+  | 'KITCHEN_ASSISTANT';
 
 export interface JwtPayload {
   sub: string;

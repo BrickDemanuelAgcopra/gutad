@@ -28,7 +28,7 @@ export function useApi<T>(path: string | null, opts?: { poll?: number; deps?: un
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, opts?.poll, ...(opts?.deps || [])]);
-  return { data, error, loading, reload: load };
+  return { data, error, loading, reload: load, setData };
 }
 
 export function useSession() {

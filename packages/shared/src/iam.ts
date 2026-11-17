@@ -54,6 +54,7 @@ export const IAM_RESOURCES: IamResource[] = [
   { key: 'security', label: 'Users, roles & audit', group: 'Modules', description: 'Staff, roles, permissions, sessions, audit history', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export', 'manage_access'], read: 'security.read', manage: 'security.manage' },
   { key: 'settings', label: 'Platform settings', group: 'Modules', description: 'Thresholds, SSO, policies', actions: ['edit'], manage: 'settings.manage' },
   { key: 'integrations', label: 'Integrations & API access', group: 'Modules', description: 'Providers, webhooks, devices, service accounts', actions: ['view', 'edit', 'manage_access'], read: 'integrations.manage', manage: 'integrations.manage' },
+  { key: 'chefs', label: 'Chef Network', group: 'Modules', description: 'Chef applications, kitchens, dishes and special requests', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'], read: 'chefs.read', manage: 'chefs.manage' },
   { key: 'field.pii', label: 'Personal information', group: 'Sensitive data', description: 'Customer and staff contact details', actions: ['view', 'export'], read: 'customers.pii' },
   { key: 'field.bank', label: 'Bank & payout details', group: 'Sensitive data', description: 'Beneficiary, account digits, tax ids', actions: ['view', 'export'] },
   { key: 'field.salary', label: 'Pay rates & payroll', group: 'Sensitive data', description: 'Wage rates, gross pay, payroll exports', actions: ['view', 'export'] },

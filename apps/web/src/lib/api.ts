@@ -28,7 +28,7 @@ export const session = {
   },
 };
 
-async function refreshSession() {
+export async function refreshSession() {
   const refresh = typeof window !== 'undefined' ? localStorage.getItem(REFRESH_KEY) : null;
   if (!refresh) return;
   try {

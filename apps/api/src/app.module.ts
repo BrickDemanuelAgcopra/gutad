@@ -37,6 +37,7 @@ import { FinanceModule } from './modules/finance/finance.module';
 import { OperationsModule } from './modules/operations/operations.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { ChefsModule } from './modules/chefs/chefs.module';
 import { JobsService } from './jobs/jobs.service';
 
 /** Shared module graph for the API and the worker. */
@@ -72,6 +73,7 @@ export const DOMAIN_MODULES = [
   CustomersModule,
     FinanceModule,
     OperationsModule,
+  ChefsModule,
 ];
 
 @Module({

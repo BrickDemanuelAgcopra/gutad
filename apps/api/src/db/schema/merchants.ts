@@ -175,6 +175,8 @@ export const locations = pgTable(
     deliveryFleetRequestNote: text('delivery_fleet_request_note'),
     /** Gutad's own culinary team prepares this location's menus ("Made at Gutad"); set by platform staff only. */
     platformOperated: boolean('platform_operated').notNull().default(false),
+    /** Gutad Chef Network: an independent chef's approved kitchen (dishes sold as "Gutad's … — by Chef …") */
+    chefKitchen: boolean('chef_kitchen').notNull().default(false),
     deliveryRadiusKm: doublePrecision('delivery_radius_km').notNull().default(5),
     deliveryBaseFeeCents: integer('delivery_base_fee_cents').notNull().default(399),
     deliveryPerKmCents: integer('delivery_per_km_cents').notNull().default(50),

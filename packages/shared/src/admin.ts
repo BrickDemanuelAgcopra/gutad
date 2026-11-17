@@ -53,19 +53,21 @@ export const PERMISSIONS = {
   'security.manage': { label: 'Manage staff access', sensitivity: 'RESTRICTED' },
   'settings.manage': { label: 'Platform settings', sensitivity: 'RESTRICTED' },
   'integrations.manage': { label: 'Integrations and devices', sensitivity: 'CONFIDENTIAL' },
+  'chefs.read': { label: 'View chef applications, chefs and dishes', sensitivity: 'INTERNAL' },
+  'chefs.manage': { label: 'Approve chefs, review dishes and kitchens', sensitivity: 'CONFIDENTIAL' },
 } as const satisfies Record<string, { label: string; sensitivity: Sensitivity }>;
 export type Permission = keyof typeof PERMISSIONS;
 export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
 
-const READS: Permission[] = ['overview.read', 'ops.read', 'orders.read', 'merchants.read', 'catalog.read', 'kitchens.read', 'delivery.read', 'finance.read', 'support.read', 'customers.read', 'growth.read', 'security.read'];
+const READS: Permission[] = ['overview.read', 'ops.read', 'orders.read', 'merchants.read', 'catalog.read', 'kitchens.read', 'delivery.read', 'finance.read', 'support.read', 'customers.read', 'growth.read', 'security.read', 'chefs.read'];
 
 export const ROLE_PERMISSIONS: Record<StaffRole, Permission[]> = {
   PLATFORM_ADMIN: ALL_PERMISSIONS,
   EXECUTIVE: [...READS, 'approvals.decide', 'finance.approve'],
-  OPERATIONS: ['overview.read', 'ops.read', 'ops.manage', 'orders.read', 'orders.manage', 'merchants.read', 'merchants.manage', 'catalog.read', 'kitchens.read', 'kitchens.manage', 'delivery.read', 'delivery.manage', 'support.read', 'customers.read', 'approvals.decide'],
+  OPERATIONS: ['overview.read', 'ops.read', 'ops.manage', 'orders.read', 'orders.manage', 'merchants.read', 'merchants.manage', 'catalog.read', 'kitchens.read', 'kitchens.manage', 'delivery.read', 'delivery.manage', 'support.read', 'customers.read', 'approvals.decide', 'chefs.read', 'chefs.manage'],
   FINANCE: ['overview.read', 'finance.read', 'finance.manage', 'finance.approve', 'orders.read', 'merchants.read', 'customers.read', 'support.read', 'approvals.decide'],
-  CULINARY: ['ops.read', 'catalog.read', 'catalog.manage', 'culinary.manage', 'kitchens.read', 'kitchens.manage', 'merchants.read', 'orders.read'],
-  SUPPORT: ['ops.read', 'orders.read', 'orders.manage', 'support.read', 'support.manage', 'customers.read', 'customers.pii', 'merchants.read', 'delivery.read', 'catalog.read'],
+  CULINARY: ['ops.read', 'catalog.read', 'catalog.manage', 'culinary.manage', 'kitchens.read', 'kitchens.manage', 'merchants.read', 'orders.read', 'chefs.read', 'chefs.manage'],
+  SUPPORT: ['ops.read', 'orders.read', 'orders.manage', 'support.read', 'support.manage', 'customers.read', 'customers.pii', 'merchants.read', 'delivery.read', 'catalog.read', 'chefs.read'],
   MARKETING: ['overview.read', 'growth.read', 'growth.manage', 'customers.read', 'merchants.read', 'catalog.read'],
   IT: ['ops.read', 'security.read', 'security.manage', 'settings.manage', 'integrations.manage', 'kitchens.read'],
   DISPATCHER: ['ops.read', 'delivery.read', 'delivery.manage', 'orders.read'],
@@ -83,7 +85,7 @@ export function permissionsFor(roles: readonly string[], ceiling: Sensitivity = 
   return [...out];
 }
 
-export const ADMIN_GROUPS = ['Overview', 'Operations', 'Merchants', 'Kitchens', 'Delivery', 'Finance', 'Support', 'Growth', 'Security'] as const;
+export const ADMIN_GROUPS = ['Overview', 'Operations', 'Merchants', 'Chef Network', 'Kitchens', 'Delivery', 'Finance', 'Support', 'Growth', 'Security'] as const;
 export type AdminGroup = (typeof ADMIN_GROUPS)[number];
 
 export interface AdminModule {
@@ -113,6 +115,8 @@ export const ADMIN_MODULES: AdminModule[] = [
   { key: 'availability', group: 'Operations', label: 'Availability', description: 'Sold-out items, paused stores and stations down across merchants', permission: 'ops.read', web: '/admin/availability' },
   { key: 'changes', group: 'Merchants', label: 'Change requests', description: 'Merchant menu and business-information changes waiting for review', permission: 'merchants.read', web: '/admin/changes' },
   { key: 'performance', group: 'Merchants', label: 'Merchant performance', description: 'Acceptance, cancellations, prep time, lateness and errors by location', permission: 'merchants.read', web: '/admin/performance' },
+  { key: 'chef-applications', group: 'Chef Network', label: 'Chef applications', description: 'Applications by stage, completeness checks, reviewers, documents, approvals, waitlist and appeals', permission: 'chefs.read', web: '/admin/chefs', mobile: '/ops/chefs' },
+  { key: 'chef-requirements', group: 'Chef Network', label: 'Chef document rules', description: 'Documents required by state and kitchen type', permission: 'chefs.read', web: '/admin/chefs/requirements' },
   { key: 'delivery', group: 'Delivery', label: 'Delivery & dispatch', description: 'Live map, unassigned and late deliveries, manual assignment, zones, restrictions, providers and cost analysis', permission: 'delivery.read', web: '/admin/delivery', mobile: '/ops/delivery' },
   { key: 'couriers', group: 'Delivery', label: 'Couriers', description: 'Courier directory, documents, shifts, reliability, pay adjustments, suspensions and appeals', permission: 'delivery.read', web: '/admin/couriers', mobile: '/ops/couriers' },
   { key: 'supply', group: 'Kitchens', label: 'Supply & inventory', description: 'Stock and lots, expiring stock, suppliers and approvals, purchase orders and matching, transfers, forecasts', permission: 'kitchens.read', web: '/admin/supply', mobile: '/ops/supply' },

@@ -38,6 +38,13 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Gutad uses your photos for your chef portrait, dish photos and documents you choose to upload.",
+          "cameraPermission": "Gutad uses the camera to photograph permits, certificates and dishes you choose to upload."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/splash.png",

@@ -20,6 +20,9 @@ export default function RootLayout() {
         <Stack.Screen name="driver/index" options={{ title: 'Driver' }} />
         <Stack.Screen name="kiosk/[slug]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="ops/index" options={{ title: 'Gutad Ops' }} />
+        <Stack.Screen name="ops/chefs" options={{ title: 'Chef applications' }} />
+        <Stack.Screen name="chefs/apply" options={{ title: 'Cook with Gutad' }} />
+        <Stack.Screen name="chef/index" options={{ title: 'Chef dashboard' }} />
         <Stack.Screen name="ops/executive" options={{ title: 'Executive dashboard' }} />
         <Stack.Screen name="ops/live" options={{ title: 'Live operations' }} />
         <Stack.Screen name="ops/alerts" options={{ title: 'Alerts' }} />

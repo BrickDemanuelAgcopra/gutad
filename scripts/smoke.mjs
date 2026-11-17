@@ -21,6 +21,7 @@ import { followupsB } from './smoke-followups-b.mjs';
 import { followupsC } from './smoke-followups-c.mjs';
 import { followupsD } from './smoke-followups-d.mjs';
 import { iamChecks } from './smoke-iam.mjs';
+import { chefPhaseA } from './smoke-chef-a.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -505,6 +506,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await followupsC({ call, check, A, O, C, locId, demoOrgId, owner, API: FAPI });
   await followupsD({ call, check, A, O, C, locId, demoOrgId, API: FAPI });
   await iamChecks({ call, check, A, O, C, demoOrgId, o1 });
+  await chefPhaseA({ call, check, A, O, C, API: FAPI });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

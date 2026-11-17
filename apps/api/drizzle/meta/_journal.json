@@ -127,6 +127,13 @@
       "when": 1794668233640,
       "tag": "0017_iam",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794883134427,
+      "tag": "0018_chef_onboarding",
+      "breakpoints": true
     }
   ]
 }
