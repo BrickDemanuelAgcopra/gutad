@@ -403,3 +403,127 @@ export function chefCancellationRefund(o: { chargedCents: number; freeCancelUnti
   const pct = Math.max(0, Math.min(100, o.lateRefundPct ?? 0));
   return { allowed: true, refundCents: Math.round((o.chargedCents * pct) / 100), full: pct === 100, reason: pct ? `${pct}% refund after the cutoff` : 'No refund after the cutoff' };
 }
+
+// ───── Phase 6: special requests and chef quotes ─────
+
+/**
+ * A customer's special request for a chef dish. The chef answers with a versioned quote (or a suggested
+ * alternative), asks a question, or declines; the customer accepts and pays, asks for a revision, or withdraws.
+ */
+export const CHEF_REQUEST_STATUSES = ['PENDING', 'NEEDS_INFO', 'QUOTED', 'ACCEPTED', 'ORDERED', 'DECLINED', 'WITHDRAWN', 'EXPIRED', 'CLOSED'] as const;
+export type ChefRequestStatus = (typeof CHEF_REQUEST_STATUSES)[number];
+export const CHEF_REQUEST_STATUS_LABELS: Record<ChefRequestStatus, string> = {
+  PENDING: 'Waiting for the chef',
+  NEEDS_INFO: 'Chef has a question',
+  QUOTED: 'Quote ready',
+  ACCEPTED: 'Accepted, ready to pay',
+  ORDERED: 'Ordered',
+  DECLINED: 'Declined by the chef',
+  WITHDRAWN: 'Withdrawn',
+  EXPIRED: 'Expired',
+  CLOSED: 'Closed by Gutad',
+};
+/** statuses in which the request is still open */
+export const CHEF_REQUEST_OPEN: ChefRequestStatus[] = ['PENDING', 'NEEDS_INFO', 'QUOTED', 'ACCEPTED'];
+
+export const CHEF_REQUEST_TYPES = { ADD: 'Add an ingredient', REMOVE: 'Leave something out', SWAP: 'Swap an ingredient', PORTION: 'Different size or servings', OTHER: 'Something else' } as const;
+export type ChefRequestType = keyof typeof CHEF_REQUEST_TYPES;
+export const CHEF_REQUEST_REASONS = { PREFERENCE: 'Preference', ALLERGY: 'Allergy', DIETARY: 'Dietary need', OCCASION: 'Special occasion' } as const;
+export type ChefRequestReason = keyof typeof CHEF_REQUEST_REASONS;
+
+export type ChefRequestQuoteKind = 'QUOTE' | 'ALTERNATIVE';
+export type ChefRequestQuoteStatus = 'SENT' | 'ACCEPTED' | 'SUPERSEDED' | 'REVISION_REQUESTED' | 'DECLINED' | 'EXPIRED' | 'ORDERED';
+
+export interface ChefRequestQuote {
+  id: string;
+  version: number;
+  kind: ChefRequestQuoteKind;
+  status: ChefRequestQuoteStatus;
+  /** the exact changes the chef will make */
+  changes: string;
+  portionDesc: string;
+  /** food price per serving, confirmed by the chef */
+  unitPriceCents: number;
+  quantity: number;
+  totalCents: number;
+  allergens: string[];
+  dietaryTags: string[];
+  prepMinutes: number | null;
+  serviceDate: string;
+  serviceTime: string | null;
+  note: string | null;
+  expiresAt: string;
+  acceptedAt: string | null;
+  /** the dish this quote sells (a suggested alternative can be another dish, even another chef's) */
+  dish: { id: string; menuItemId: string; title: string; dishName: string; photo: string | null };
+  chef: { id: string; slug: string; displayName: string };
+  location: { id: string; slug: string; name: string };
+  createdAt: string;
+}
+
+export interface ChefRequestMessage { id: string; authorRole: 'CUSTOMER' | 'CHEF' | 'STAFF' | 'SYSTEM'; authorName: string | null; body: string; createdAt: string }
+
+export interface ChefRequestSummary {
+  id: string;
+  code: string;
+  status: ChefRequestStatus;
+  requestType: ChefRequestType;
+  details: string;
+  ingredient: string | null;
+  servings: number;
+  requestedDate: string;
+  requestedTime: string | null;
+  reason: ChefRequestReason;
+  budgetCents: number | null;
+  alternativesOk: boolean;
+  respondBy: string | null;
+  orderId: string | null;
+  dish: { id: string; menuItemId: string; title: string; dishName: string; photo: string | null; priceCents: number };
+  chef: { id: string; slug: string; displayName: string };
+  customer?: { name: string | null };
+  latestQuote: ChefRequestQuote | null;
+  lastActivityAt: string;
+  createdAt: string;
+}
+
+export interface ChefRequestDetail extends ChefRequestSummary {
+  baseOptionIds: string[];
+  baseOptionNames: string[];
+  alternativesNote: string | null;
+  quotes: ChefRequestQuote[];
+  messages: ChefRequestMessage[];
+  /** what the viewer may do now */
+  can: { quote: boolean; ask: boolean; decline: boolean; accept: boolean; revise: boolean; withdraw: boolean; message: boolean; close: boolean };
+  viewerRole: 'CUSTOMER' | 'CHEF' | 'STAFF';
+}
+
+/** The cart line an accepted quote becomes (priced from the quote; quantity and date are fixed). */
+export interface ChefQuoteCartLine {
+  chefRequestQuoteId: string;
+  menuItemId: string;
+  name: string;
+  quantity: number;
+  unitPriceCents: number;
+  modifierOptionIds: string[];
+  modifierNames: string[];
+  serviceDate: string;
+  serviceTime: string | null;
+  location: { id: string; slug: string; name: string };
+  chefName: string;
+}
+
+/** Response and validity windows for special requests (setting `chefs.requests`). */
+export interface ChefRequestPolicy {
+  /** hours the chef has to answer a new request (or a revision) */
+  chefResponseHours: number;
+  /** default hours a quote stays valid for the customer */
+  quoteValidHours: number;
+  /** hours a customer has to answer the chef's question */
+  customerReplyHours: number;
+  /** open requests one customer may have at a time */
+  maxOpenPerCustomer: number;
+}
+export const DEFAULT_CHEF_REQUEST_POLICY: ChefRequestPolicy = { chefResponseHours: 24, quoteValidHours: 48, customerReplyHours: 72, maxOpenPerCustomer: 5 };
+
+/** Short human code for a request ("R-7F3K2A") derived from its id. */
+export function chefRequestCode(id: string) { return `R-${id.replace(/-/g, '').slice(0, 6).toUpperCase()}`; }

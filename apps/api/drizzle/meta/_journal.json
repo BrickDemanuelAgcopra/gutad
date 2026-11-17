@@ -162,6 +162,13 @@
       "when": 1794916193095,
       "tag": "0022_chef_checkout",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794917796787,
+      "tag": "0023_chef_requests",
+      "breakpoints": true
     }
   ]
 }

@@ -90,7 +90,7 @@ export default function CheckoutPage() {
         let scheduledFor: string | null = null;
         if (chef && !(schedule?.date && schedule.time)) { if (!cancelled) { setQuote(null); setBlocked(null); } return; }
         if (schedule?.date && schedule.time) scheduledFor = (await api.get<{ iso: string }>(`/public/locations/${cart.locationId}/local-time?date=${schedule.date}&time=${schedule.time}`)).iso;
-        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), scheduledFor, tipCents, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined, ...(chef ? { holdKey: holdKey.current } : {}) });
+        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions, chefRequestQuoteId: l.chefRequestQuoteId })), scheduledFor, tipCents, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined, ...(chef ? { holdKey: holdKey.current } : {}) });
         if (!cancelled) { setQuote(q); setBlocked(null); }
       } catch (e) {
         if (!cancelled) {
@@ -163,7 +163,7 @@ export default function CheckoutPage() {
             {cart.lines.map((l) => (
               <li key={l.key} className="flex items-center justify-between py-2">
                 <div><div className="font-medium">{l.name}</div>{l.modifierNames.length > 0 && <div className="text-xs text-ink-500">{l.modifierNames.join(', ')}</div>}{l.specialInstructions && <div className="text-xs italic text-ink-500">“{l.specialInstructions}”</div>}</div>
-                <div className="flex items-center gap-2"><Button size="sm" variant="secondary" onClick={() => setQty(l.key, l.quantity - 1)}>−</Button><span>{l.quantity}</span><Button size="sm" variant="secondary" onClick={() => setQty(l.key, l.quantity + 1)}>+</Button><span className="w-16 text-right">{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</span></div>
+                <div className="flex items-center gap-2">{l.chefRequestQuoteId ? <><span className="text-xs text-ink-500">Quoted × {l.quantity}</span><Button size="sm" variant="ghost" onClick={() => setQty(l.key, 0)} aria-label={`Remove ${l.name}`}>Remove</Button></> : <><Button size="sm" variant="secondary" onClick={() => setQty(l.key, l.quantity - 1)}>−</Button><span>{l.quantity}</span><Button size="sm" variant="secondary" onClick={() => setQty(l.key, l.quantity + 1)}>+</Button></>}<span className="w-16 text-right">{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</span></div>
               </li>
             ))}
           </ul>
@@ -184,6 +184,7 @@ export default function CheckoutPage() {
           {chef && (
             <div className="mt-4 border-t border-ink-100 pt-4">
               <DateSlotPicker availability={avail} value={schedule} onChange={(v) => { setSchedule(v); if (cart.locationId) preferredDate.set(cart.locationId, v.date); }} loading={availLoading} title={fulfillment === 'DELIVERY' ? 'Delivery day and time' : 'Pickup day and time'} />
+              {(() => { const q = cart.lines.find((l) => l.serviceDate)?.serviceDate; return q ? <p className={`mt-2 text-sm ${schedule?.date && schedule.date !== q ? 'text-amber-700' : 'text-ink-500'}`}>Your special request is quoted for {new Date(`${q}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}{schedule?.date && schedule.date !== q ? '. Choose that day.' : '.'}</p> : null; })()}
               <p className="mt-2 text-xs text-ink-500">Chef dishes are cooked to order for the day you choose. Your portions are held for 10 minutes while you check out.</p>
             </div>
           )}

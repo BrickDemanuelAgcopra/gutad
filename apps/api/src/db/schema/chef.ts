@@ -292,3 +292,114 @@ export const kitchenCapacityLedger = pgTable(
   },
   (t) => [index('kitchen_capacity_ledger_day_idx').on(t.locationId, t.serviceDate), index('kitchen_capacity_ledger_quote_idx').on(t.quoteId), index('kitchen_capacity_ledger_order_idx').on(t.orderId)],
 );
+
+/**
+ * A customer's special request for a chef dish (Phase 6). The chef answers with a quote (`chef_request_quotes`),
+ * asks a question (`chef_request_messages`) or declines. `respondBy` is the deadline of whoever must act next
+ * (the chef while PENDING, the customer while NEEDS_INFO); open requests past it expire.
+ */
+export const chefRequests = pgTable(
+  'chef_requests',
+  {
+    id: id(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    chefProfileId: uuid('chef_profile_id')
+      .notNull()
+      .references(() => chefProfiles.id, { onDelete: 'cascade' }),
+    locationId: uuid('location_id')
+      .notNull()
+      .references(() => locations.id),
+    chefDishId: uuid('chef_dish_id')
+      .notNull()
+      .references(() => chefDishes.id),
+    /** ADD | REMOVE | SWAP | PORTION | OTHER */
+    requestType: text('request_type').notNull(),
+    details: text('details').notNull(),
+    ingredient: text('ingredient'),
+    servings: integer('servings').notNull().default(1),
+    requestedDate: date('requested_date', { mode: 'string' }).notNull(),
+    requestedTime: text('requested_time'),
+    /** PREFERENCE | ALLERGY | DIETARY | OCCASION */
+    reason: text('reason').notNull().default('PREFERENCE'),
+    budgetCents: integer('budget_cents'),
+    alternativesOk: boolean('alternatives_ok').notNull().default(true),
+    alternativesNote: text('alternatives_note'),
+    /** the customization the customer had chosen when asking (modifier option ids) */
+    baseOptionIds: uuid('base_option_ids').array().notNull().default([]),
+    /** PENDING | NEEDS_INFO | QUOTED | ACCEPTED | ORDERED | DECLINED | WITHDRAWN | EXPIRED | CLOSED */
+    status: text('status').notNull().default('PENDING'),
+    respondBy: ts('respond_by'),
+    currentQuoteId: uuid('current_quote_id'),
+    orderId: uuid('order_id').references(() => orders.id),
+    /** first chef response (quote, question or decline), for response-time metrics */
+    firstResponseAt: ts('first_response_at'),
+    closedReason: text('closed_reason'),
+    lastActivityAt: ts('last_activity_at').notNull().defaultNow(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('chef_requests_user_idx').on(t.userId, t.createdAt), index('chef_requests_chef_idx').on(t.chefProfileId, t.status), index('chef_requests_status_idx').on(t.status, t.respondBy)],
+);
+
+/**
+ * Versioned chef quotes for a request. Each new version supersedes the previous one. A quote fixes the exact
+ * changes, portion, food price per serving, quantity, allergens and dietary labels, and the date (and time) it is
+ * cooked for. An ALTERNATIVE can sell a different dish (shown with that dish's chef; never swapped in silently).
+ */
+export const chefRequestQuotes = pgTable(
+  'chef_request_quotes',
+  {
+    id: id(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => chefRequests.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    /** QUOTE | ALTERNATIVE */
+    kind: text('kind').notNull().default('QUOTE'),
+    /** SENT | ACCEPTED | SUPERSEDED | REVISION_REQUESTED | DECLINED | EXPIRED | ORDERED */
+    status: text('status').notNull().default('SENT'),
+    chefDishId: uuid('chef_dish_id')
+      .notNull()
+      .references(() => chefDishes.id),
+    locationId: uuid('location_id')
+      .notNull()
+      .references(() => locations.id),
+    menuItemId: uuid('menu_item_id').notNull(),
+    optionIds: uuid('option_ids').array().notNull().default([]),
+    changes: text('changes').notNull(),
+    portionDesc: text('portion_desc').notNull().default(''),
+    unitPriceCents: integer('unit_price_cents').notNull(),
+    quantity: integer('quantity').notNull(),
+    allergens: text('allergens').array().notNull().default([]),
+    dietaryTags: text('dietary_tags').array().notNull().default([]),
+    prepMinutes: integer('prep_minutes'),
+    serviceDate: date('service_date', { mode: 'string' }).notNull(),
+    serviceTime: text('service_time'),
+    note: text('note'),
+    expiresAt: ts('expires_at').notNull(),
+    acceptedAt: ts('accepted_at'),
+    orderId: uuid('order_id').references(() => orders.id),
+    createdById: uuid('created_by_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('chef_request_quotes_version_uq').on(t.requestId, t.version), index('chef_request_quotes_status_idx').on(t.status, t.expiresAt)],
+);
+
+/** Clarification messages on a request (customer, chef, Gutad staff, or system notes). */
+export const chefRequestMessages = pgTable(
+  'chef_request_messages',
+  {
+    id: id(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => chefRequests.id, { onDelete: 'cascade' }),
+    authorId: uuid('author_id'),
+    /** CUSTOMER | CHEF | STAFF | SYSTEM */
+    authorRole: text('author_role').notNull(),
+    body: text('body').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('chef_request_messages_req_idx').on(t.requestId, t.createdAt)],
+);

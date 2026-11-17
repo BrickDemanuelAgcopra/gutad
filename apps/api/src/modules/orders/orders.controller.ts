@@ -11,7 +11,7 @@ const QuoteDto = z.object({
   locationId: z.string().uuid(),
   channel: z.enum(['MARKETPLACE', 'DIRECT', 'WIDGET', 'QR', 'KIOSK', 'PARTNER', 'PHONE', 'WALK_IN', 'CAMPUS', 'CORPORATE', 'API']).default('MARKETPLACE'),
   fulfillmentType: z.enum(['PICKUP', 'DELIVERY', 'DINE_IN', 'CATERING']).default('PICKUP'),
-  lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1).max(50), modifierOptionIds: z.array(z.string().uuid()).optional(), specialInstructions: z.string().max(300).optional() })).min(1),
+  lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1).max(50), modifierOptionIds: z.array(z.string().uuid()).optional(), specialInstructions: z.string().max(300).optional(), chefRequestQuoteId: z.string().uuid().optional() })).min(1),
   scheduledFor: z.string().nullable().optional(),
   tipCents: z.number().int().min(0).optional(),
   promoCode: z.string().optional(),

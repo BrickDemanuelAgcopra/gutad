@@ -35,6 +35,7 @@ function DishView({ d }: { d: Dish }) {
   const noDates = !!avail && !avail.earliestDate;
   const can = d.acceptingOrders && !d.soldOut && !noDates;
   const unit = d.priceCents + ev.modifiersCents;
+  const ask = (ingredient?: string) => router.push({ pathname: '/requests/new', params: { dishId: d.id, ingredient: ingredient || '', optionIds: ev.optionIds.join(',') } });
   const addToCart = () => {
     const names = ev.chosen.filter((c) => c.priceCents > 0 || !groups.find((g) => g.id === c.groupId)?.options.find((o) => o.id === c.id)?.isDefault).map(modifierLabel);
     add({ id: d.location.id, slug: d.location.slug, name: `${d.chef.displayName} (Gutad Chef Network)` }, { menuItemId: d.menuItemId, name: d.title, quantity: qty, unitPriceCents: d.priceCents, modifierOptionIds: ev.optionIds, modifierNames: names, modifiersCents: ev.modifiersCents }, { park: true });
@@ -50,7 +51,7 @@ function DishView({ d }: { d: Dish }) {
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginVertical: 8 }}><Badge text={CHEF_FULFILLMENT_FORMATS[d.fulfillmentFormat]} /><Badge text={customizable ? 'Customizable' : 'Fixed recipe'} tone={customizable ? 'info' : 'neutral'} />{ev.dietaryTags.map((t) => <Badge key={t} text={t.replace('_', ' ')} tone="good" />)}</View>
           {open && customizable ? (
             <Card title="Customize">
-              <Customizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} />
+              <Customizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAsk={ask} />
               <Summary base={d.priceCents} ev={ev} qty={qty} baseAllergens={d.allergens} />
             </Card>
           ) : (
@@ -69,6 +70,11 @@ function DishView({ d }: { d: Dish }) {
               </Card>
             </>
           )}
+          {d.acceptsSpecialRequests && <Card>
+            <Text style={{ fontWeight: '700', color: C.ink }}>Want something the options don’t cover?</Text>
+            <Muted>{d.chef.displayName} can quote a change, like adding or leaving out an ingredient. You pay only if you accept.</Muted>
+            <Button variant="secondary" title="Request something special" onPress={() => ask()} />
+          </Card>}
         </View>
       </ScrollView>
       <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: C.white, borderTopWidth: 1, borderColor: C.ink1, padding: 12, gap: 8 }}>

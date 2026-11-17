@@ -5,7 +5,7 @@ import * as Location from 'expo-location';
 import { GutadApiError, type ChefAvailability, type Quote } from '@gutad/shared';
 import { CardField, type CardToken } from '@/card-field';
 import { api, money, newIdempotencyKey } from '@/api';
-import { cartSubtotal, useCart, type Cart } from '@/cart';
+import { cartSubtotal, preferredSchedule, useCart, type Cart } from '@/cart';
 import { useApi, useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Input, Loading, Muted, s } from '@/ui';
 import { SmsNotice } from '@/legal';
@@ -17,7 +17,7 @@ type Leg = { quote: CQuote | null; error: string | null };
 type Addr = { line1: string; city: string; region: string; postalCode: string; lat: number; lng: number };
 
 const MAX_CHEFS = 6;
-const MSG: Record<string, string> = { SCHEDULE_REQUIRED: 'Pick a cooking day and time for each chef.', CHEF_CUTOFF_PASSED: 'Ordering for that day has closed. Pick another date.', CHEF_NOT_COOKING: 'The chef isn’t cooking that day. Pick another date.', CHEF_PAUSED: 'The chef is away that day. Pick another date.', CHEF_TOO_FAR: 'That date isn’t open for orders yet. Pick an earlier date.', CHEF_TIME_UNAVAILABLE: 'That time isn’t available. Pick another time.', DISH_CAPACITY_FULL: 'A dish just sold out for that day. Pick another date.', KITCHEN_CAPACITY_FULL: 'A chef is fully booked that day. Pick another date.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.', QUOTE_EXPIRED: 'Prices were refreshed. Check the totals and pay again.', QUOTE_CONSUMED: 'Part of this checkout was already placed. Check your orders before paying again.' };
+const MSG: Record<string, string> = { SCHEDULE_REQUIRED: 'Pick a cooking day and time for each chef.', CHEF_CUTOFF_PASSED: 'Ordering for that day has closed. Pick another date.', CHEF_NOT_COOKING: 'The chef isn’t cooking that day. Pick another date.', CHEF_PAUSED: 'The chef is away that day. Pick another date.', CHEF_TOO_FAR: 'That date isn’t open for orders yet. Pick an earlier date.', CHEF_TIME_UNAVAILABLE: 'That time isn’t available. Pick another time.', DISH_CAPACITY_FULL: 'A dish just sold out for that day. Pick another date.', KITCHEN_CAPACITY_FULL: 'A chef is fully booked that day. Pick another date.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.', QUOTE_EXPIRED: 'Prices were refreshed. Check the totals and pay again.', QUOTE_CONSUMED: 'Part of this checkout was already placed. Check your orders before paying again.', CHEF_QUOTE_QUANTITY: 'The quantity of a chef’s quote can’t change. Remove it and add it again from your request.', CHEF_QUOTE_DATE: 'This quote is for a set day and time. Pick the date the chef quoted.', CHEF_QUOTE_EXPIRED: 'This quote has expired. Ask the chef for a new one from your request.', CHEF_QUOTE_USED: 'This quote was already used for an order.' };
 const CAPACITY = ['DISH_CAPACITY_FULL', 'KITCHEN_CAPACITY_FULL', 'CHEF_CUTOFF_PASSED', 'CHEF_NOT_COOKING', 'CHEF_PAUSED', 'CHEF_TOO_FAR', 'CHEF_TIME_UNAVAILABLE'];
 const codeOf = (e: unknown) => (e instanceof GutadApiError ? (e.body as unknown as { code?: string; menuItemId?: string; quoteId?: string } | null) : null);
 const errMsg = (e: unknown) => { const c = codeOf(e)?.code; return c && MSG[c] ? MSG[c] : (e as Error).message; };
@@ -45,7 +45,10 @@ function ChefLeg({ c, loc, tipPct, addr, refresh, onLeg }: { c: Cart; loc: Loc; 
   useEffect(() => {
     if (!avail) return;
     const d = schedule ? avail.days.find((x) => x.date === schedule.date) : undefined;
-    if (!d || d.status !== 'AVAILABLE') setSchedule(avail.earliestDate && !schedule ? { date: avail.earliestDate, time: '' } : null);
+    const pref = preferredSchedule(c);
+    const pd = pref ? avail.days.find((x) => x.date === pref.date && x.status === 'AVAILABLE') : undefined;
+    const first = pd && pref ? { date: pref.date, time: pref.time && pd.slots.includes(pref.time) ? pref.time : '' } : avail.earliestDate ? { date: avail.earliestDate, time: '' } : null;
+    if (!d || d.status !== 'AVAILABLE') setSchedule(!schedule ? first : null);
     else if (schedule?.time && !d.slots.includes(schedule.time)) setSchedule({ date: d.date, time: '' });
   }, [avail]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -55,7 +58,7 @@ function ChefLeg({ c, loc, tipPct, addr, refresh, onLeg }: { c: Cart; loc: Loc; 
   useEffect(() => {
     if (!scheduledFor || !c.lines.length) { setQuote(null); return; }
     const t = setTimeout(() => {
-      api.post<CQuote>('/quotes', { locationId: lid, channel: 'MARKETPLACE', fulfillmentType: fulfillment, scheduledFor, holdKey: holdKey.current, lines: c.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
+      api.post<CQuote>('/quotes', { locationId: lid, channel: 'MARKETPLACE', fulfillmentType: fulfillment, scheduledFor, holdKey: holdKey.current, lines: c.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions, chefRequestQuoteId: l.chefRequestQuoteId })), tipCents, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
         .then((q) => { setQuote(q); setError(null); })
         .catch((e) => { setQuote(null); const code = codeOf(e)?.code; if (code && CAPACITY.includes(code)) void loadAvail(); setError(errMsg(e)); });
     }, 350);
@@ -64,7 +67,7 @@ function ChefLeg({ c, loc, tipPct, addr, refresh, onLeg }: { c: Cart; loc: Loc; 
   useEffect(() => { onLeg(lid, { quote, error: error || (!schedule?.time ? 'Pick a day and time' : null) }); }, [quote, error, schedule?.time]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <Card title={loc.name || c.locationName || 'Chef'}>
-      {c.lines.map((l) => <View key={l.key} style={[s.row, { marginBottom: 4 }]}><View style={{ flex: 1 }}><Text>{l.quantity}× {l.name}</Text>{l.modifierNames.length > 0 && <Muted>{l.modifierNames.join(', ')}</Muted>}</View><Text>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</Text></View>)}
+      {c.lines.map((l) => <View key={l.key} style={[s.row, { marginBottom: 4 }]}><View style={{ flex: 1 }}><Text>{l.quantity}× {l.name}</Text>{l.modifierNames.length > 0 && <Muted>{l.modifierNames.join(', ')}</Muted>}{l.chefRequestQuoteId && <Muted>Price confirmed by the chef · quantity fixed</Muted>}</View><Text>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</Text></View>)}
       <View style={{ marginTop: 8 }}><DateSlotPicker availability={avail} loading={availLoading} value={schedule} onChange={(v) => { setSchedule(v); setError(null); }} /></View>
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>{loc.acceptsPickup && <Button title="Pickup" variant={fulfillment === 'PICKUP' ? 'primary' : 'secondary'} onPress={() => setFulfillment('PICKUP')} />}{loc.acceptsDelivery && <Button title="Delivery" variant={fulfillment === 'DELIVERY' ? 'primary' : 'secondary'} onPress={() => setFulfillment('DELIVERY')} />}</View>
       <ErrorText msg={error} />

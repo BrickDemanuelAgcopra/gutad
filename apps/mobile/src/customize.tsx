@@ -32,7 +32,7 @@ function Stepper({ value, max, onChange, label }: { value: number; max: number; 
   );
 }
 
-export function Customizer({ groups, picks, setPicks, ev, chefName, acceptsRequests }: { groups: ModGroup[]; picks: Picks; setPicks: (p: Picks) => void; ev: CustomizationResult; chefName: string; acceptsRequests?: boolean }) {
+export function Customizer({ groups, picks, setPicks, ev, chefName, acceptsRequests, onAsk }: { groups: ModGroup[]; picks: Picks; setPicks: (p: Picks) => void; ev: CustomizationResult; chefName: string; acceptsRequests?: boolean; /** opens a special request for an ingredient the dish doesn't offer */ onAsk?: (ingredient: string) => void }) {
   const active = new Set(ev.activeGroupIds);
   const qtyOf = (id: string) => ev.chosen.find((c) => c.id === id)?.qty || 0;
   const single = (g: ModGroup, id: string) => { const n = { ...picks }; for (const o of g.options) delete n[o.id]; n[id] = 1; setPicks(n); };
@@ -73,7 +73,9 @@ export function Customizer({ groups, picks, setPicks, ev, chefName, acceptsReque
           <Text style={{ fontWeight: '700', fontSize: 15 }}>Add an ingredient</Text>
           <TextInput placeholder="Search, e.g. burrata or chili" placeholderTextColor={C.ink3} value={q} onChangeText={setQ} style={[s.input, { marginTop: 6 }]} accessibilityLabel="Search extras" />
           {shownExtras.map((o) => <View key={o.id} style={[s.row, { paddingVertical: 6 }]}><View style={{ flex: 1 }}><Text style={{ fontWeight: '600' }}>{o.name}</Text><Text style={{ color: C.ink5, fontSize: 12 }}>{[o.portionDesc, o.priceCents ? `${money(o.priceCents)} each` : 'free', o.addsAllergens?.length ? `contains ${o.addsAllergens.join(', ')}` : ''].filter(Boolean).join(' · ')}</Text></View><Stepper label={o.name} value={picks[o.id] || 0} max={o.soldOut ? 0 : o.maxQty ?? 2} onChange={(v) => setPicks({ ...picks, [o.id]: v })} /></View>)}
-          {!!term && !hits.length && <View style={{ marginTop: 8, padding: 10, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ink3 }}><Text style={{ fontWeight: '600' }}>{acceptsRequests ? `Ask ${chefName} to add ${q.trim()}` : `${q.trim()} isn’t offered on this dish`}</Text><Text style={{ color: C.ink5, fontSize: 12 }}>{acceptsRequests ? 'Price and availability need the chef’s confirmation. Chef requests open soon.' : `${chefName} doesn’t take special requests for this dish.`}</Text></View>}
+          {!!term && !hits.length && (acceptsRequests && onAsk
+            ? <Pressable accessibilityRole="button" accessibilityLabel={`Ask ${chefName} to add ${q.trim()}`} onPress={() => onAsk(q.trim())} style={({ pressed }) => ({ marginTop: 8, padding: 10, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: C.brand, backgroundColor: pressed ? '#fff4ec' : C.white })}><Text style={{ fontWeight: '600', color: C.brand }}>Ask {chefName} to add {q.trim()} ›</Text><Text style={{ color: C.ink5, fontSize: 12 }}>The chef confirms the price and date. Nothing is charged until you accept their quote.</Text></Pressable>
+            : <View style={{ marginTop: 8, padding: 10, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ink3 }}><Text style={{ fontWeight: '600' }}>{q.trim()} isn’t offered on this dish</Text><Text style={{ color: C.ink5, fontSize: 12 }}>{acceptsRequests ? 'Price and availability need the chef’s confirmation.' : `${chefName} doesn’t take special requests for this dish.`}</Text></View>)}
         </View>
       )}
     </View>

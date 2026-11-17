@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useState } from 'react';
-import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, chefNoticeText, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, WEEKDAYS, type ChefNetworkFees, type ChefPolicy, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
+import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, chefNoticeText, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, DEFAULT_CHEF_REQUEST_POLICY, WEEKDAYS, type ChefNetworkFees, type ChefPolicy, type ChefRequestPolicy, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
 import { api, API_URL, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Table, Tabs, Textarea } from '@/components/ui';
@@ -32,7 +32,7 @@ export default function AdminChefs() {
   const [tab, setTab] = useState('applications');
   return (
     <div className="space-y-4">
-      <SectionTitle title="Chef Network" hint="Independent chefs: applications, kitchens and documents, approvals and chef accounts." action={<Link href="/admin/chefs/requirements" className="text-sm underline">Document rules →</Link>} />
+      <SectionTitle title="Chef Network" hint="Independent chefs: applications, kitchens and documents, approvals and chef accounts." action={<span className="flex gap-4"><Link href="/admin/chefs/requests" className="text-sm underline">Special requests →</Link><Link href="/admin/chefs/requirements" className="text-sm underline">Document rules →</Link></span>} />
       <Tabs tabs={[{ id: 'applications', label: 'Applications' }, { id: 'dishes', label: 'Dish review' }, { id: 'chefs', label: 'Chefs' }, { id: 'fees', label: 'Fees & policy' }]} active={tab} onChange={setTab} />
       {tab === 'applications' ? <Applications /> : tab === 'dishes' ? <DishReview /> : tab === 'fees' ? <FeesPolicy /> : <Chefs />}
     </div>
@@ -214,9 +214,15 @@ function FeesPolicy() {
   const [f, setF] = useState<null | { commissionPct: string; servicePct: string; serviceMin: string; serviceCap: string; smallThreshold: string; smallFee: string }>(null);
   const [p, setP] = useState<ChefPolicy | null>(null);
   const [advance, setAdvance] = useState<string | null>(null);
+  const [rq, setRq] = useState<ChefRequestPolicy | null>(null);
   if (!data) return <p className="text-sm text-ink-500">Loading…</p>;
   const fv = f || { commissionPct: String(curFees.commissionBps / 100), servicePct: String(curFees.customer.service.bps / 100), serviceMin: (curFees.customer.service.minCents / 100).toFixed(2), serviceCap: ((curFees.customer.service.capCents || 0) / 100).toFixed(2), smallThreshold: (curFees.customer.smallOrder.thresholdCents / 100).toFixed(2), smallFee: (curFees.customer.smallOrder.feeCents / 100).toFixed(2) };
   const pv = p || curPol;
+  const rv = rq || { ...DEFAULT_CHEF_REQUEST_POLICY, ...((data.settings['chefs.requests'] as Partial<ChefRequestPolicy>) || {}) };
+  const saveRequests = () => run(async () => {
+    await api.post('/admin/settings', { key: 'chefs.requests', value: rv, reason: 'Chef Network special requests' });
+    setMsg('Special-request deadlines saved.'); setRq(null); await reload();
+  });
   const cents = (v: string) => Math.round(Number(v || 0) * 100);
   const saveFees = () => run(async () => {
     const value: ChefNetworkFees = { commissionBps: Math.round(Number(fv.commissionPct) * 100), customer: { ...curFees.customer, service: { ...curFees.customer.service, bps: Math.round(Number(fv.servicePct) * 100), minCents: cents(fv.serviceMin), capCents: cents(fv.serviceCap) }, smallOrder: { ...curFees.customer.smallOrder, thresholdCents: cents(fv.smallThreshold), feeCents: cents(fv.smallFee) } } };
@@ -256,6 +262,16 @@ function FeesPolicy() {
         </div>
         <p className="mt-2 text-xs text-ink-500">Customers always get a full refund before the order cutoff, when a chef declines, or when a chef doesn’t accept in time (never later than 2 hours before the order). After the cutoff they get the chef’s chosen percentage, within this range.</p>
         <Button className="mt-3" disabled={busy || (!p && advance === null)} onClick={savePolicy}>Save policy</Button>
+      </Card>
+      <Card title="Special requests">
+        <div className="grid grid-cols-2 gap-2">
+          <Input label="Hours a chef has to answer" type="number" min={1} max={168} value={rv.chefResponseHours} onChange={(e) => setRq({ ...rv, chefResponseHours: Number(e.target.value) })} />
+          <Input label="Default quote validity (hours)" type="number" min={1} max={168} value={rv.quoteValidHours} onChange={(e) => setRq({ ...rv, quoteValidHours: Number(e.target.value) })} />
+          <Input label="Hours a customer has to reply" type="number" min={1} max={336} value={rv.customerReplyHours} onChange={(e) => setRq({ ...rv, customerReplyHours: Number(e.target.value) })} />
+          <Input label="Open requests per customer" type="number" min={1} max={50} value={rv.maxOpenPerCustomer} onChange={(e) => setRq({ ...rv, maxOpenPerCustomer: Number(e.target.value) })} />
+        </div>
+        <p className="mt-2 text-xs text-ink-500">Requests expire when the chef or customer doesn’t answer in time, and quotes when they aren’t accepted and paid. A quote never outlives the order cutoff for its day. <Link className="underline" href="/admin/chefs/requests">Open requests →</Link></p>
+        <Button className="mt-3" disabled={busy || !rq} onClick={saveRequests}>Save request deadlines</Button>
       </Card>
     </div>
   );

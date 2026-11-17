@@ -11,6 +11,7 @@ import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Spinner, Tabs, statusTone, Textarea } from '@/components/ui';
 import { AuthForm } from '@/components/auth-form';
 import { SmsNotice } from '@/components/legal';
+import { MyRequests } from '@/components/chef-requests';
 
 
 function AccountInner() {
@@ -23,9 +24,10 @@ function AccountInner() {
     <div>
       <h1 className="text-2xl font-bold">Hi {user.name || user.email}</h1>
       <RestrictionBanner />
-      <div className="mt-4"><Tabs tabs={[{ id: 'orders', label: 'Orders' }, { id: 'reservations', label: 'Reservations' }, { id: 'tickets', label: 'Tickets' }, { id: 'kits', label: 'Meal kits' }, { id: 'rewards', label: 'Rewards & membership' }, { id: 'profile', label: 'Profile' }, { id: 'payments', label: 'Payments' }, { id: 'notifications', label: 'Notifications' }, { id: 'privacy', label: 'Privacy' }, { id: 'security', label: 'Security' }]} active={tab} onChange={setTab} /></div>
+      <div className="mt-4"><Tabs tabs={[{ id: 'orders', label: 'Orders' }, { id: 'requests', label: 'Special requests' }, { id: 'reservations', label: 'Reservations' }, { id: 'tickets', label: 'Tickets' }, { id: 'kits', label: 'Meal kits' }, { id: 'rewards', label: 'Rewards & membership' }, { id: 'profile', label: 'Profile' }, { id: 'payments', label: 'Payments' }, { id: 'notifications', label: 'Notifications' }, { id: 'privacy', label: 'Privacy' }, { id: 'security', label: 'Security' }]} active={tab} onChange={setTab} /></div>
       <div className="mt-6">
         {tab === 'orders' && <Orders />}
+        {tab === 'requests' && <MyRequests />}
         {tab === 'reservations' && <Reservations />}
         {tab === 'tickets' && <Tickets />}
         {tab === 'kits' && <Kits />}

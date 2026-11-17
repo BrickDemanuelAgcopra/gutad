@@ -67,11 +67,21 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Mobile: `checkout-chefs`, `checkout-group/[id]`, checkout banner and terms, order screen cancellation preview.
 - [x] Second demo chef: Chef Amara (amara@demo.gutad.io), 2 dishes, Wed–Sun, 50% late refund.
 - [x] Smoke `scripts/smoke-chef-e.mjs` (27 checks). Full suite 736/736.
-## Phase 6 — Special requests & quotes [ ] (next)
-## Phase 7 — Admin operations & analytics [ ]
+## Phase 6 — Special requests & quotes [x]
+- [x] Migration 0023: `chef_requests` (type, details, ingredient, servings, day, reason incl. allergy, budget, alternatives, base customization, status, `respond_by`, first-response time), `chef_request_quotes` (versioned: exact changes, portion, price per serving, quantity, allergens, dietary labels, day and optional time, validity, kind QUOTE/ALTERNATIVE), `chef_request_messages`.
+- [x] Flow: customer request → chef Accept & quote / Suggest alternative (own dish) / Ask a question / Decline → customer Accept & pay / Ask for changes (new version) / Withdraw. A customer reply to a question returns it to the chef. Statuses PENDING, NEEDS_INFO, QUOTED, ACCEPTED, ORDERED, DECLINED, WITHDRAWN, EXPIRED, CLOSED.
+- [x] Requests only for dishes that take them and days the chef cooks; quotes only for open days at that quantity; a quote never outlives the day's order cutoff. Setting `chefs.requests` (chef 24 h, quote 48 h, customer 72 h, 5 open per customer), editable in Admin → Chef Network → Fees & policy.
+- [x] Checkout: an accepted quote is a cart line (`chefRequestQuoteId`) priced from the quote, with quantity and day (and time) fixed, only for its customer; normal checkout re-checks capacity and holds it; the line carries the changes (“Special request R-…”) and allergens to the kitchen; used once (`CHEF_QUOTE_USED`), and the request becomes ORDERED with its order.
+- [x] Job every 5 minutes (`POST admin/jobs/chef-requests` to run it): expires unanswered requests and questions, and quotes not accepted or paid in time. Outbox events `chef_request.*`; emails/in-app `chef.request.*` (new, quoted, question, message, revision, accepted, declined, withdrawn, expired, closed).
+- [x] Staff supervision: `GET admin/chef-requests` (open, waiting on chefs, due within 4 h, average first response, quote-to-order rate, expired), extend deadlines, close with a reason.
+- [x] Web: dish page “Request something special” and the customizer’s “Ask Chef X to add …”; request form; `/account/requests/[id]` and the account “Special requests” tab; chef `/chef/requests` inbox and detail with the four actions; dashboard banner; `/admin/chefs/requests`; checkout locks quoted lines and points to the quoted day.
+- [x] Mobile: `requests/new`, `requests/index`, `requests/[id]` (customer and staff), `chef/requests`, `chef/request/[id]`, `ops/chef-requests`, dish screen entry points, checkout support.
+- [x] Smoke `scripts/smoke-chef-f.mjs` (37 checks). Full suite 773/773.
+## Phase 7 — Admin operations & analytics [ ] (next)
 ## Phase 8 — Hardening & docs [ ]
 
 ## Log
+- 2026-11-17 Phase 6 built and verified locally (773/773 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 5 built and verified locally (736/736 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 4 built and verified locally (709/709 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 3 built and verified locally (web build, API/web/mobile typecheck, smoke incl. 27 new checks).

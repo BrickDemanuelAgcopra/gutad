@@ -13,6 +13,9 @@ export interface CartLine {
   modifiersCents: number;
   specialInstructions?: string;
   brandName?: string | null;
+  /** Gutad Chef Network: a line from an accepted special-request quote (price, quantity and day fixed by the chef) */
+  chefRequestQuoteId?: string;
+  serviceDate?: string;
 }
 
 export interface Cart {
@@ -46,9 +49,10 @@ export function useCart() {
           const resumed = parked.find((p) => p.locationId === loc.id);
           if (resumed) { base = resumed; setParked((p) => p.filter((x) => x.locationId !== loc.id)); }
         }
-        const key = `${line.menuItemId}:${[...line.modifierOptionIds].sort().join(',')}:${line.specialInstructions || ''}`;
+        const key = line.chefRequestQuoteId ? `quote:${line.chefRequestQuoteId}` : `${line.menuItemId}:${[...line.modifierOptionIds].sort().join(',')}:${line.specialInstructions || ''}`;
         const existing = base.lines.find((l) => l.key === key);
-        const lines = existing ? base.lines.map((l) => (l.key === key ? { ...l, quantity: l.quantity + line.quantity } : l)) : [...base.lines, { ...line, key }];
+        // a quoted line keeps the chef's quantity (adding it again doesn't double it)
+        const lines = existing ? base.lines.map((l) => (l.key === key ? { ...l, quantity: line.chefRequestQuoteId ? line.quantity : l.quantity + line.quantity } : l)) : [...base.lines, { ...line, key }];
         return { ...base, locationId: loc.id, locationSlug: loc.slug, locationName: loc.name, channel, src, lines };
       });
     },

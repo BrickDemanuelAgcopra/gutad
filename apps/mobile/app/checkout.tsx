@@ -5,14 +5,14 @@ import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import { GutadApiError, type ChefAvailability, type Quote } from '@gutad/shared';
 import { api, money, newIdempotencyKey, when } from '@/api';
-import { cartSubtotal, useCart } from '@/cart';
+import { cartSubtotal, preferredSchedule, useCart } from '@/cart';
 import { useApi } from '@/hooks';
 import { useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Input, Muted, s } from '@/ui';
 import { SmsNotice } from '@/legal';
 import { DateSlotPicker, chefTermsText, type ChefTerms } from '@/date-slot-picker';
 
-const BLOCKED: Record<string, string> = { KITCHEN_BUSY: 'The kitchen is at capacity right now. Try again shortly or order for later.', PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.', SCHEDULE_REQUIRED: 'Chef dishes are cooked to order. Pick a cooking day and time.', CHEF_CUTOFF_PASSED: 'Ordering for that day has closed. Pick another date.', CHEF_NOT_COOKING: 'The chef isn’t cooking that day. Pick another date.', CHEF_PAUSED: 'The chef is away that day. Pick another date.', CHEF_TOO_FAR: 'That date isn’t open for orders yet. Pick an earlier date.', CHEF_TIME_UNAVAILABLE: 'That time isn’t available. Pick another time.', DISH_CAPACITY_FULL: 'A dish in your cart just sold out for that day. Pick another date or lower the quantity.', KITCHEN_CAPACITY_FULL: 'The chef is fully booked that day. Pick another date.' };
+const BLOCKED: Record<string, string> = { KITCHEN_BUSY: 'The kitchen is at capacity right now. Try again shortly or order for later.', PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.', CHEF_QUOTE_QUANTITY: 'The quantity of a chef’s quote can’t change. Remove it and add it again from your request.', CHEF_QUOTE_DATE: 'This quote is for a set day and time. Pick the date the chef quoted.', CHEF_QUOTE_EXPIRED: 'This quote has expired. Ask the chef for a new one from your request.', CHEF_QUOTE_USED: 'This quote was already used for an order.', SCHEDULE_REQUIRED: 'Chef dishes are cooked to order. Pick a cooking day and time.', CHEF_CUTOFF_PASSED: 'Ordering for that day has closed. Pick another date.', CHEF_NOT_COOKING: 'The chef isn’t cooking that day. Pick another date.', CHEF_PAUSED: 'The chef is away that day. Pick another date.', CHEF_TOO_FAR: 'That date isn’t open for orders yet. Pick an earlier date.', CHEF_TIME_UNAVAILABLE: 'That time isn’t available. Pick another time.', DISH_CAPACITY_FULL: 'A dish in your cart just sold out for that day. Pick another date or lower the quantity.', KITCHEN_CAPACITY_FULL: 'The chef is fully booked that day. Pick another date.' };
 const CAPACITY = ['DISH_CAPACITY_FULL', 'KITCHEN_CAPACITY_FULL', 'CHEF_CUTOFF_PASSED', 'CHEF_NOT_COOKING', 'CHEF_PAUSED', 'CHEF_TOO_FAR', 'CHEF_TIME_UNAVAILABLE'];
 const codeOf = (e: unknown) => (e instanceof GutadApiError ? (e.body as unknown as { code?: string; nextOpenAt?: string } | null) : null);
 
@@ -60,7 +60,11 @@ export default function Checkout() {
   useEffect(() => {
     if (!loc?.chefKitchen || !avail) return;
     const d = schedule ? avail.days.find((x) => x.date === schedule.date) : undefined;
-    if (!d || d.status !== 'AVAILABLE') setSchedule(avail.earliestDate && !schedule ? { date: avail.earliestDate, time: '' } : null);
+    // an accepted chef quote fixes the day (and time, when set): preselect it
+    const pref = preferredSchedule(cart);
+    const pd = pref ? avail.days.find((x) => x.date === pref.date && x.status === 'AVAILABLE') : undefined;
+    const first = pd && pref ? { date: pref.date, time: pref.time && pd.slots.includes(pref.time) ? pref.time : '' } : avail.earliestDate ? { date: avail.earliestDate, time: '' } : null;
+    if (!d || d.status !== 'AVAILABLE') setSchedule(!schedule ? first : null);
     else if (schedule?.time && !d.slots.includes(schedule.time)) setSchedule({ date: d.date, time: '' });
   }, [avail]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -81,7 +85,7 @@ export default function Checkout() {
     if (!cart.locationId || !cart.lines.length) return;
     if (needsTime || (schedule?.time && !scheduledFor)) { setQuote(null); return; }
     const t = setTimeout(() => {
-      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, scheduledFor, holdKey: loc?.chefKitchen ? holdKey.current : undefined, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, promoCode: promo || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
+      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, scheduledFor, holdKey: loc?.chefKitchen ? holdKey.current : undefined, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions, chefRequestQuoteId: l.chefRequestQuoteId })), tipCents, promoCode: promo || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
         .then((q) => { setQuote(q); setError(null); })
         .catch((e) => { setQuote(null); const b = codeOf(e); if (b?.code && CAPACITY.includes(b.code)) void loadAvail(); setError(b?.code && BLOCKED[b.code] ? `${BLOCKED[b.code]}${b.nextOpenAt ? ` Opens ${when(b.nextOpenAt)}.` : ''}` : (e as Error).message); });
     }, 350);
@@ -112,7 +116,7 @@ export default function Checkout() {
       {chefParked > 0 && <Card style={{ borderColor: C.brand, backgroundColor: '#fff4ec' }}><Text style={{ fontSize: 16, fontWeight: '700', color: C.ink }}>Checking out from {chefParked + 1} chefs?</Text><Muted>Pay once for all {chefParked + 1} deliveries. Each chef cooks on the day you pick.</Muted><Button title={`Check out all ${chefParked + 1} chefs together`} onPress={() => router.push('/checkout-chefs')} /></Card>}
       {parked.length > 0 && <Card title="Your other saved orders"><Muted>Separate orders. The next one opens after you place this one.</Muted>{parked.map((p) => <View key={p.locationId} style={[s.row, { marginTop: 6 }]}><Text style={{ flex: 1 }}>{p.locationName} · {money(cartSubtotal(p))}</Text><Button title="Do first" variant="secondary" onPress={() => switchTo(p.locationId!)} /><Button title="Remove" variant="ghost" onPress={() => discardParked(p.locationId!)} /></View>)}</Card>}
       <Card title={`Order from ${cart.locationName}`}>
-        {cart.lines.map((l) => <View key={l.key} style={[s.row, { marginBottom: 6 }]}><View style={{ flex: 1 }}><Text>{l.name}</Text>{l.modifierNames.length > 0 && <Muted>{l.modifierNames.join(', ')}</Muted>}</View><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Button title="−" variant="secondary" onPress={() => setQty(l.key, l.quantity - 1)} /><Text>{l.quantity}</Text><Button title="+" variant="secondary" onPress={() => setQty(l.key, l.quantity + 1)} /><Text style={{ width: 60, textAlign: 'right' }}>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</Text></View></View>)}
+        {cart.lines.map((l) => <View key={l.key} style={[s.row, { marginBottom: 6 }]}><View style={{ flex: 1 }}><Text>{l.name}</Text>{l.modifierNames.length > 0 && <Muted>{l.modifierNames.join(', ')}</Muted>}{l.chefRequestQuoteId && <Muted>Price confirmed by the chef · quantity fixed</Muted>}</View><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>{l.chefRequestQuoteId ? <><Button title="Remove" variant="ghost" onPress={() => setQty(l.key, 0)} /><Text>{l.quantity}×</Text></> : <><Button title="−" variant="secondary" onPress={() => setQty(l.key, l.quantity - 1)} /><Text>{l.quantity}</Text><Button title="+" variant="secondary" onPress={() => setQty(l.key, l.quantity + 1)} /></>}<Text style={{ width: 60, textAlign: 'right' }}>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</Text></View></View>)}
       </Card>
       <Card title="When">
         {!loc?.chefKitchen && <View style={{ flexDirection: 'row', gap: 8 }}><Button title="As soon as possible" variant={schedule ? 'secondary' : 'primary'} onPress={() => setSchedule(null)} /><Button title="Schedule" variant={schedule ? 'primary' : 'secondary'} onPress={() => setSchedule({ date: days[0]?.date || '', time: '' })} /></View>}

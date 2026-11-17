@@ -128,7 +128,7 @@ function ExtrasSearch({ group, picks, setQty, chefName, onAskChef, acceptsReques
             <>
               <p className="font-medium">Ask {chefName} to add {q.trim()}</p>
               <p className="text-xs text-ink-500">Tell the chef how much you’d like. Price and availability need the chef’s confirmation; nothing is charged until you accept a quote.</p>
-              <button type="button" disabled={!onAskChef} onClick={() => onAskChef?.(q.trim())} className="mt-2 rounded-lg border border-ink-100 bg-white px-3 py-1.5 text-xs font-medium disabled:opacity-60">{onAskChef ? `Ask ${chefName}` : 'Chef requests open soon'}</button>
+              <button type="button" disabled={!onAskChef} onClick={() => onAskChef?.(q.trim())} className="mt-2 rounded-lg border border-ink-100 bg-white px-3 py-1.5 text-xs font-medium disabled:opacity-60">{`Ask ${chefName}`}</button>
             </>
           ) : <p className="text-xs text-ink-500">{q.trim()} isn’t offered on this dish. {chefName} doesn’t take special requests for it.</p>}
         </div>

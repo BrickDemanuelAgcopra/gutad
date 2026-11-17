@@ -15,6 +15,7 @@ interface ChefMe {
 /** Chef dashboard: checklist, payouts, availability switch. Orders and tickets use the merchant tablet screens. */
 export default function ChefHome() {
   const { data, setData, loading, error } = useApi<ChefMe>('/chef/me');
+  const { data: inbox } = useApi<{ counts: { needsReply: number; waiting: number } }>(data ? '/chef/requests?status=needsReply' : null, { deps: [!!data], poll: 60000 });
   const { run, busy, error: actErr } = useAction();
   if (loading) return <Loading />;
   if (error || !data) return <View style={[s.screen, s.pad]}><Card title="Not a Gutad chef yet"><Muted>Finish your application to unlock the chef dashboard.</Muted><Link href="/chefs/apply" asChild><Button title="Open application" onPress={() => undefined} /></Link></Card></View>;
@@ -38,6 +39,10 @@ export default function ChefHome() {
       </Card>
       <Card title="Payouts">
         {data.payouts?.state === 'COMPLETE' ? <Text style={{ color: C.good }}>✓ Payouts connected{data.payouts.bankLast4 ? ` · ••${data.payouts.bankLast4}` : ''}</Text> : <><Muted>Connect payouts through our payment provider’s secure onboarding.</Muted><Button disabled={busy} title="Connect payouts" onPress={() => run(async () => { const r = await api.post<{ onboardingUrl?: string | null }>('/chef/me/payouts', {}); if (r.onboardingUrl) await Linking.openURL(r.onboardingUrl); else setData(await api.get<ChefMe>('/chef/me')); })} /></>}
+      </Card>
+      <Card title="Special requests">
+        <Muted>{inbox ? (inbox.counts.needsReply ? `${inbox.counts.needsReply} waiting for your reply` : 'Nothing waiting for your reply') : 'Customers asking for changes your options don’t cover'}{inbox?.counts.waiting ? ` · ${inbox.counts.waiting} waiting on customers` : ''}</Muted>
+        <Link href="/chef/requests" asChild><Button title={inbox?.counts.needsReply ? `Reply to requests (${inbox.counts.needsReply})` : 'Open requests'} variant={inbox?.counts.needsReply ? 'primary' : 'secondary'} onPress={() => undefined} /></Link>
       </Card>
       <Card title="Dishes">
         <Muted>Build dishes, set fixed or customizable, reorder your menu.</Muted>

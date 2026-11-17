@@ -6,7 +6,7 @@ import { brandSellable } from '../../common/brand-rules';
 import { DEFAULT_PAYMENT_METHODS, enabledMethods, type AppliedPromotion, type PaymentMethodsConfig } from '@gutad/shared';
 import { giftBalance } from '../growth/gift-tender';
 import { assertCashLimit, creditAllowance } from '../customers/limits';
-import { cartCompatibility, chefDishTitle, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, type ChefNetworkFees, type ChefPolicy, evaluateCustomization, modifierLabel, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
+import { cartCompatibility, chefDishTitle, chefRequestCode, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, type ChefNetworkFees, type ChefPolicy, evaluateCustomization, modifierLabel, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
@@ -17,6 +17,7 @@ import { LocationLoadService } from '../kitchen/location-load.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 import { PaymentsService } from '../payments/payments.service';
 import { ChefCalendarService } from '../chefs/chef-calendar.service';
+import { acceptedChefQuote } from '../chefs/chef-requests.service';
 import { randomUUID } from 'node:crypto';
 import { addMinutes, bps, isWithin, localParts, zonedTimeToUtc } from '../../common/utils';
 import { taxEngine } from './tax-provider';
@@ -29,7 +30,8 @@ export interface QuoteInput {
   locationId: string;
   channel: Channel;
   fulfillmentType: Fulfillment;
-  lines: { menuItemId: string; quantity: number; modifierOptionIds?: string[]; specialInstructions?: string }[];
+  /** chefRequestQuoteId: a line from an accepted Chef Network special-request quote (priced from the quote) */
+  lines: { menuItemId: string; quantity: number; modifierOptionIds?: string[]; specialInstructions?: string; chefRequestQuoteId?: string }[];
   scheduledFor?: string | null;
   tipCents?: number;
   promoCode?: string;
@@ -59,6 +61,8 @@ export interface QuoteSnapshotLine {
   allergens?: string[];
   dietaryTags?: string[];
   prepMinutesDelta?: number;
+  /** Gutad Chef Network special request: the accepted chef quote this line was sold from */
+  chefRequestQuoteId?: string;
 }
 
 /** Simulation inputs (9.8): draft fee rules, tax rates and item prices; nothing is stored. */
@@ -177,6 +181,12 @@ export class QuoteService {
       if (item.brandId) {
         const b = brandRows.get(item.brandId);
         if (b && !brandSellable(b, loc.regionId, input.channel)) throw new BadRequestException({ message: `${item.name} (${b.name}) is not available here right now`, code: 'BRAND_NOT_AVAILABLE' });
+      }
+      // Gutad Chef Network special request: price, quantity, date and labels come from the chef's accepted quote
+      if (l.chefRequestQuoteId) {
+        const sq = await this.specialRequestLine(tx, l, item, loc, scheduledFor, input.userId ?? null, !!sim);
+        snapLines.push({ ...sq, name: `${chefName ? chefDishTitle(item.name, chefName) : item.name} · special request`, brandId: item.brandId, stationCode: item.stationCode, taxCategory: item.taxCategory });
+        continue;
       }
       const ev = this.resolveModifiers(item, l.modifierOptionIds || []);
       const mods = ev.mods;
@@ -329,7 +339,7 @@ export class QuoteService {
       channel: q.channel,
       fulfillmentType: q.fulfillmentType,
       currency: q.currency,
-      lines: s.lines.map((l) => ({ menuItemId: l.menuItemId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifierOptionIds: l.modifiers.map((m) => m.id), specialInstructions: l.specialInstructions })),
+      lines: s.lines.map((l) => ({ menuItemId: l.menuItemId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifierOptionIds: l.modifiers.map((m) => m.id), specialInstructions: l.specialInstructions, ...(l.chefRequestQuoteId ? { chefRequestQuoteId: l.chefRequestQuoteId } : {}) })),
       subtotalCents: q.subtotalCents,
       discountCents: q.discountCents,
       taxCents: q.taxCents,
@@ -364,7 +374,7 @@ export class QuoteService {
       locationId: q.locationId,
       channel: q.channel as Channel,
       fulfillmentType: q.fulfillmentType as Fulfillment,
-      lines: s.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifiers.map((m) => m.id), specialInstructions: l.specialInstructions })),
+      lines: s.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifiers.map((m) => m.id), specialInstructions: l.chefRequestQuoteId ? undefined : l.specialInstructions, chefRequestQuoteId: l.chefRequestQuoteId })),
       scheduledFor: q.scheduledFor?.toISOString() ?? null,
       tipCents: q.tipCents,
       promoCode: q.promoCode ?? undefined,
@@ -395,6 +405,33 @@ export class QuoteService {
     const customized = item.modifierGroups.some((g) => g.selectionType && g.selectionType !== 'CHOICE');
     const mods = r.chosen.map((c) => ({ id: c.id, name: modifierLabel(c), priceCents: c.priceCents, ...(c.qty > 1 ? { qty: c.qty } : {}) }));
     return { mods, customized, allergens: r.allergens, dietaryTags: r.dietaryTags, prepMinutesDelta: r.prepMinutesDelta };
+  }
+
+  /**
+   * A cart line from an accepted special-request quote: only its customer, at the quoted kitchen, dish, quantity and
+   * date (and time, when the chef fixed one), while the quote is valid. The chef's price replaces the menu price.
+   */
+  private async specialRequestLine(tx: DbOrTx, l: QuoteInput['lines'][number], item: ResolvedItem, loc: typeof locations.$inferSelect, scheduledFor: Date | null, userId: string | null, sim: boolean): Promise<Omit<QuoteSnapshotLine, 'name' | 'brandId' | 'stationCode' | 'taxCategory'>> {
+    const x = await acceptedChefQuote(tx, l.chefRequestQuoteId!);
+    const bad = (message: string, code = 'CHEF_QUOTE_INVALID') => new BadRequestException({ message, code });
+    if (!x || !userId || x.r.userId !== userId) throw bad('This special-request quote isn’t available. Open the request from My requests.');
+    const { q } = x;
+    if (q.status === 'ORDERED') throw bad('This special request was already ordered', 'CHEF_QUOTE_USED');
+    if (q.status !== 'ACCEPTED' || x.r.currentQuoteId !== q.id) throw bad('Accept the chef’s current quote before checking out', 'CHEF_QUOTE_NOT_ACCEPTED');
+    if (!sim && q.expiresAt < new Date()) throw bad('The chef’s quote has expired. Ask for a new one from My requests.', 'CHEF_QUOTE_EXPIRED');
+    if (q.locationId !== loc.id || q.menuItemId !== l.menuItemId) throw bad('This quote is for a different dish or kitchen');
+    if (l.quantity !== q.quantity) throw bad(`The chef quoted ${q.quantity}; the quantity can’t be changed`, 'CHEF_QUOTE_QUANTITY');
+    if (scheduledFor) {
+      const lp = localParts(scheduledFor, loc.timezone);
+      if (lp.ymd !== q.serviceDate || (q.serviceTime && lp.hhmm !== q.serviceTime)) throw bad(`The chef quoted this for ${q.serviceDate}${q.serviceTime ? ` at ${q.serviceTime}` : ''}. Choose that ${q.serviceTime ? 'day and time' : 'day'}.`, 'CHEF_QUOTE_DATE');
+    }
+    let mods: QuoteSnapshotLine['modifiers'] = [];
+    if (q.optionIds.length) {
+      const r = evaluateCustomization(item.name, item.modifierGroups, q.optionIds, { allergens: item.allergens, dietaryTags: item.dietaryTags || [] });
+      if (!r.ok) throw bad('The dish changed since the chef quoted. Ask for a new quote from My requests.', 'CHEF_QUOTE_STALE');
+      mods = r.chosen.map((c) => ({ id: c.id, name: modifierLabel(c), priceCents: 0, ...(c.qty > 1 ? { qty: c.qty } : {}) }));
+    }
+    return { menuItemId: item.id, quantity: q.quantity, unitPriceCents: q.unitPriceCents, modifiersCents: 0, lineTotalCents: q.unitPriceCents * q.quantity, modifiers: mods, specialInstructions: `Special request ${chefRequestCode(x.r.id)}: ${q.changes}`, allergens: q.allergens, dietaryTags: q.dietaryTags, prepMinutesDelta: 0, chefRequestQuoteId: q.id };
   }
 
   private async openAt(loc: typeof locations.$inferSelect, at: Date, tx: DbOrTx): Promise<boolean> {

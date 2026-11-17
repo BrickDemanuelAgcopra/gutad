@@ -10,6 +10,7 @@ import { Alert, Badge, Button, Spinner } from '@/components/ui';
 import { QtyStepper } from '@/components/form-kit';
 import { CustomizationSummary, DishCustomizer, useCustomization } from '@/components/dish-customizer';
 import { DateSlotPicker, preferredDate, type DateSlot } from '@/components/date-slot-picker';
+import { NewRequestModal } from '@/components/chef-requests';
 
 type Dish = PublicChefDish & { acceptingOrders: boolean };
 
@@ -37,6 +38,9 @@ function DishView({ d }: { d: Dish }) {
   const [qty, setQty] = useState(1);
   const [photo, setPhoto] = useState(0);
   const [added, setAdded] = useState(false);
+  // special request: opened from the button or the customizer's “Ask Chef X to add …”
+  const [asking, setAsking] = useState<{ ingredient?: string } | null>(null);
+  const askChef = (term?: string) => { setSheet(false); setAsking({ ingredient: term }); };
   const optsRef = useRef<HTMLDivElement>(null);
   // advance ordering: which dates this dish (at this quantity) can still be ordered for
   const { data: avail, loading: availLoading } = useApi<ChefAvailability>(`/public/chef-dishes/${d.id}/availability?quantity=${qty}`);
@@ -98,9 +102,17 @@ function DishView({ d }: { d: Dish }) {
         {customizable && open && (
           <div ref={optsRef} className="hidden scroll-mt-24 rounded-2xl border border-ink-100 bg-white p-4 lg:block">
             <h2 className="mb-4 text-lg font-bold">Customize</h2>
-            <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} />
+            <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAskChef={d.acceptsSpecialRequests ? askChef : undefined} />
           </div>
         )}
+        {d.acceptsSpecialRequests && d.acceptingOrders && (
+          <section aria-label="Special requests" className="rounded-2xl border border-dashed border-ink-200 bg-white p-4">
+            <h2 className="font-semibold">Need something the options don’t cover?</h2>
+            <p className="mt-1 text-sm text-ink-600">Ask {d.chef.displayName} for a change. You’ll get a quote with the price, allergens and day; nothing is charged until you accept and pay.</p>
+            <Button variant="secondary" className="mt-3" onClick={() => askChef()}>Request something special</Button>
+          </section>
+        )}
+        <NewRequestModal dish={d} open={!!asking} onClose={() => setAsking(null)} ingredient={asking?.ingredient} baseOptionIds={open && ev.ok ? ev.optionIds : undefined} baseOptionNames={open && ev.ok ? ev.chosen.filter((c) => c.priceCents > 0 || !groups.find((g) => g.id === c.groupId)?.options.find((o) => o.id === c.id)?.isDefault).map(modifierLabel) : undefined} />
       </div>
 
       {/* desktop: sticky summary */}
@@ -133,7 +145,7 @@ function DishView({ d }: { d: Dish }) {
             <div className="min-w-0 flex-1"><div className="truncate font-semibold">{d.title}</div><div className="text-xs text-ink-500">Prices update as you choose</div></div>
           </div>
           <div className="flex-1 overflow-y-auto px-4 py-4">
-            <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} />
+            <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAskChef={d.acceptsSpecialRequests ? askChef : undefined} />
             <div className="mt-6 rounded-xl bg-white p-3"><CustomizationSummary basePriceCents={d.priceCents} ev={ev} qty={qty} baseAllergens={d.allergens} /></div>
           </div>
           <div className="flex items-center gap-3 border-t border-ink-100 bg-white p-3">

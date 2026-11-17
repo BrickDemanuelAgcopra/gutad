@@ -28,6 +28,12 @@ export default function RootLayout() {
         <Stack.Screen name="chef/dishes" options={{ title: 'Dishes' }} />
         <Stack.Screen name="chef/calendar" options={{ title: 'Cooking calendar' }} />
         <Stack.Screen name="chef/dish/[id]" options={{ title: 'Edit dish' }} />
+        <Stack.Screen name="chef/requests" options={{ title: 'Special requests' }} />
+        <Stack.Screen name="chef/request/[id]" options={{ title: 'Special request' }} />
+        <Stack.Screen name="requests/index" options={{ title: 'My requests' }} />
+        <Stack.Screen name="requests/new" options={{ title: 'Special request' }} />
+        <Stack.Screen name="requests/[id]" options={{ title: 'Special request' }} />
+        <Stack.Screen name="ops/chef-requests" options={{ title: 'Special requests' }} />
         <Stack.Screen name="chefs/index" options={{ title: 'Chefs' }} />
         <Stack.Screen name="chefs/[slug]" options={{ title: 'Chef' }} />
         <Stack.Screen name="chefs/dish/[id]" options={{ title: 'Dish' }} />

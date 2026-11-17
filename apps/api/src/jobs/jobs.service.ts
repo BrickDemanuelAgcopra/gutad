@@ -33,6 +33,7 @@ import { SensorsService } from '../modules/operations/sensors.service';
 import { EquipmentVendorService } from '../modules/operations/equipment-vendor.service';
 import { GlPushService } from '../modules/finance/gl-push.service';
 import { ChefCalendarService } from '../modules/chefs/chef-calendar.service';
+import { ChefRequestsService } from '../modules/chefs/chef-requests.service';
 
 /**
  * Background jobs. Every job takes a Redis lock so several worker replicas never double-run,
@@ -75,6 +76,7 @@ export class JobsService {
     private readonly glPush: GlPushService,
     private readonly iam: IamGovernanceService,
     private readonly chefCalendar: ChefCalendarService,
+    private readonly chefRequests: ChefRequestsService,
   ) {}
 
   private async locked(name: string, ttlMs: number, fn: () => Promise<unknown>) {
@@ -112,6 +114,7 @@ export class JobsService {
   @Interval(3_600_000) iamHourly() { return this.locked('iam-hourly', 600_000, () => this.iam.hourly()); }
   @Interval(300_000) approvalExpiry() { return this.locked('approval-expiry', 60_000, () => this.approvals.expireStale()); }
   @Interval(300_000) chefCapacityHolds() { return this.locked('chef-capacity-holds', 60_000, () => this.chefCalendar.releaseExpired()); }
+  @Interval(300_000) chefRequestDeadlines() { return this.locked('chef-request-deadlines', 120_000, () => this.chefRequests.expireDue()); }
   @Interval(60_000) chefOrderDeadlines() { return this.locked('chef-order-deadlines', 60_000, async () => ({ ...(await this.orders.expireUnacceptedChefOrders()), ...(await this.orders.recognizeCompletedChefOrders()) })); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {

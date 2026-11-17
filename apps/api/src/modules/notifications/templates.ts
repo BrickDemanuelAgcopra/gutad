@@ -471,6 +471,51 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
         paragraphs: ['We are not onboarding chefs in your area yet. Your application is saved and we will contact you as soon as we open.'],
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
       });
+
+    // ── Chef Network special requests ───────────────────────────────────────
+    case 'chef.request.new':
+    case 'chef.request.quoted':
+    case 'chef.request.question':
+    case 'chef.request.message':
+    case 'chef.request.revision':
+    case 'chef.request.accepted':
+    case 'chef.request.declined':
+    case 'chef.request.withdrawn':
+    case 'chef.request.expired':
+    case 'chef.request.closed': {
+      const forChef = p.audience === 'chef';
+      const url = `${web}${forChef ? '/chef/requests/' : '/account/requests/'}${p.requestId}`;
+      const code = String(p.code || '');
+      const dish = String(p.dishTitle || 'your dish');
+      const chef = String(p.chefName || 'The chef');
+      const ymd = (p.serviceDate || p.requestedDate) as string | undefined;
+      const day = ymd ? new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }) : '';
+      const cta = { label: forChef ? 'Open the request' : 'View your request', url };
+      const details: [string, string][] = [['Request', code], ['Dish', dish]];
+      const total = money(p.totalCents as number);
+      switch (template) {
+        case 'chef.request.new':
+          return sub(`New special request ${code}`, `A customer asked for a change to ${dish} for ${day}. Reply by ${when(p.respondBy)}.`, { eyebrow: 'Chef Network', heading: 'New special request', paragraphs: [`A customer asked for a change to ${dish} for ${day}.`, `Quote it, suggest an alternative, ask a question or decline by ${when(p.respondBy)}. Unanswered requests expire.`], details, cta });
+        case 'chef.request.quoted':
+          return sub(`${chef} quoted your request: ${total}`, `${chef} quoted ${total} for ${day}${p.kind === 'ALTERNATIVE' ? ' (a suggested alternative)' : ''}. Accept by ${when(p.quoteExpiresAt)}.`, { eyebrow: 'Chef Network', tone: 'success', heading: p.kind === 'ALTERNATIVE' ? `${chef} suggested an alternative` : `${chef} sent you a quote`, paragraphs: [`Total ${total} for ${day}. The price is confirmed by the chef and sold by Gutad.`, `Accept and pay by ${when(p.quoteExpiresAt)}, or ask for a revision.`], details: [...details, ['Quote', `v${p.version}`], ['Total', total]], cta: { label: 'Review the quote', url } });
+        case 'chef.request.question':
+          return sub(`${chef} has a question about ${code}`, `${chef}: ${p.body}`, { eyebrow: 'Chef Network', heading: `${chef} has a question`, paragraphs: [String(p.body || ''), `Reply by ${when(p.respondBy)} so ${chef} can quote it.`], details, cta: { label: 'Reply', url } });
+        case 'chef.request.message':
+          return sub(`New message on ${code}`, `${p.from ? `From ${p.from}: ` : ''}${p.body}`, { eyebrow: 'Chef Network', heading: 'New message on your request', paragraphs: [String(p.body || '')], details, cta });
+        case 'chef.request.revision':
+          return sub(`Revision requested on ${code}`, `The customer asked for a new version: ${p.body}`, { eyebrow: 'Chef Network', tone: 'warning', heading: 'The customer asked for a revision', paragraphs: [String(p.body || ''), `Send a new quote by ${when(p.respondBy)}.`], details, cta });
+        case 'chef.request.accepted':
+          return sub(`Quote accepted on ${code}`, `The customer accepted your quote (${total}, ${day}). You’ll get the order once they pay.`, { eyebrow: 'Chef Network', tone: 'success', heading: 'Your quote was accepted', paragraphs: [`The customer accepted ${total} for ${day}. The order arrives in your inbox once they pay.`], details, cta });
+        case 'chef.request.declined':
+          return sub(`${chef} can’t make your request ${code}`, `${chef} declined: ${p.reason}`, { eyebrow: 'Chef Network', tone: 'danger', heading: `${chef} can’t make this one`, paragraphs: [String(p.reason || ''), 'You can still order the dish as listed, or ask another chef.'], details, cta: { label: 'Browse chefs', url: `${web}/chefs` } });
+        case 'chef.request.withdrawn':
+          return sub(`Request ${code} withdrawn`, `The customer withdrew the request${p.reason ? `: ${p.reason}` : ''}.`, { eyebrow: 'Chef Network', heading: 'Request withdrawn', paragraphs: [`The customer withdrew this request${p.reason ? `: ${p.reason}` : ''}. Nothing else to do.`], details, cta });
+        case 'chef.request.expired':
+          return sub(`Request ${code} expired`, String(p.reason || 'The request expired.'), { eyebrow: 'Chef Network', tone: 'warning', heading: 'Request expired', paragraphs: [String(p.reason || 'The request expired.'), forChef ? 'Answering quickly keeps your response rate up.' : 'Nothing was charged. You can send a new request any time.'], details, cta });
+        default:
+          return sub(`Request ${code} closed by Gutad`, String(p.reason || ''), { eyebrow: 'Chef Network', heading: 'Request closed by Gutad', paragraphs: [String(p.reason || ''), 'Nothing was charged.'], details, cta });
+      }
+    }
     default:
       return sub(template, JSON.stringify(p));
   }
@@ -484,6 +529,16 @@ export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'chef.application.approved': { displayName: 'Chef Carlos' },
   'chef.application.rejected': { reason: 'The kitchen permit does not cover meals prepared for sale.' },
   'chef.application.waitlisted': { reason: 'not open in WY yet' },
+  'chef.request.new': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', respondBy: new Date(Date.now() + 86_400_000).toISOString(), audience: 'chef' },
+  'chef.request.quoted': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', totalCents: 3800, version: 2, kind: 'QUOTE', quoteExpiresAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), serviceDate: '2026-11-28', audience: 'customer' },
+  'chef.request.question': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', body: 'Is the shrimp for an allergy-free table, or just a preference?', respondBy: new Date(Date.now() + 3 * 86_400_000).toISOString(), audience: 'customer' },
+  'chef.request.message': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', body: 'Sounds good, thank you!', from: 'the customer', audience: 'chef' },
+  'chef.request.revision': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', body: 'Could you make it for 4 instead of 2?', respondBy: new Date(Date.now() + 86_400_000).toISOString(), audience: 'chef' },
+  'chef.request.accepted': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', totalCents: 3800, serviceDate: '2026-11-28', audience: 'chef' },
+  'chef.request.declined': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'I can’t source fresh shrimp that week.', audience: 'customer' },
+  'chef.request.withdrawn': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'Plans changed', audience: 'chef' },
+  'chef.request.expired': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'The chef didn’t answer in time', audience: 'customer' },
+  'chef.request.closed': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'Duplicate request', audience: 'customer' },
   'order.submitted': { number: 'G-10482', locationName: 'Mama Put Kitchen', totalCents: 2840, orderId: 'sample' },
   'order.accepted': { number: 'G-10482', promiseAt: new Date(Date.now() + 25 * 60_000).toISOString(), orderId: 'sample' },
   'order.rejected': { number: 'G-10482', reason: 'KITCHEN_CLOSED', orderId: 'sample' },

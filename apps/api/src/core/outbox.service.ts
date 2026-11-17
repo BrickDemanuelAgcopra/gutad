@@ -43,7 +43,13 @@ export type DomainTopic =
   | 'referral.rewarded'
   | 'challenge.completed'
   | 'integration.failed'
-  | 'incident.resolved';
+  | 'incident.resolved'
+  | 'chef_request.created'
+  | 'chef_request.quoted'
+  | 'chef_request.accepted'
+  | 'chef_request.declined'
+  | 'chef_request.expired'
+  | 'chef_request.ordered';
 
 /** Writes domain events in the same transaction as business state; the worker relays them. */
 @Injectable()

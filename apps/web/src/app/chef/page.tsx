@@ -19,6 +19,7 @@ function Dashboard() {
   const sp = useSearchParams();
   const { data, setData, error, loading } = useApi<ChefMe>('/chef/me');
   const { run, busy, error: actErr } = useAction();
+  const { data: reqs } = useApi<{ counts: { needsReply: number } }>('/chef/requests?status=needsReply', { poll: 60_000 });
   // a fresh approval adds the chef organization to the session; refresh tokens so the merchant tools open
   const orgId = data?.organization?.id;
   useEffect(() => { if (orgId && !session.user()?.memberRoles?.[orgId]) void refreshSession(); }, [orgId]);
@@ -49,6 +50,7 @@ function Dashboard() {
       {sp.get('done') && <Alert tone="good">Thanks — your payout details were submitted to our payment provider.</Alert>}
       {p.status !== 'ACTIVE' && <Alert>Your chef account is {p.status.toLowerCase()}{p.statusReason ? `: ${p.statusReason}` : ''}. Contact Gutad support.</Alert>}
       {actErr && <Alert>{actErr}</Alert>}
+      {!!reqs?.counts.needsReply && <Link href='/chef/requests' className='block rounded-2xl border border-brand-200 bg-brand-50 p-4 hover:border-brand-400'><span className='font-semibold'>{reqs.counts.needsReply} special request{reqs.counts.needsReply === 1 ? "" : "s"} need{reqs.counts.needsReply === 1 ? "s" : ""} your reply</span><span className='block text-sm text-ink-600'>Quote, suggest an alternative, ask or decline before the deadline. →</span></Link>}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Getting started">
           <ol className="space-y-2">
