@@ -213,6 +213,7 @@ export class ChefOpsService {
     }
     // thresholds
     let flagged = 0;
+    let autoActions = 0;
     for (const m of await this.metrics(pol.windowDays)) {
       const over = m.flags.filter((f) => f !== 'FOOD_SAFETY');
       if (!over.length) continue;
@@ -224,8 +225,39 @@ export class ChefOpsService {
       const [p] = await this.db.select({ userId: chefProfiles.userId }).from(chefProfiles).where(eq(chefProfiles.id, m.chefId)).limit(1);
       if (p) await this.notify.queue({ userId: p.userId, template: 'chef.quality.action', payload: { kind: 'THRESHOLD_BREACH', label: CHEF_QUALITY_EVENT_LABELS.THRESHOLD_BREACH, note: why }, channels: ['EMAIL', 'IN_APP'], dedupeKey: `chef-threshold:${m.chefId}:${now.toISOString().slice(0, 10)}` });
       flagged++;
+      if (await this.autoActOnRates(m.chefId, pol, why, now)) autoActions++;
     }
-    return { foodSafetyActions: acted, thresholdFlags: flagged };
+    return { foodSafetyActions: acted, thresholdFlags: flagged, autoActions };
+  }
+
+  /**
+   * CN.4 optional automatic action (setting `chefs.quality.autoActionAfterWeeks`): when the chef has been flagged over
+   * the rate limits that many weeks in a row (weekly flags at most 10 days apart, counted since their last pause,
+   * suspension or reinstatement), pause or suspend them with cause QUALITY. Staff reinstate from Quality.
+   */
+  private async autoActOnRates(chefId: string, pol: ChefQualityPolicy, why: string, now: Date) {
+    const weeks = Math.floor(pol.autoActionAfterWeeks || 0);
+    if (weeks < 1) return false;
+    const [p] = await this.db.select().from(chefProfiles).where(eq(chefProfiles.id, chefId)).limit(1);
+    if (!p || p.status !== 'ACTIVE') return false;
+    const [reset] = await this.db.select({ at: chefQualityEvents.createdAt }).from(chefQualityEvents).where(and(eq(chefQualityEvents.chefProfileId, chefId), inArray(chefQualityEvents.kind, ['CHEF_PAUSED', 'CHEF_SUSPENDED', 'CHEF_REINSTATED']))).orderBy(desc(chefQualityEvents.createdAt)).limit(1);
+    const breaches = await this.db.select({ at: chefQualityEvents.createdAt }).from(chefQualityEvents).where(and(eq(chefQualityEvents.chefProfileId, chefId), eq(chefQualityEvents.kind, 'THRESHOLD_BREACH'), ...(reset ? [sql`${chefQualityEvents.createdAt} > ${reset.at.toISOString()}`] : []))).orderBy(desc(chefQualityEvents.createdAt)).limit(weeks + 1);
+    let run = 0;
+    let prev = now;
+    for (const b of breaches) {
+      if (prev.getTime() - b.at.getTime() > 10 * DAY) break;
+      run++;
+      prev = b.at;
+    }
+    if (run < weeks) return false;
+    const suspend = pol.autoAction === 'SUSPEND_CHEF';
+    const kind = suspend ? 'CHEF_SUSPENDED' : 'CHEF_PAUSED';
+    const note = `${suspend ? 'Suspended' : 'Paused'} automatically: over the quality limits ${run} week${run === 1 ? '' : 's'} in a row (${why}). Gutad reviews before reinstating.`;
+    await this.setChefStatus(p, suspend ? 'SUSPENDED' : 'PAUSED', 'QUALITY', note);
+    await this.event(chefId, { kind, source: 'AUTO', note, data: { weeks: run, autoAction: pol.autoAction } });
+    await this.alert({ type: 'CHEF_QUALITY', severity: 'HIGH', title: `${p.displayName}: ${suspend ? 'suspended' : 'paused'} automatically for quality`, detail: note, subjectId: chefId, organizationId: p.organizationId, locationId: p.locationId, dedupeKey: `chef-quality-auto:${chefId}:${now.toISOString().slice(0, 10)}`, minutes: 4 * 60 });
+    await this.notify.queue({ userId: p.userId, template: 'chef.quality.action', payload: { kind, label: CHEF_QUALITY_EVENT_LABELS[kind], note }, channels: ['EMAIL', 'IN_APP'], dedupeKey: `chef-quality-auto:${chefId}:${now.toISOString().slice(0, 10)}` });
+    return true;
   }
 
   /** When an order has one chef dish, a report about the order is about that dish. */
@@ -397,9 +429,9 @@ export class ChefOpsService {
     assertCan(user, perm);
   }
 
-  private async setChefStatus(p: Profile, status: 'ACTIVE' | 'PAUSED', cause: string | null, reason: string | null) {
+  private async setChefStatus(p: Profile, status: 'ACTIVE' | 'PAUSED' | 'SUSPENDED', cause: string | null, reason: string | null) {
     await this.db.update(chefProfiles).set({ status, statusCause: cause, statusReason: reason, ...(status !== 'ACTIVE' ? { acceptingOrders: false } : {}) }).where(eq(chefProfiles.id, p.id));
-    if (status !== 'ACTIVE' && p.locationId) await this.db.update(locations).set({ isPaused: true, pausedReason: `Chef paused: ${reason}` }).where(eq(locations.id, p.locationId));
+    if (status !== 'ACTIVE' && p.locationId) await this.db.update(locations).set({ isPaused: true, pausedReason: `Chef ${status.toLowerCase()}: ${reason}` }).where(eq(locations.id, p.locationId));
     await this.audit.log({ organizationId: p.organizationId, actorId: null, action: `chef.status.auto.${status.toLowerCase()}`, entityType: 'chef_profile', entityId: p.id, before: { status: p.status }, after: { status, cause }, reason: reason ?? undefined });
   }
 

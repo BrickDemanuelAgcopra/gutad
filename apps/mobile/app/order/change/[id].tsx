@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { GutadApiError, type ChefAvailability } from '@gutad/shared';
+import { GutadApiError, type ChefAvailability, type PublicChefDish } from '@gutad/shared';
+import { Customizer, Summary, useCustomization } from '@/customize';
 import { CardField, type CardToken } from '@/card-field';
 import { api, money, newIdempotencyKey, when } from '@/api';
 import { useApi, useSession } from '@/hooks';
@@ -9,7 +10,10 @@ import { Button, C, Card, ErrorText, Loading, Muted, s } from '@/ui';
 import { DateSlotPicker } from '@/date-slot-picker';
 
 interface OrderLine { id: string; menuItemId: string | null; name: string; quantity: number; unitPriceCents: number; modifiersCents: number; modifiers: { id: string; name: string; qty?: number }[] | null; specialInstructions: string | null }
-interface Order { id: string; number: string; locationId: string; fulfillmentType: 'PICKUP' | 'DELIVERY'; totalCents: number; scheduledFor: string | null; tipCents: number; deliveryAddress: Record<string, unknown> | null; lines: OrderLine[]; chefNetwork: { chefName: string | null; freeCancelUntil: string | null } | null }
+interface Order { id: string; number: string; locationId: string; fulfillmentType: 'PICKUP' | 'DELIVERY'; totalCents: number; scheduledFor: string | null; tipCents: number; deliveryAddress: Record<string, unknown> | null; lines: OrderLine[]; chefNetwork: { chefName: string | null; chefSlug?: string | null; freeCancelUntil: string | null } | null }
+/** A dish added while changing the order (not in the original). */
+interface AddedLine { id: string; menuItemId: string; name: string; quantity: number; unitPriceCents: number; modifiersCents: number; modifiers: { id: string; name: string; qty?: number }[]; optionIds: string[]; specialInstructions: null }
+const optionIdsOf = (l: OrderLine | AddedLine) => ('optionIds' in l ? l.optionIds : (l.modifiers || []).flatMap((m) => Array(m.qty || 1).fill(m.id) as string[]));
 interface Amendment { allowed: boolean; code: string; reason: string; until: string | null; chargedCents: number; scheduledFor: string | null }
 interface Quote { id: string; totalCents: number; warnings: string[]; chefTerms?: { freeCancelUntil: string | null } | null }
 
@@ -34,7 +38,7 @@ const codeOf = (e: unknown) => (e instanceof GutadApiError ? (e.body as unknown 
 const explain = (e: unknown) => { const c = codeOf(e); return (c && PROBLEM[c]) || (e as Error).message; };
 
 /**
- * Change a paid Gutad Chef Network order before its cutoff: quantities, removing dishes, day and time. The change is
+ * Change a paid Gutad Chef Network order before its cutoff: add dishes, quantities, removing dishes, day and time. The change is
  * priced as a new order (the original's portions don't count against the day); confirming charges the new total and
  * refunds the original in full.
  */
@@ -59,7 +63,10 @@ export default function ChangeOrder() {
   const [busy, setBusy] = useState(false);
   const holdKey = useRef(newIdempotencyKey());
   const idem = useRef(newIdempotencyKey());
-  const lines = useMemo(() => (o?.lines || []).filter((l) => l.menuItemId).map((l) => ({ ...l, quantity: qty[l.id] ?? l.quantity })), [o, qty]);
+  const [added, setAdded] = useState<AddedLine[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
+  const { data: menu } = useApi<PublicChefDish[]>(o?.chefNetwork?.chefSlug ? `/public/chefs/${o.chefNetwork.chefSlug}/dishes` : null, { deps: [o?.chefNetwork?.chefSlug] });
+  const lines = useMemo(() => [...(o?.lines || []).filter((l) => l.menuItemId), ...added].map((l) => ({ ...l, quantity: qty[l.id] ?? l.quantity })), [o, qty, added]);
   const kept = lines.filter((l) => l.quantity > 0);
   const lineKey = kept.map((l) => `${l.id}:${l.quantity}`).join(',');
 
@@ -102,7 +109,7 @@ export default function ChangeOrder() {
         const q = await api.post<Quote>('/quotes', {
           locationId: o.locationId, channel: 'MARKETPLACE', fulfillmentType: o.fulfillmentType, scheduledFor: iso, tipCents: o.tipCents, holdKey: holdKey.current, replacesOrderId: o.id,
           deliveryAddress: o.fulfillmentType === 'DELIVERY' ? o.deliveryAddress : undefined,
-          lines: kept.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: (l.modifiers || []).flatMap((m) => Array(m.qty || 1).fill(m.id)), specialInstructions: l.specialInstructions || undefined })),
+          lines: kept.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: optionIdsOf(l), specialInstructions: l.specialInstructions || undefined })),
         });
         if (!cancelled) setQuote(q);
       } catch (e) {
@@ -154,8 +161,22 @@ export default function ChangeOrder() {
             </View>
           </View>
         ))}
-        <Muted>Set a dish to 0 to remove it. To add other dishes, cancel for a full refund and order again.</Muted>
+        <Muted>Set a dish to 0 to remove it.</Muted>
       </Card>
+      {!!menu?.length && (
+        <Card title={`Add a dish from ${o.chefNetwork?.chefName || 'the chef'}`}>
+          {menu.map((d) => (
+            <View key={d.id} style={{ marginBottom: 8 }}>
+              <View style={s.row}>
+                <View style={{ flex: 1 }}><Text style={{ color: C.ink }}>{d.dishName}</Text><Muted>{money(d.priceCents)}{d.mode === 'CUSTOMIZABLE' ? ' · customizable' : ''}</Muted></View>
+                <Button title={d.soldOut ? 'Sold out' : adding === d.id ? 'Close' : 'Add'} variant="secondary" disabled={d.soldOut} onPress={() => setAdding(adding === d.id ? null : d.id)} />
+              </View>
+              {adding === d.id && <AddDish dishId={d.id} onAdd={(l) => { setAdded((a) => [...a, l]); setAdding(null); }} />}
+            </View>
+          ))}
+          <Muted>Added dishes are priced with the change and must be available on the day you pick.</Muted>
+        </Card>
+      )}
       {!kept.length ? (
         <Card><Text style={{ color: C.ink7 }}>Nothing left in the order. Cancel it instead for a full refund.</Text><Button title="Back to the order" variant="secondary" onPress={() => router.back()} /></Card>
       ) : (
@@ -182,5 +203,35 @@ export default function ChangeOrder() {
         </Card>
       )}
     </ScrollView>
+  );
+}
+
+/** Options and quantity for a dish added to the changed order (same customizer as the dish screen). */
+function AddDish({ dishId, onAdd }: { dishId: string; onAdd: (l: AddedLine) => void }) {
+  const { data: d, error } = useApi<PublicChefDish>(`/public/chef-dishes/${dishId}`, { deps: [dishId] });
+  if (error) return <ErrorText msg={error} />;
+  if (!d) return <Loading />;
+  return <AddDishForm d={d} onAdd={onAdd} />;
+}
+
+function AddDishForm({ d, onAdd }: { d: PublicChefDish; onAdd: (l: AddedLine) => void }) {
+  const groups = useMemo(() => d.groups || [], [d.groups]);
+  const base = useMemo(() => ({ allergens: d.allergens, dietaryTags: d.dietaryTags }), [d.allergens, d.dietaryTags]);
+  const { picks, setPicks, ev } = useCustomization(d.dishName, groups, base);
+  const [n, setN] = useState(1);
+  const customizable = groups.some((g) => g.selectionType !== 'INCLUDED');
+  return (
+    <View style={{ marginTop: 6, padding: 8, borderRadius: 10, backgroundColor: C.bg }}>
+      {customizable && <Customizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} />}
+      <Summary base={d.priceCents} ev={ev} qty={n} baseAllergens={d.allergens} />
+      <View style={[s.row, { marginTop: 6 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Button title="−" variant="secondary" disabled={n <= 1} onPress={() => setN(n - 1)} />
+          <Text accessibilityLabel="Quantity" style={{ minWidth: 18, textAlign: 'center' }}>{n}</Text>
+          <Button title="+" variant="secondary" disabled={n >= 20} onPress={() => setN(n + 1)} />
+        </View>
+        <Button title={ev.ok ? `Add — ${money((d.priceCents + ev.modifiersCents) * n)}` : 'Finish choices'} disabled={!ev.ok} onPress={() => onAdd({ id: `new-${newIdempotencyKey()}`, menuItemId: d.menuItemId, name: d.dishName, quantity: n, unitPriceCents: d.priceCents, modifiersCents: ev.modifiersCents, modifiers: ev.chosen.map((c) => ({ id: c.id, name: c.name, qty: c.qty })), optionIds: ev.optionIds, specialInstructions: null })} />
+      </View>
+    </View>
   );
 }

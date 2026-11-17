@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { ChefInterpretService } from './chef-interpret.service';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
@@ -51,7 +53,7 @@ function send(res: Response, d: { fileName: string; mimeType: string; content: B
 @ApiBearerAuth()
 @Controller()
 export class ChefsController {
-  constructor(private readonly apps: ChefApplicationsService, private readonly chefs: ChefsService, private readonly files: ChefFilesService, private readonly dishes: ChefDishesService, private readonly options: ChefOptionsService, private readonly calendar: ChefCalendarService) {}
+  constructor(private readonly apps: ChefApplicationsService, private readonly chefs: ChefsService, private readonly files: ChefFilesService, private readonly dishes: ChefDishesService, private readonly options: ChefOptionsService, private readonly calendar: ChefCalendarService, private readonly interpretSvc: ChefInterpretService) {}
 
   // ───── advance ordering: availability and the chef's cooking calendar
   @Public() @Get('public/chef-dishes/:id/availability') dishAvailability(@Param('id') id: string, @Query('from') from?: string, @Query('to') to?: string, @Query('quantity') quantity?: string, @Query('holdKey') holdKey?: string) { return this.calendar.dishAvailability(id, { from, to, quantity: quantity ? Number(quantity) || 1 : 1, holdKey }); }
@@ -69,6 +71,8 @@ export class ChefsController {
   @Get('admin/chefs/:id/calendar') adminCalendar(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Query('from') from?: string, @Query('to') to?: string) { return this.calendar.adminCalendar(u, id, from, to); }
 
   // ───── customization
+  /** CN.3: free text → proposed selections on this dish's options (signed-in customers; AI when configured) */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } }) @Post('chef-dishes/:id/interpret') interpret(@Param('id') id: string, @Body(zod(z.object({ text: z.string().trim().min(2).max(500) }))) b: { text: string }) { return this.interpretSvc.interpret(id, b.text); }
   @Public() @Post('public/chef-dishes/:id/price') price(@Param('id') id: string, @Body(zod(z.object({ optionIds: z.array(z.string().uuid()).max(100) }))) b: { optionIds: string[] }) { return this.options.price(id, b.optionIds); }
   @Post('chef/dishes/:id/options/:optionId/sold-out') optionSoldOut(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Param('optionId') optionId: string, @Body(zod(z.object({ soldOut: z.boolean() }))) b: { soldOut: boolean }) { return this.options.setOptionSoldOut(u, id, optionId, b.soldOut); }
   @Get('chef/extras') extras(@CurrentUser() u: JwtPayload) { return this.options.listExtras(u); }

@@ -2,22 +2,26 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChefAvailability } from '@gutad/shared';
+import type { ChefAvailability, ModGroup, PublicChefDish } from '@gutad/shared';
 import { api, money, newIdempotencyKey, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
-import { Alert, Button, Card, Select, Spinner } from '@/components/ui';
+import { Alert, Button, Card, Modal, Select, Spinner } from '@/components/ui';
+import { CustomizationSummary, DishCustomizer, useCustomization } from '@/components/dish-customizer';
 import { QtyStepper } from '@/components/form-kit';
 import { CardField, type CardToken } from '@/components/card-field';
 import { DateSlotPicker, type DateSlot } from '@/components/date-slot-picker';
 import { AuthForm } from '@/components/auth-form';
 
 interface OrderLine { id: string; menuItemId: string | null; name: string; quantity: number; unitPriceCents: number; modifiersCents: number; modifiers: { id: string; name: string; qty?: number }[]; specialInstructions: string | null }
-interface Order { id: string; number: string; locationId: string; fulfillmentType: 'PICKUP' | 'DELIVERY'; channel: string; totalCents: number; scheduledFor: string | null; tipCents: number; deliveryAddress: Record<string, unknown> | null; lines: OrderLine[]; chefNetwork: { chefName: string | null; freeCancelUntil: string | null } | null }
+interface Order { id: string; number: string; locationId: string; fulfillmentType: 'PICKUP' | 'DELIVERY'; channel: string; totalCents: number; scheduledFor: string | null; tipCents: number; deliveryAddress: Record<string, unknown> | null; lines: OrderLine[]; chefNetwork: { chefName: string | null; chefSlug: string | null; freeCancelUntil: string | null } | null }
+/** A dish added while changing the order (not in the original). */
+interface AddedLine { id: string; menuItemId: string; name: string; quantity: number; unitPriceCents: number; modifiersCents: number; modifiers: { id: string; name: string; qty?: number }[]; optionIds: string[]; specialInstructions: null }
+const optionIdsOf = (l: OrderLine | AddedLine) => ('optionIds' in l ? l.optionIds : l.modifiers.flatMap((m) => Array(m.qty || 1).fill(m.id) as string[]));
 interface Amendment { allowed: boolean; code: string; reason: string; until: string | null; chargedCents: number }
 interface Quote { id: string; totalCents: number; subtotalCents: number; taxCents: number; serviceFeeCents: number; smallOrderFeeCents: number; deliveryFeeCents: number; warnings: string[]; chefTerms: { freeCancelUntil: string | null } | null }
 
 /**
- * Change a paid Gutad Chef Network order before its cutoff: quantities, removing dishes, day and time. The change
+ * Change a paid Gutad Chef Network order before its cutoff: add dishes, quantities, removing dishes, day and time. The change
  * is priced as a new order (the original's portions don't count against the day); confirming charges the new total
  * and refunds the original in full.
  */
@@ -45,7 +49,10 @@ function ChangeOrder({ id }: { id: string }) {
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedCardId) setSavedCardId(d.id); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [cards]);
   const holdKey = useRef(newIdempotencyKey());
   const idem = useRef(newIdempotencyKey());
-  const lines = useMemo(() => (o?.lines || []).filter((l) => l.menuItemId).map((l) => ({ ...l, quantity: qty[l.id] ?? l.quantity })), [o, qty]);
+  const [added, setAdded] = useState<AddedLine[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
+  const { data: menu } = useApi<PublicChefDish[]>(o?.chefNetwork?.chefSlug ? `/public/chefs/${o.chefNetwork.chefSlug}/dishes` : null);
+  const lines = useMemo(() => [...(o?.lines || []).filter((l) => l.menuItemId), ...added].map((l) => ({ ...l, quantity: qty[l.id] ?? l.quantity })), [o, qty, added]);
   const kept = lines.filter((l) => l.quantity > 0);
   const lineKey = kept.map((l) => `${l.id}:${l.quantity}`).join(',');
 
@@ -53,7 +60,9 @@ function ChangeOrder({ id }: { id: string }) {
   useEffect(() => {
     if (!o || !kept.length) return;
     let cancelled = false;
-    api.post<ChefAvailability>(`/public/chef-kitchens/${o.locationId}/availability`, { lines: kept.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })), holdKey: holdKey.current, replacesOrderId: o.id })
+    const qtyBy = new Map<string, number>();
+    kept.forEach((l) => qtyBy.set(l.menuItemId!, (qtyBy.get(l.menuItemId!) || 0) + l.quantity));
+    api.post<ChefAvailability>(`/public/chef-kitchens/${o.locationId}/availability`, { lines: [...qtyBy].map(([menuItemId, quantity]) => ({ menuItemId, quantity })), holdKey: holdKey.current, replacesOrderId: o.id })
       .then((a) => {
         if (cancelled) return;
         setAvail(a);
@@ -79,7 +88,7 @@ function ChangeOrder({ id }: { id: string }) {
       try {
         setProblem(null);
         const iso = (await api.get<{ iso: string }>(`/public/locations/${o.locationId}/local-time?date=${slot.date}&time=${slot.time}`)).iso;
-        const q = await api.post<Quote>('/quotes', { locationId: o.locationId, channel: 'MARKETPLACE', fulfillmentType: o.fulfillmentType, scheduledFor: iso, tipCents: o.tipCents, holdKey: holdKey.current, replacesOrderId: o.id, deliveryAddress: o.fulfillmentType === 'DELIVERY' ? o.deliveryAddress : undefined, lines: kept.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifiers.flatMap((m) => Array(m.qty || 1).fill(m.id)), specialInstructions: l.specialInstructions || undefined })) });
+        const q = await api.post<Quote>('/quotes', { locationId: o.locationId, channel: 'MARKETPLACE', fulfillmentType: o.fulfillmentType, scheduledFor: iso, tipCents: o.tipCents, holdKey: holdKey.current, replacesOrderId: o.id, deliveryAddress: o.fulfillmentType === 'DELIVERY' ? o.deliveryAddress : undefined, lines: kept.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: optionIdsOf(l), specialInstructions: l.specialInstructions || undefined })) });
         if (!cancelled) setQuote(q);
       } catch (e) { if (!cancelled) { setQuote(null); setProblem((e as Error).message); } }
     }, 300);
@@ -114,8 +123,22 @@ function ChangeOrder({ id }: { id: string }) {
             </li>
           ))}
         </ul>
-        <p className="mt-2 text-xs text-ink-500">Set a dish to 0 to remove it. To add other dishes, cancel for a full refund and order again.</p>
+        <p className="mt-2 text-xs text-ink-500">Set a dish to 0 to remove it.</p>
       </Card>
+      {!!menu?.length && (
+        <Card title={`Add a dish from ${o.chefNetwork?.chefName || 'the chef'}`}>
+          <ul className="divide-y divide-ink-100">
+            {menu.map((d) => (
+              <li key={d.id} className="flex items-center gap-3 py-2">
+                <div className="min-w-0 flex-1"><div className="font-medium">{d.dishName}</div><div className="text-xs text-ink-500">{money(d.priceCents)}{d.portionDesc ? ` · ${d.portionDesc}` : ''}{d.mode === 'CUSTOMIZABLE' ? ' · customizable' : ''}</div></div>
+                <Button size="sm" variant="secondary" disabled={d.soldOut} onClick={() => setAdding(d.id)}>{d.soldOut ? 'Sold out' : 'Add'}</Button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-ink-500">Added dishes are priced with the change and must be available on the day you pick.</p>
+        </Card>
+      )}
+      {adding && <AddDishModal dishId={adding} onClose={() => setAdding(null)} onAdd={(l) => { setAdded((a) => [...a, l]); setAdding(null); }} />}
       {!kept.length ? <Alert tone="info">Nothing left in the order. <Link className="underline" href={`/orders/${id}`}>Cancel it instead</Link> for a full refund.</Alert> : (
         <Card title="Day and time"><DateSlotPicker availability={avail} value={slot} onChange={setSlot} title={o.fulfillmentType === 'DELIVERY' ? 'Delivery day and time' : 'Pickup day and time'} /></Card>
       )}
@@ -138,6 +161,35 @@ function ChangeOrder({ id }: { id: string }) {
           <Button className="mt-3 w-full" size="lg" disabled={busy} onClick={() => void confirm()}>{busy ? 'Saving…' : `Confirm changes — charge ${money(quote.totalCents)}`}</Button>
         </Card>
       )}
+    </div>
+  );
+}
+
+/** Pick a dish's options and quantity to add to the changed order (same customizer as the dish page). */
+function AddDishModal({ dishId, onClose, onAdd }: { dishId: string; onClose: () => void; onAdd: (l: AddedLine) => void }) {
+  const { data: d, error } = useApi<PublicChefDish & { groups: ModGroup[] }>(`/public/chef-dishes/${dishId}`);
+  return (
+    <Modal open onClose={onClose} title={d ? `Add ${d.dishName}` : 'Add a dish'}>
+      {error ? <Alert>{error}</Alert> : !d ? <Spinner /> : <AddDishForm d={d} onAdd={onAdd} />}
+    </Modal>
+  );
+}
+
+function AddDishForm({ d, onAdd }: { d: PublicChefDish & { groups: ModGroup[] }; onAdd: (l: AddedLine) => void }) {
+  const groups = useMemo(() => d.groups || [], [d.groups]);
+  const base = useMemo(() => ({ allergens: d.allergens, dietaryTags: d.dietaryTags }), [d.allergens, d.dietaryTags]);
+  const { picks, setPicks, ev } = useCustomization(d.dishName, groups, base);
+  const [n, setN] = useState(1);
+  const customizable = groups.some((g) => g.selectionType !== 'INCLUDED');
+  const add = () => onAdd({ id: `new-${newIdempotencyKey()}`, menuItemId: d.menuItemId, name: d.dishName, quantity: n, unitPriceCents: d.priceCents, modifiersCents: ev.modifiersCents, modifiers: ev.chosen.map((c) => ({ id: c.id, name: c.name, qty: c.qty })), optionIds: ev.optionIds, specialInstructions: null });
+  return (
+    <div className="space-y-4">
+      {customizable && <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} />}
+      <CustomizationSummary basePriceCents={d.priceCents} ev={ev} qty={n} baseAllergens={d.allergens} compact />
+      <div className="flex items-center gap-3">
+        <QtyStepper label="Quantity" value={n} min={1} max={20} onChange={setN} />
+        <Button className="flex-1" disabled={!ev.ok} onClick={add}>{ev.ok ? `Add — ${money((d.priceCents + ev.modifiersCents) * n)}` : 'Finish required choices'}</Button>
+      </div>
     </div>
   );
 }

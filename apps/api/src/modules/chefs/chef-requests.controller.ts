@@ -64,6 +64,7 @@ export class ChefRequestsController {
 
   // Gutad staff
   @Get('admin/chef-requests') adminList(@CurrentUser() u: JwtPayload, @Query('status') status?: string, @Query('chefId') chefId?: string, @Query('overdue') overdue?: string, @Query('escalated') escalated?: string) { return this.svc.adminList(u, { status, chefId, overdue: overdue === 'true', escalated: escalated === 'true' }); }
+  @Get('admin/chef-requests/:id/alternatives') alternatives(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.adminAlternatives(u, id); }
   @Post('admin/chef-requests/:id/quote') staffQuote(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(QuoteDto)) b: z.infer<typeof QuoteDto>) { return this.svc.quote(u, id, b); }
   @Post('admin/chef-requests/:id/extend') extend(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ hours: z.number().int().min(1).max(168) }))) b: { hours: number }) { return this.svc.extend(u, id, b.hours); }
   @Post('admin/chef-requests/:id/close') close(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ReasonDto)) b: { reason: string }) { return this.svc.close(u, id, b.reason); }

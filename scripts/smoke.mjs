@@ -29,6 +29,7 @@ import { chefPhaseE } from './smoke-chef-e.mjs';
 import { chefPhaseF } from './smoke-chef-f.mjs';
 import { chefPhaseG } from './smoke-chef-g.mjs';
 import { chefPhaseH } from './smoke-chef-h.mjs';
+import { chefPhaseI } from './smoke-chef-i.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -521,6 +522,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await chefPhaseF({ call, check, A, O, C, API: FAPI, ...chefA });
   await chefPhaseG({ call, check, A, O, C, API: FAPI, ...chefA });
   await chefPhaseH({ call, check, A, O, C, API: FAPI, ...chefA });
+  await chefPhaseI({ call, check, A, O, C, API: FAPI, ...chefA });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

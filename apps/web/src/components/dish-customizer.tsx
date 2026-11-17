@@ -1,7 +1,8 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { evaluateCustomization, modifierLabel, type CustomizationResult, type ModGroup, type ModOption } from '@gutad/shared';
-import { money } from '@/lib/api';
+import { api, money } from '@/lib/api';
+import { useSession } from '@/lib/hooks';
 import { QtyStepper, RadioCards, Segmented } from '@/components/form-kit';
 
 const plus = (c: number) => (c ? `+${money(c)}` : '');
@@ -34,7 +35,7 @@ export function useCustomization(name: string, groups: ModGroup[], base: { aller
  * several, −/+ steppers for portions, included components shown as locked, and ingredient search over the
  * chef's approved extras. Conditional groups appear as soon as their parent choice is made.
  */
-export function DishCustomizer({ groups, picks, setPicks, ev, chefName, onAskChef, acceptsRequests }: { groups: ModGroup[]; picks: Picks; setPicks: (p: Picks) => void; ev: CustomizationResult; chefName: string; onAskChef?: (term: string) => void; acceptsRequests?: boolean }) {
+export function DishCustomizer({ groups, picks, setPicks, ev, chefName, onAskChef, acceptsRequests, dishId }: { groups: ModGroup[]; picks: Picks; setPicks: (p: Picks) => void; ev: CustomizationResult; chefName: string; onAskChef?: (term: string) => void; acceptsRequests?: boolean; /** shows “Describe what you want” (CN.3) */ dishId?: string }) {
   const active = new Set(ev.activeGroupIds);
   const chosenQty = (id: string) => ev.chosen.find((c) => c.id === id)?.qty || 0;
   const setGroupSingle = (g: ModGroup, id: string) => { const n: Picks = { ...picks }; for (const o of g.options) delete n[o.id]; n[id] = 1; setPicks(n); };
@@ -46,6 +47,7 @@ export function DishCustomizer({ groups, picks, setPicks, ev, chefName, onAskChe
   const extras = groups.find((g) => g.isExtras);
   return (
     <div className="space-y-5">
+      {dishId && visible.some((g) => (g.selectionType || 'CHOICE') !== 'INCLUDED') && <DescribeIt dishId={dishId} setPicks={setPicks} chefName={chefName} onAskChef={acceptsRequests ? onAskChef : undefined} />}
       {visible.map((g) => {
         const t = g.selectionType || 'CHOICE';
         const req = g.required || g.minSelect > 0;
@@ -155,5 +157,55 @@ export function CustomizationSummary({ basePriceCents, ev, qty, baseAllergens, c
       {!ev.ok && <p className="text-xs text-red-600">{ev.errors[0]}</p>}
       <div className="flex justify-between border-t border-ink-100 pt-2 font-semibold"><span>{qty > 1 ? `${qty} × ${money(basePriceCents + ev.modifiersCents)}` : 'Total'}</span><span>{money((basePriceCents + ev.modifiersCents) * qty)}</span></div>
     </div>
+  );
+}
+
+interface Interpretation { source: 'ai' | 'rules'; optionIds: string[]; chosen: { id: string; name: string; qty: number }[]; unmatched: string[]; note: string; ok: boolean; errors: string[] }
+
+/**
+ * CN.3: the customer describes the dish in their words ("large, extra spicy, no onions"); Gutad fills in the matching
+ * options for them to review. What no option covers can go to the chef as a special request.
+ */
+function DescribeIt({ dishId, setPicks, chefName, onAskChef }: { dishId: string; setPicks: (p: Picks) => void; chefName: string; onAskChef?: (term: string) => void }) {
+  const { user } = useSession();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<Interpretation | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.post<Interpretation>(`/chef-dishes/${dishId}/interpret`, { text });
+      const p: Picks = {};
+      for (const id of r.optionIds) p[id] = (p[id] || 0) + 1;
+      setPicks(p);
+      setRes(r);
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <section aria-label="Describe what you want" className="rounded-xl border border-dashed border-ink-200 p-3">
+      <label htmlFor="describe-it" className="text-sm font-semibold">Describe what you want</label>
+      <p className="text-xs text-ink-500">e.g. “large, extra spicy, no onions, add shrimp”. We fill in the options for you to check.</p>
+      <div className="mt-2 flex gap-2">
+        <input id="describe-it" className="min-w-0 flex-1 rounded-lg border border-ink-200 px-3 py-2 text-sm" value={text} maxLength={500} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && text.trim().length > 1 && user) { e.preventDefault(); void go(); } }} placeholder="Your way, in your words" />
+        <button type="button" className="rounded-lg bg-ink-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={busy || text.trim().length < 2 || !user} onClick={() => void go()}>{busy ? 'Filling in…' : 'Fill in options'}</button>
+      </div>
+      {!user && <p className="mt-1 text-xs text-ink-500">Sign in to use this.</p>}
+      {err && <p className="mt-2 text-sm text-red-700">{err}</p>}
+      {res && (
+        <div className="mt-2 space-y-1 text-sm" aria-live="polite">
+          <p>{res.note}</p>
+          {!res.ok && res.errors[0] && <p className="text-amber-700">Still needed: {res.errors[0]}</p>}
+          {res.unmatched.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-ink-600">Not on the options:</span>
+              {res.unmatched.map((u) => onAskChef
+                ? <button key={u} type="button" className="rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 text-xs text-brand-700 hover:bg-brand-100" onClick={() => onAskChef(u)}>Ask {chefName} for “{u}”</button>
+                : <span key={u} className="rounded-full bg-ink-100 px-2 py-0.5 text-xs">{u}</span>)}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

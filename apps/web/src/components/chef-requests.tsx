@@ -24,6 +24,7 @@ import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Spinner, Textarea } from '@/components/ui';
 import { ChipGroup, QtyStepper, Segmented } from '@/components/form-kit';
 import { DateSlotPicker, preferredDate, type DateSlot } from '@/components/date-slot-picker';
+import { CustomizationSummary, DishCustomizer, useCustomization } from '@/components/dish-customizer';
 
 type Detail = ChefRequestDetail & { cartLine: ChefQuoteCartLine | null };
 
@@ -181,7 +182,7 @@ export function RequestView({ id, backHref, backLabel }: { id: string; backHref:
   const act = useAction();
   const router = useRouter();
   const { add } = useCart();
-  const [modal, setModal] = useState<null | 'quote' | 'alternative' | 'ask' | 'decline' | 'revise' | 'withdraw' | 'close'>(null);
+  const [modal, setModal] = useState<null | 'quote' | 'alternative' | 'staff-alt' | 'ask' | 'decline' | 'revise' | 'withdraw' | 'close'>(null);
   const [text, setText] = useState('');
   if (error) return <Alert>{error}</Alert>;
   if (!d) return <Spinner />;
@@ -238,6 +239,7 @@ export function RequestView({ id, backHref, backLabel }: { id: string; backHref:
         <div className="flex flex-wrap gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3">
           <span className="self-center text-sm">Gutad supervision:</span>
           <Button variant="secondary" disabled={act.busy} onClick={() => void post(`/admin/chef-requests/${d.id}/extend`, { hours: 24 })}>Give 24 more hours</Button>
+          {d.can.quote && d.alternativesOk && <Button variant="secondary" onClick={() => setModal('staff-alt')}>Suggest another chef’s dish</Button>}
           <Button variant="danger" onClick={() => setModal('close')}>Close request</Button>
         </div>
       )}
@@ -266,6 +268,7 @@ export function RequestView({ id, backHref, backLabel }: { id: string; backHref:
       </div>
 
       {(modal === 'quote' || modal === 'alternative') && <QuoteFormModal d={d} kind={modal === 'alternative' ? 'ALTERNATIVE' : 'QUOTE'} onClose={() => setModal(null)} onDone={(r) => { setData({ ...r, cartLine: null }); setModal(null); }} />}
+      {modal === 'staff-alt' && <StaffAlternativeModal d={d} onClose={() => setModal(null)} onDone={(r) => { setData({ ...r, cartLine: null }); setModal(null); }} />}
       {textModal('ask', 'Ask the customer', 'Your question', 'Send question', () => post(`/chef/requests/${d.id}/question`, { body: text }), 1)}
       {textModal('decline', 'Decline this request', 'Reason (the customer sees this)', 'Decline request', () => post(`/chef/requests/${d.id}/decline`, { reason: text }))}
       {textModal('revise', 'Ask for changes', 'What should the chef change?', 'Request a new quote', () => post(`/chef-requests/${d.id}/revise`, { note: text }))}
@@ -334,5 +337,93 @@ function QuoteFormModal({ d, kind, onClose, onDone }: { d: Detail; kind: 'QUOTE'
         <Button type="submit" className="w-full" disabled={act.busy || !slot?.date || (fixTime && !slot.time) || !changes.trim() || !(cents >= 0) || (kind === 'ALTERNATIVE' && !dishId)}>{act.busy ? 'Sending…' : `Send quote — ${money(cents * qty)}`}</Button>
       </form>
     </Modal>
+  );
+}
+
+// ───── Gutad staff: another chef's dish ─────
+
+interface AltDish { id: string; title: string; dishName: string; description: string | null; mode: string; priceCents: number; portionDesc: string | null; allergens: string[]; dietaryTags: string[]; chef: { id: string; slug: string; displayName: string; city: string | null }; sameCity: boolean; sameCuisine: boolean; requestedDay: { status: string; slots: string[] } | null; mentionedAllergens: string[] }
+interface Alternatives { requestedDate: string; servings: number; reason: string; alternativesOk: boolean; dishes: AltDish[] }
+
+/**
+ * Staff suggest a dish from another chef when the requested chef can't help: candidates (same city first, can they
+ * cook it that day, allergens the request mentions), the dish's own options, and a quote at its listed price.
+ */
+function StaffAlternativeModal({ d, onClose, onDone }: { d: Detail; onClose: () => void; onDone: (r: Detail) => void }) {
+  const { data, error } = useApi<Alternatives>(`/admin/chef-requests/${d.id}/alternatives`);
+  const [pick, setPick] = useState<AltDish | null>(null);
+  return (
+    <Modal open onClose={onClose} title={pick ? `Offer ${pick.title}` : 'Suggest another chef’s dish'}>
+      {error ? <Alert>{error}</Alert> : !data ? <Spinner /> : pick ? <StaffAltForm d={d} alt={pick} onBack={() => setPick(null)} onDone={onDone} /> : (
+        <div className="space-y-3">
+          <p className="text-sm text-ink-600">For {data.servings} serving{data.servings === 1 ? '' : 's'} on {dayLabel(data.requestedDate)}. The customer sees it as an alternative from the other chef, at that chef’s listed price; the chef confirms the order as usual.</p>
+          {d.reason === 'ALLERGY' && <Alert tone="info">The customer mentioned an allergy. Check the dish’s allergens with its chef before offering it.</Alert>}
+          {!data.dishes.length && <Alert tone="info">No other chef has a live dish right now.</Alert>}
+          <ul className="max-h-[60vh] divide-y divide-ink-100 overflow-y-auto">
+            {data.dishes.map((x) => {
+              const ok = x.requestedDay?.status === 'AVAILABLE';
+              return (
+                <li key={x.id} className="flex items-start gap-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">{x.title}</div>
+                    <div className="text-xs text-ink-500">{money(x.priceCents)} per serving{x.chef.city ? ` · ${x.chef.city}` : ''}{x.sameCuisine ? ' · same cuisine' : ''}{x.mode === 'CUSTOMIZABLE' ? ' · customizable' : ''}</div>
+                    <div className="mt-1 flex flex-wrap gap-1 text-xs">
+                      <Badge tone={ok ? 'good' : 'warn'}>{ok ? `Open ${dayLabel(data.requestedDate)}` : `${dayLabel(data.requestedDate)}: ${(x.requestedDay?.status || 'unavailable').toLowerCase().replace(/_/g, ' ')}`}</Badge>
+                      {!x.sameCity && <Badge tone="warn">Other city</Badge>}
+                      {x.allergens.map((a) => <Badge key={a} tone={x.mentionedAllergens.includes(a) ? 'bad' : 'neutral'}>{pretty(a)}</Badge>)}
+                    </div>
+                  </div>
+                  <Button size="sm" variant="secondary" onClick={() => setPick(x)}>Choose</Button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function StaffAltForm({ d, alt, onBack, onDone }: { d: Detail; alt: AltDish; onBack: () => void; onDone: (r: Detail) => void }) {
+  const act = useAction();
+  const { data: pub } = useApi<PublicChefDish>(`/public/chef-dishes/${alt.id}`);
+  const groups = useMemo(() => pub?.groups || [], [pub]);
+  const base = useMemo(() => ({ allergens: alt.allergens, dietaryTags: alt.dietaryTags }), [alt]);
+  const { picks, setPicks, ev } = useCustomization(alt.dishName, groups, base);
+  const customizable = groups.some((g) => g.selectionType !== 'INCLUDED');
+  const [changes, setChanges] = useState(`${alt.title} instead of ${d.dish.title}.`);
+  const [qty, setQty] = useState(d.servings);
+  const [allergens, setAllergens] = useState<string[] | null>(null);
+  const [slot, setSlot] = useState<DateSlot | null>({ date: d.requestedDate, time: d.requestedTime || '' });
+  const [fixTime, setFixTime] = useState(!!d.requestedTime);
+  const [valid, setValid] = useState('48');
+  const [note, setNote] = useState('');
+  const { data: avail, loading } = useApi<ChefAvailability>(`/public/chef-dishes/${alt.id}/availability?quantity=${qty}`);
+  const unit = alt.priceCents + ev.modifiersCents;
+  const shown = allergens ?? ev.allergens;
+  const submit = () => act.run(async () => {
+    const r = await api.post<Detail>(`/admin/chef-requests/${d.id}/quote`, { kind: 'ALTERNATIVE', altDishId: alt.id, optionIds: ev.optionIds, changes, portionDesc: alt.portionDesc, unitPriceCents: unit, quantity: qty, allergens: shown, dietaryTags: ev.dietaryTags, serviceDate: slot!.date, serviceTime: fixTime && slot!.time ? slot!.time : null, note: note || null, validHours: Number(valid) });
+    onDone(r);
+  });
+  return (
+    <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+      <button type="button" className="text-sm text-ink-500 hover:underline" onClick={onBack}>← Other dishes</button>
+      <p className="text-sm text-ink-600">Prepared by {alt.chef.displayName}{alt.chef.city ? ` (${alt.chef.city})` : ''}. {alt.description}</p>
+      {customizable && <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={alt.chef.displayName} />}
+      <Textarea label="What the customer gets (they see this)" value={changes} onChange={(e) => setChanges(e.target.value)} rows={3} maxLength={1000} required />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div><div className="text-sm font-medium">Price per serving</div><div className="mt-1 text-lg font-semibold">{money(unit)}</div><div className="text-xs text-ink-500">The chef’s listed price for these options</div></div>
+        <QtyStepper label="Servings" value={qty} min={1} max={50} onChange={setQty} />
+      </div>
+      <CustomizationSummary basePriceCents={alt.priceCents} ev={ev} qty={qty} baseAllergens={alt.allergens} compact />
+      <div><div className="mb-1 text-sm font-medium">Allergens in the finished dish</div><ChipGroup name="allergens" values={shown} onChange={setAllergens} options={ALLERGENS.map((a) => ({ value: a, label: pretty(a) }))} /></div>
+      {alt.mentionedAllergens.length > 0 && <Alert>The request mentions {alt.mentionedAllergens.map(pretty).join(', ')}, which this dish contains.</Alert>}
+      <DateSlotPicker availability={avail ?? null} value={slot} onChange={setSlot} loading={loading} showTimes={fixTime} title="Cooking day" />
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={fixTime} onChange={(e) => setFixTime(e.target.checked)} /> Fix the time (otherwise the customer picks any time that day)</label>
+      <Select label="Offer valid for" value={valid} onChange={(e) => setValid(e.target.value)}><option value="12">12 hours</option><option value="24">24 hours</option><option value="48">2 days</option><option value="72">3 days</option></Select>
+      <Textarea label="Note to the customer (optional)" value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={1000} />
+      {act.error && <Alert>{act.error}</Alert>}
+      <Button type="submit" className="w-full" disabled={act.busy || !ev.ok || !slot?.date || (fixTime && !slot.time) || changes.trim().length < 3}>{act.busy ? 'Sending…' : `Send to the customer — ${money(unit * qty)}`}</Button>
+    </form>
   );
 }

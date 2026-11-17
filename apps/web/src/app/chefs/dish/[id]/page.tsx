@@ -102,7 +102,7 @@ function DishView({ d }: { d: Dish }) {
         {customizable && open && (
           <div ref={optsRef} className="hidden scroll-mt-24 rounded-2xl border border-ink-100 bg-white p-4 lg:block">
             <h2 className="mb-4 text-lg font-bold">Customize</h2>
-            <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAskChef={d.acceptsSpecialRequests ? askChef : undefined} />
+            <DishCustomizer dishId={d.id} groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAskChef={d.acceptsSpecialRequests ? askChef : undefined} />
           </div>
         )}
         {d.acceptsSpecialRequests && d.acceptingOrders && (
@@ -145,7 +145,7 @@ function DishView({ d }: { d: Dish }) {
             <div className="min-w-0 flex-1"><div className="truncate font-semibold">{d.title}</div><div className="text-xs text-ink-500">Prices update as you choose</div></div>
           </div>
           <div className="flex-1 overflow-y-auto px-4 py-4">
-            <DishCustomizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAskChef={d.acceptsSpecialRequests ? askChef : undefined} />
+            <DishCustomizer dishId={d.id} groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAskChef={d.acceptsSpecialRequests ? askChef : undefined} />
             <div className="mt-6 rounded-xl bg-white p-3"><CustomizationSummary basePriceCents={d.priceCents} ev={ev} qty={qty} baseAllergens={d.allergens} /></div>
           </div>
           <div className="flex items-center gap-3 border-t border-ink-100 bg-white p-3">

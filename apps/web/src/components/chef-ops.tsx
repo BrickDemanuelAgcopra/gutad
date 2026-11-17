@@ -91,7 +91,7 @@ export function KitchensTab() {
 
 export function QualityTab() {
   const [days, setDays] = useState('30');
-  const { data, error } = useApi<{ windowDays: number; policy: { minOrders: number; maxIncidentRatePct: number; maxDeclineRatePct: number }; chefs: ChefMetrics[]; events: QualityEvent[]; openFoodSafety: { id: string; status: string; description: string; created_at: string; number: string; chef: string; item: string | null }[] }>(`/admin/chef-quality?days=${days}`);
+  const { data, error } = useApi<{ windowDays: number; policy: { minOrders: number; maxIncidentRatePct: number; maxDeclineRatePct: number; autoActionAfterWeeks?: number; autoAction?: string }; chefs: ChefMetrics[]; events: QualityEvent[]; openFoodSafety: { id: string; status: string; description: string; created_at: string; number: string; chef: string; item: string | null }[] }>(`/admin/chef-quality?days=${days}`);
   const [open, setOpen] = useState<ChefMetrics | null>(null);
   if (error) return <Alert>{error}</Alert>;
   if (!data) return <Spinner />;
@@ -99,7 +99,7 @@ export function QualityTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-40"><Select label="Window" value={days} onChange={(e) => setDays(e.target.value)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></Select></div>
-        <p className="text-xs text-ink-500">Rates are judged from {data.policy.minOrders} orders. Limits: incidents {data.policy.maxIncidentRatePct}%, declined or unconfirmed {data.policy.maxDeclineRatePct}%. Food-safety reports act automatically.</p>
+        <p className="text-xs text-ink-500">Rates are judged from {data.policy.minOrders} orders. Limits: incidents {data.policy.maxIncidentRatePct}%, declined or unconfirmed {data.policy.maxDeclineRatePct}%. Food-safety reports act automatically. {data.policy.autoActionAfterWeeks ? `Over a limit ${data.policy.autoActionAfterWeeks} weeks in a row: ${data.policy.autoAction === 'SUSPEND_CHEF' ? 'suspended' : 'paused'} automatically.` : 'Rates only flag (no automatic suspension).'}</p>
       </div>
       {data.openFoodSafety.length > 0 && (
         <Card title={`Open food-safety reports (${data.openFoodSafety.length})`}>

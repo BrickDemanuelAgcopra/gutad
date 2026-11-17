@@ -294,9 +294,11 @@ function FeesPolicy() {
           <Input label="Max declined/unconfirmed (%)" type="number" min={1} max={100} value={qv.maxDeclineRatePct} onChange={(e) => setQp({ ...qv, maxDeclineRatePct: Number(e.target.value) })} />
           <Select label="Food-safety report on a chef order" value={qv.foodSafetyAction} onChange={(e) => setQp({ ...qv, foodSafetyAction: e.target.value as ChefQualityPolicy['foodSafetyAction'] })}><option value="SUSPEND_DISH">Suspend the dish</option><option value="PAUSE_CHEF">Pause the chef</option><option value="ALERT">Alert only</option></Select>
           <Select label="Required document expires" value={qv.expiredDocumentAction} onChange={(e) => setQp({ ...qv, expiredDocumentAction: e.target.value as ChefQualityPolicy['expiredDocumentAction'] })}><option value="PAUSE_CHEF">Pause until renewed</option><option value="ALERT">Alert only</option></Select>
+          <Input label="Auto-act after weeks over a limit (0 = off)" type="number" min={0} max={12} value={qv.autoActionAfterWeeks} onChange={(e) => setQp({ ...qv, autoActionAfterWeeks: Math.max(0, Math.floor(Number(e.target.value) || 0)) })} />
+          <Select label="Automatic action" value={qv.autoAction} disabled={!qv.autoActionAfterWeeks} onChange={(e) => setQp({ ...qv, autoAction: e.target.value as ChefQualityPolicy['autoAction'] })}><option value="PAUSE_CHEF">Pause the chef</option><option value="SUSPEND_CHEF">Suspend the chef</option></Select>
           <Input label="Reminder days before expiry" value={qv.documentReminderDays.join(', ')} onChange={(e) => setQp({ ...qv, documentReminderDays: e.target.value.split(',').map((x) => Number(x.trim())).filter((x) => x > 0) })} />
         </div>
-        <p className="mt-2 text-xs text-ink-500">Over a limit, the chef is flagged (quality record + operations alert, at most weekly); suspensions over rates stay a staff decision. Food-safety reports act immediately.</p>
+        <p className="mt-2 text-xs text-ink-500">Over a limit, the chef is flagged (quality record + operations alert, at most weekly); with automatic action on, a chef flagged that many weeks in a row is paused or suspended (staff reinstate); otherwise suspensions over rates stay a staff decision. Food-safety reports act immediately.</p>
         <Button className="mt-3" disabled={busy || !qp} onClick={saveQuality}>Save quality rules</Button>
       </Card>
     </div>

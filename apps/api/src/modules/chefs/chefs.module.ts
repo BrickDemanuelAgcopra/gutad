@@ -1,3 +1,4 @@
+import { ChefInterpretService } from './chef-interpret.service';
 import { Module } from '@nestjs/common';
 import { PaymentsModule } from '../payments/payments.module';
 import { StorageService } from '../../core/storage.service';
@@ -13,5 +14,5 @@ import { ChefOpsController } from './chef-ops.controller';
 import { ChefOpsService } from './chef-ops.service';
 
 /** Gutad Chef Network: chef applications, profiles, files dishes, options and special requests. */
-@Module({ imports: [PaymentsModule], controllers: [ChefsController, ChefRequestsController, ChefOpsController], providers: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService, ChefOpsService, StorageService], exports: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService, ChefOpsService] })
+@Module({ imports: [PaymentsModule], controllers: [ChefsController, ChefRequestsController, ChefOpsController], providers: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService, ChefOpsService, ChefInterpretService, StorageService], exports: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService, ChefOpsService] })
 export class ChefsModule {}

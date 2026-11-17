@@ -201,6 +201,7 @@ export class QuoteService {
     if (input.replacesOrderId && !sim) {
       const [orig] = await tx.select({ userId: orders.userId, locationId: orders.locationId, prepaid: orders.prepaid }).from(orders).where(eq(orders.id, input.replacesOrderId)).limit(1);
       if (!orig || !input.userId || orig.userId !== input.userId || orig.locationId !== loc.id || !orig.prepaid) throw new BadRequestException({ message: 'This order can’t be changed here', code: 'NOT_AMENDABLE' });
+      if (input.lines.some((l) => l.chefRequestQuoteId)) throw new BadRequestException({ message: 'A special request can’t be added to a changed order. Order it on its own.', code: 'HAS_SPECIAL_REQUEST' });
     }
     if (loc.chefKitchen && scheduledFor && !sim) await this.chefCalendar.assertOrderable(loc.id, scheduledFor, capacityLines, input.holdKey, tx, input.replacesOrderId);
     if (subtotalCents < loc.minOrderCents) throw new BadRequestException(`Minimum order is ${loc.minOrderCents} cents`);

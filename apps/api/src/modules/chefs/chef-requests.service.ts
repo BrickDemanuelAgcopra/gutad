@@ -250,6 +250,10 @@ export class ChefRequestsService {
       const ev = evaluateCustomization(t.d.dishName, groups, optionIds, { allergens: t.i.allergens, dietaryTags: t.i.dietaryTags || [] });
       if (!ev.ok) throw new BadRequestException({ message: ev.errors[0], code: 'CUSTOMIZATION_INVALID' });
       mods = ev.optionIds;
+      // Gutad staff can offer another chef's dish, but only at that chef's listed price for those options
+      if (role === 'STAFF' && t.p.id !== r.chefProfileId && input.unitPriceCents !== t.i.priceCents + ev.modifiersCents) throw new BadRequestException({ message: `Another chef’s dish is offered at its listed price (${t.i.priceCents + ev.modifiersCents} cents per serving)`, code: 'ALTERNATIVE_PRICE' });
+    } else if (role === 'STAFF' && t.p.id !== r.chefProfileId && input.unitPriceCents !== t.i.priceCents) {
+      throw new BadRequestException({ message: `Another chef’s dish is offered at its listed price (${t.i.priceCents} cents per serving)`, code: 'ALTERNATIVE_PRICE' });
     }
     // the date must still be orderable at the quoted quantity (the hold happens at checkout)
     const day = await this.dayStatus(t.d.id, input.serviceDate, quantity);
@@ -335,6 +339,52 @@ export class ChefRequestsService {
   }
 
   // ───── Gutad staff supervision ─────
+
+  /**
+   * Dishes from other chefs that Gutad staff could suggest instead (ALTERNATIVE quote at the dish's listed price):
+   * live dishes from active chefs taking orders, whether each can be made on the requested day for the requested
+   * servings, and allergens the customer's request mentions. Same city first, then available, then price.
+   */
+  async adminAlternatives(user: JwtPayload, id: string) {
+    if (!isPlatformStaff(user) || !can(user, 'chefs.read')) throw new ForbiddenException();
+    const r = await this.load(id);
+    const [origin] = await this.db.select({ city: chefProfiles.serviceCity, cuisines: chefProfiles.cuisines }).from(chefProfiles).where(eq(chefProfiles.id, r.chefProfileId)).limit(1);
+    const rows = await this.db
+      .select({ d: chefDishes, i: menuItems, p: chefProfiles })
+      .from(chefDishes)
+      .innerJoin(menuItems, eq(menuItems.id, chefDishes.menuItemId))
+      .innerJoin(chefProfiles, eq(chefProfiles.id, chefDishes.chefProfileId))
+      .where(and(eq(chefDishes.reviewStatus, 'PUBLISHED'), eq(menuItems.isActive, true), eq(menuItems.soldOut, false), eq(chefProfiles.status, 'ACTIVE'), eq(chefProfiles.acceptingOrders, true), sql`${chefProfiles.id} <> ${r.chefProfileId}`))
+      .limit(200);
+    const text = `${r.details} ${r.ingredient || ''}`.toLowerCase();
+    const sameCity = (c: string | null) => !!c && !!origin?.city && c.toLowerCase() === origin.city.toLowerCase();
+    const ranked = rows
+      .map((x) => ({ x, near: sameCity(x.p.serviceCity), cuisine: x.p.cuisines.some((c) => origin?.cuisines.includes(c)) }))
+      .sort((a, b) => Number(b.near) - Number(a.near) || Number(b.cuisine) - Number(a.cuisine) || a.x.i.priceCents - b.x.i.priceCents)
+      .slice(0, 40);
+    const dishes = await Promise.all(ranked.map(async ({ x, near, cuisine }) => {
+      const day = await this.dayStatus(x.d.id, r.requestedDate, r.servings).catch(() => null);
+      return {
+        id: x.d.id,
+        title: chefDishTitle(x.d.dishName, x.p.displayName),
+        dishName: x.d.dishName,
+        description: x.d.description,
+        mode: x.d.mode,
+        priceCents: x.i.priceCents,
+        portionDesc: x.d.portionDesc,
+        allergens: x.i.allergens,
+        dietaryTags: x.i.dietaryTags || [],
+        chef: { id: x.p.id, slug: x.p.slug, displayName: x.p.displayName, city: x.p.serviceCity },
+        sameCity: near,
+        sameCuisine: cuisine,
+        requestedDay: day ? { status: day.status, slots: day.slots } : null,
+        /** allergens of this dish that the customer's request text names (a hint; staff confirm with the chef) */
+        mentionedAllergens: x.i.allergens.filter((a) => text.includes(a.toLowerCase().replace(/_/g, ' '))),
+      };
+    }));
+    dishes.sort((a, b) => Number(b.sameCity) - Number(a.sameCity) || Number(b.requestedDay?.status === 'AVAILABLE') - Number(a.requestedDay?.status === 'AVAILABLE'));
+    return { requestId: r.id, requestedDate: r.requestedDate, servings: r.servings, reason: r.reason, alternativesOk: r.alternativesOk, dishes };
+  }
 
   async adminList(user: JwtPayload, f: { status?: string; chefId?: string; overdue?: boolean; escalated?: boolean }) {
     if (!isPlatformStaff(user) || !can(user, 'chefs.read')) throw new ForbiddenException();

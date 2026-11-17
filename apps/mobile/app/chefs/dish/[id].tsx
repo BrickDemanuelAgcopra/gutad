@@ -51,7 +51,7 @@ function DishView({ d }: { d: Dish }) {
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginVertical: 8 }}><Badge text={CHEF_FULFILLMENT_FORMATS[d.fulfillmentFormat]} /><Badge text={customizable ? 'Customizable' : 'Fixed recipe'} tone={customizable ? 'info' : 'neutral'} />{ev.dietaryTags.map((t) => <Badge key={t} text={t.replace('_', ' ')} tone="good" />)}</View>
           {open && customizable ? (
             <Card title="Customize">
-              <Customizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAsk={ask} />
+              <Customizer dishId={d.id} groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} onAsk={ask} />
               <Summary base={d.priceCents} ev={ev} qty={qty} baseAllergens={d.allergens} />
             </Card>
           ) : (

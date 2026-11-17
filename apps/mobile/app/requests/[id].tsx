@@ -4,6 +4,8 @@ import { CHEF_REQUEST_OPEN, type ChefQuoteCartLine } from '@gutad/shared';
 import { api, money } from '@/api';
 import { useAction, useApi, useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Loading, Muted, s } from '@/ui';
+import { useState } from 'react';
+import { StaffAlternative } from '@/staff-alternative';
 import { QuoteCard, RequestCard, TextAction, Thread, useQuoteCheckout, type RequestDetail } from '@/chef-requests';
 
 /** One special request: the customer's view (accept, revise, withdraw, reply) and Gutad staff's (extend, close). */
@@ -14,6 +16,7 @@ export default function RequestScreen() {
   const { data: r, setData, error, reload } = useApi<RequestDetail>(user ? `/chef-requests/${id}` : null, { deps: [user?.id], poll: 30000 });
   const { run, busy, error: actErr } = useAction();
   const checkout = useQuoteCheckout();
+  const [suggesting, setSuggesting] = useState(false);
   if (!ready) return null;
   if (!user) return <View style={[s.screen, s.pad]}><Card title="Special request"><Muted>Sign in to see this request.</Muted><Button title="Sign in / create account" onPress={() => router.push('/login')} /></Card></View>;
   if (!r) return error ? <View style={[s.screen, s.pad]}><ErrorText msg={error} /></View> : <Loading />;
@@ -49,6 +52,8 @@ export default function RequestScreen() {
       {staff && open && (
         <Card title="Gutad staff">
           <Button variant="secondary" disabled={busy} title="Extend deadline +24h" onPress={() => void act(() => api.post<RequestDetail>(`/admin/chef-requests/${r.id}/extend`, { hours: 24 }))} />
+          {r.can.quote && r.alternativesOk && <Button variant="secondary" title={suggesting ? 'Hide other chefs’ dishes' : 'Suggest another chef’s dish'} onPress={() => setSuggesting(!suggesting)} />}
+          {suggesting && <StaffAlternative r={r} onDone={(d) => { setData(d); setSuggesting(false); }} />}
           {r.can.close && <TextAction label="Close request (reason shared with both sides)" button="Close request" variant="danger" min={3} busy={busy} onSend={(reason) => act(() => api.post<RequestDetail>(`/admin/chef-requests/${r.id}/close`, { reason }))} />}
         </Card>
       )}

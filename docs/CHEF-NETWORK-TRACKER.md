@@ -95,7 +95,15 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Docs: `CHEF-NETWORK-PLAN.md` (as built), `ARCHITECTURE.md` (prepaid money flow, lifecycles), `CAPABILITY-MAP.md`, `Pending_Tasks.md` (follow-ups CN.V, CN.1–CN.5), `Completed_Tasks.md`.
 - [x] Smoke `scripts/smoke-chef-h.mjs` (19 checks). Full suite 818/820; the 2 misses are the known timing-dependent campaign holdout checks (one of 10 orders hit the API rate limit).
 
+## Follow-ups CN.1–CN.4 [x]
+- [x] CN.1 add dishes while changing a paid order (web, mobile; `chefNetwork.chefSlug`).
+- [x] CN.2 staff alternatives from other chefs (`GET admin/chef-requests/:id/alternatives`, listed-price guard; web, mobile).
+- [x] CN.3 “Describe what you want” (`POST chef-dishes/:id/interpret`; Claude or keyword matching; web, mobile).
+- [x] CN.4 optional automatic pause/suspension after N weekly flags (`chefs.quality.autoActionAfterWeeks`, `autoAction`).
+- [x] Smoke `scripts/smoke-chef-i.mjs` (21 checks). Full suite 841/841.
+
 ## Log
+- 2026-11-17 Follow-ups CN.1–CN.4 built and verified locally (841/841 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 8 built and verified locally (all Chef Network checks pass; web build; typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 7 built and verified locally (801/801 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 6 built and verified locally (773/773 smoke, web build, typecheck of shared, API, web and mobile).

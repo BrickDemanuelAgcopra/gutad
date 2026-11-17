@@ -76,13 +76,10 @@ Phase J shipped on 2026-11-14; see Completed_Tasks. These follow-ups remain:
 
 ## Gutad Chef Network
 
-All 8 phases shipped (2026-11-16 to 2026-11-17); see Completed_Tasks and [`CHEF-NETWORK-PLAN.md`](CHEF-NETWORK-PLAN.md). These follow-ups remain:
-- [ ] CN.V [verify] Run the mobile chef, customer and ops flows on a device (apply, dish builder, customization, checkout with a day, special requests, change order, compliance, ops quality). Only typecheck, smoke and web screenshots have been run · M
-- [ ] CN.1 [new] Add dishes while changing a paid order (today: quantities, removals, day and time) · API W M
-- [ ] CN.2 [new] Screen for Gutad staff to suggest another chef's dish on a special request (the API accepts it) · W M
-- [ ] CN.3 [new] Free-text request → proposed option selections (AI), deferred in the plan · API W M
-- [ ] CN.4 [improve] Optional automatic suspension when quality rates stay over the limit for several weeks (rates only flag today) · API
+All 8 phases shipped (2026-11-16 to 2026-11-17), follow-ups CN.1–CN.4 on 2026-11-17; see Completed_Tasks and [`CHEF-NETWORK-PLAN.md`](CHEF-NETWORK-PLAN.md). These remain:
+- [ ] CN.V [verify] Run the mobile chef, customer and ops flows on a device (apply, dish builder, customization incl. “Describe what you want”, checkout with a day, special requests incl. staff “another chef’s dish”, change order incl. adding dishes, compliance, ops quality). Only typecheck, smoke and web screenshots have been run · M
 - [ ] CN.5 [verify] Live Stripe Connect payouts and refunds for chef orders with real keys (production still uses the mock provider) · API
+- [ ] CN.6 [ops] Turn on Claude for “Describe what you want”: set `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` in /opt/gutad/.env (keyword matching until then) · API
 
 ---
 

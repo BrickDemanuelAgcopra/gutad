@@ -614,7 +614,7 @@ export class OrdersService {
     if (!['SUBMITTED', 'ACCEPTED'].includes(o.status)) return { ...base, allowed: false, code: 'NOT_AMENDABLE', reason: `This order is ${o.status.toLowerCase()}` };
     if (!o.freeCancelUntil || o.freeCancelUntil <= now) return { ...base, allowed: false, code: 'AMEND_WINDOW_CLOSED', reason: 'Changes close at the order cutoff for the day' };
     if (lines.some((l) => l.chefRequestQuoteId)) return { ...base, allowed: false, code: 'HAS_SPECIAL_REQUEST', reason: 'Orders with a special request can’t be changed. Cancel for a full refund and ask the chef again.' };
-    return { ...base, allowed: true, code: 'OK', reason: 'You can change items, quantities, day and time until the cutoff. We charge the new total and refund the original in full; the chef confirms the changed order again.' };
+    return { ...base, allowed: true, code: 'OK', reason: 'You can add dishes, change quantities, remove dishes, and change the day and time until the cutoff. We charge the new total and refund the original in full; the chef confirms the changed order again.' };
   }
 
   /**
@@ -706,7 +706,7 @@ export class OrdersService {
       // Gutad Chef Network: a paid order can be changed until its cutoff (see amendCheck)
       amendable: o.prepaid ? this.amendCheck(o).allowed : false,
       // Gutad Chef Network: sold by Gutad, prepared by the chef; the cancellation terms accepted at checkout
-      chefNetwork: o.prepaid ? { chefName: await this.chefCalendar.chefNameFor(o.locationId), freeCancelUntil: o.freeCancelUntil, lateRefundPct: o.lateRefundPct, acceptBy: o.acceptBy, checkoutGroupId: o.checkoutGroupId } : null,
+      chefNetwork: o.prepaid ? { chefName: await this.chefCalendar.chefNameFor(o.locationId), chefSlug: await this.chefCalendar.chefSlugFor(o.locationId), freeCancelUntil: o.freeCancelUntil, lateRefundPct: o.lateRefundPct, acceptBy: o.acceptBy, checkoutGroupId: o.checkoutGroupId } : null,
     };
   }
 

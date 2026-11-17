@@ -39,6 +39,10 @@ const schema = z.object({
   /** Where customer replies go (empty = no Reply-To header). */
   EMAIL_REPLY_TO: z.string().optional().default('support@gutad.io'),
   EXPO_ACCESS_TOKEN: z.string().optional().default(''),
+  /** CN.3 free-text dish requests → option selections: 'rules' (keyword matching, no external calls) or 'anthropic' (Claude) */
+  AI_PROVIDER: z.enum(['rules', 'anthropic']).default('rules'),
+  ANTHROPIC_API_KEY: z.string().optional().default(''),
+  AI_MODEL: z.string().optional().default('claude-opus-5-5'),
   GEOCODER_PROVIDER: z.enum(['mock', 'google']).default('mock'),
   GOOGLE_MAPS_API_KEY: z.string().optional().default(''),
   DEFAULT_MARKETPLACE_COMMISSION_BPS: z.coerce.number().default(1500),

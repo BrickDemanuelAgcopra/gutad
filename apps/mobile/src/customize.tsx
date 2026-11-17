@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { evaluateCustomization, type CustomizationResult, type ModGroup, type ModOption } from '@gutad/shared';
-import { money } from './api';
-import { C, s } from './ui';
+import { api, money } from './api';
+import { useSession } from './hooks';
+import { Button, C, s } from './ui';
 
 export type Picks = Record<string, number>;
 export const picksToIds = (p: Picks) => Object.entries(p).flatMap(([id, n]) => Array(Math.max(0, n)).fill(id) as string[]);
@@ -32,7 +33,7 @@ function Stepper({ value, max, onChange, label }: { value: number; max: number; 
   );
 }
 
-export function Customizer({ groups, picks, setPicks, ev, chefName, acceptsRequests, onAsk }: { groups: ModGroup[]; picks: Picks; setPicks: (p: Picks) => void; ev: CustomizationResult; chefName: string; acceptsRequests?: boolean; /** opens a special request for an ingredient the dish doesn't offer */ onAsk?: (ingredient: string) => void }) {
+export function Customizer({ groups, picks, setPicks, ev, chefName, acceptsRequests, onAsk, dishId }: { groups: ModGroup[]; picks: Picks; setPicks: (p: Picks) => void; ev: CustomizationResult; chefName: string; acceptsRequests?: boolean; /** opens a special request for an ingredient the dish doesn't offer */ onAsk?: (ingredient: string) => void; /** shows “Describe what you want” (CN.3) */ dishId?: string }) {
   const active = new Set(ev.activeGroupIds);
   const qtyOf = (id: string) => ev.chosen.find((c) => c.id === id)?.qty || 0;
   const single = (g: ModGroup, id: string) => { const n = { ...picks }; for (const o of g.options) delete n[o.id]; n[id] = 1; setPicks(n); };
@@ -44,6 +45,7 @@ export function Customizer({ groups, picks, setPicks, ev, chefName, acceptsReque
   const shownExtras = extras ? Array.from(new Set([...extras.options.filter((o) => picks[o.id]), ...hits])) : [];
   return (
     <View>
+      {dishId && groups.some((g) => (g.selectionType || 'CHOICE') !== 'INCLUDED') && <DescribeIt dishId={dishId} setPicks={setPicks} chefName={chefName} onAsk={acceptsRequests ? onAsk : undefined} />}
       {groups.filter((g) => !g.isExtras && (!g.parentOptionId || active.has(g.id))).map((g) => {
         const t = g.selectionType || 'CHOICE';
         return (
@@ -90,6 +92,48 @@ export function Summary({ base, ev, qty, baseAllergens }: { base: number; ev: Cu
       {ev.removedDietaryTags.length > 0 && <Text style={{ color: C.warn, fontSize: 12 }}>No longer {ev.removedDietaryTags.map((t) => t.replace('_', ' ')).join(', ')}</Text>}
       {!ev.ok && <Text style={{ color: C.bad, fontSize: 12 }}>{ev.errors[0]}</Text>}
       <Text style={{ fontWeight: '700', marginTop: 4 }}>{qty > 1 ? `${qty} × ${money(base + ev.modifiersCents)} = ` : ''}{money((base + ev.modifiersCents) * qty)}</Text>
+    </View>
+  );
+}
+
+interface Interpretation { source: 'ai' | 'rules'; optionIds: string[]; unmatched: string[]; note: string; ok: boolean; errors: string[] }
+
+/** CN.3: describe the dish in your words; Gutad fills in the matching options to review. */
+function DescribeIt({ dishId, setPicks, chefName, onAsk }: { dishId: string; setPicks: (p: Picks) => void; chefName: string; onAsk?: (term: string) => void }) {
+  const { user } = useSession();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<Interpretation | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.post<Interpretation>(`/chef-dishes/${dishId}/interpret`, { text });
+      const p: Picks = {};
+      for (const id of r.optionIds) p[id] = (p[id] || 0) + 1;
+      setPicks(p);
+      setRes(r);
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <View style={{ marginBottom: 14, padding: 10, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ink3 }}>
+      <Text style={{ fontWeight: '700', color: C.ink }}>Describe what you want</Text>
+      <Text style={{ color: C.ink5, fontSize: 12 }}>e.g. “large, extra spicy, no onions”. We fill in the options for you to check.</Text>
+      <TextInput accessibilityLabel="Describe what you want" value={text} onChangeText={setText} maxLength={500} placeholder="Your way, in your words" style={{ borderWidth: 1, borderColor: C.ink1, borderRadius: 10, padding: 8, marginVertical: 6, backgroundColor: C.white }} />
+      <Button title={busy ? 'Filling in…' : user ? 'Fill in options' : 'Sign in to use this'} variant="secondary" disabled={busy || !user || text.trim().length < 2} onPress={() => void go()} />
+      {!!err && <Text style={{ color: C.bad }}>{err}</Text>}
+      {res && (
+        <View accessibilityLiveRegion="polite">
+          <Text style={{ color: C.ink7 }}>{res.note}</Text>
+          {!res.ok && !!res.errors[0] && <Text style={{ color: C.warn }}>Still needed: {res.errors[0]}</Text>}
+          {res.unmatched.length > 0 && <Text style={{ color: C.ink5, marginTop: 4 }}>Not on the options:</Text>}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            {res.unmatched.map((u) => onAsk
+              ? <Pressable key={u} accessibilityRole="button" onPress={() => onAsk(u)} style={{ borderWidth: 1, borderColor: C.brand, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 }}><Text style={{ color: C.brandDark, fontSize: 12 }}>Ask {chefName} for “{u}”</Text></Pressable>
+              : <Text key={u} style={{ backgroundColor: C.ink1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, fontSize: 12 }}>{u}</Text>)}
+          </View>
+        </View>
+      )}
     </View>
   );
 }

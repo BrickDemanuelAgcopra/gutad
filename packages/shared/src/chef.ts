@@ -550,8 +550,16 @@ export interface ChefQualityPolicy {
   expiredDocumentAction: 'PAUSE_CHEF' | 'ALERT';
   /** reminder days before a document expires */
   documentReminderDays: number[];
+  /**
+   * Optional automatic action when a chef stays over the incident or decline limits: after this many weekly threshold
+   * flags in a row (no gap over 10 days, counted since the chef was last paused, suspended or reinstated). 0 = off;
+   * rates then only flag and staff decide.
+   */
+  autoActionAfterWeeks: number;
+  /** what the automatic action does: pause listings (staff reinstate) or suspend the chef */
+  autoAction: 'PAUSE_CHEF' | 'SUSPEND_CHEF';
 }
-export const DEFAULT_CHEF_QUALITY_POLICY: ChefQualityPolicy = { windowDays: 30, minOrders: 10, maxIncidentRatePct: 10, maxDeclineRatePct: 20, foodSafetyAction: 'SUSPEND_DISH', expiredDocumentAction: 'PAUSE_CHEF', documentReminderDays: [30, 7] };
+export const DEFAULT_CHEF_QUALITY_POLICY: ChefQualityPolicy = { windowDays: 30, minOrders: 10, maxIncidentRatePct: 10, maxDeclineRatePct: 20, foodSafetyAction: 'SUSPEND_DISH', expiredDocumentAction: 'PAUSE_CHEF', documentReminderDays: [30, 7], autoActionAfterWeeks: 0, autoAction: 'PAUSE_CHEF' };
 
 export const CHEF_QUALITY_EVENT_LABELS: Record<string, string> = {
   WARNING: 'Warning',

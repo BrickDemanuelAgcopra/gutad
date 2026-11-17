@@ -250,6 +250,11 @@ export class ChefCalendarService {
     return p?.n ?? null;
   }
 
+  async chefSlugFor(locationId: string) {
+    const [p] = await this.db.select({ s: chefProfiles.slug }).from(chefProfiles).where(eq(chefProfiles.locationId, locationId)).limit(1);
+    return p?.s ?? null;
+  }
+
   // ───── quote holds and checkout ─────
 
   private lock(tx: DbOrTx, locationId: string, date: string) {
