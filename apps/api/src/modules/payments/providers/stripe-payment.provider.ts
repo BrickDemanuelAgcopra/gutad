@@ -133,13 +133,21 @@ export class StripePaymentProvider implements PaymentProvider {
   }
 
   async parseWebhook(rawBody: Buffer, signature: string | undefined): Promise<ProviderEvent | null> {
-    const secret = loadConfig().STRIPE_WEBHOOK_SECRET;
-    if (!secret || !signature) return null;
-    let ev: Stripe.Event;
-    try {
-      ev = this.stripe.webhooks.constructEvent(rawBody, signature, secret);
-    } catch (e) {
-      this.log.warn(`webhook signature failed: ${(e as Error).message}`);
+    // Comma-separated: one signing secret per Stripe destination ("Your account" and "Connected accounts").
+    const secrets = loadConfig().STRIPE_WEBHOOK_SECRET.split(',').map((x) => x.trim()).filter(Boolean);
+    if (!secrets.length || !signature) return null;
+    let ev: Stripe.Event | null = null;
+    let lastErr = '';
+    for (const secret of secrets) {
+      try {
+        ev = this.stripe.webhooks.constructEvent(rawBody, signature, secret);
+        break;
+      } catch (e) {
+        lastErr = (e as Error).message;
+      }
+    }
+    if (!ev) {
+      this.log.warn(`webhook signature failed: ${lastErr}`);
       return null;
     }
     const obj = ev.data.object as unknown as Record<string, unknown>;
