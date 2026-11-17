@@ -1,12 +1,13 @@
 'use client';
 import Link from 'next/link';
-import { useState } from 'react';
-import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, chefNoticeText, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, DEFAULT_CHEF_REQUEST_POLICY, WEEKDAYS, type ChefNetworkFees, type ChefPolicy, type ChefRequestPolicy, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
+import { useEffect, useState } from 'react';
+import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, chefNoticeText, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, DEFAULT_CHEF_QUALITY_POLICY, DEFAULT_CHEF_REQUEST_POLICY, WEEKDAYS, type ChefNetworkFees, type ChefPolicy, type ChefQualityPolicy, type ChefRequestPolicy, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
 import { api, API_URL, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Table, Tabs, Textarea } from '@/components/ui';
 import { KeyValue, SectionTitle } from '@/components/admin-ui';
 import { ChipGroup, ProgressBar } from '@/components/form-kit';
+import { ChefRecordModal, KitchensTab, QualityTab } from '@/components/chef-ops';
 
 interface Row { id: string; status: ChefApplicationStatus; displayName: string | null; applicantName: string | null; email: string; region: string | null; city: string | null; kitchenType: string | null; percentComplete: number; flags: string[]; reviewer: { email: string; name: string | null } | null; submittedAt: string | null; waitingHours: number | null }
 interface Doc { id: string; requirementKey: string; status: string; expiresAt: string | null; note: string | null; fileId: string; createdAt: string }
@@ -30,11 +31,13 @@ const tone = (s: string) => (s === 'APPROVED' ? 'good' : s === 'REJECTED' ? 'bad
 
 export default function AdminChefs() {
   const [tab, setTab] = useState('applications');
+  // deep links from Admin modules: /admin/chefs?tab=kitchens|quality
+  useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (t) setTab(t); }, []);
   return (
     <div className="space-y-4">
-      <SectionTitle title="Chef Network" hint="Independent chefs: applications, kitchens and documents, approvals and chef accounts." action={<span className="flex gap-4"><Link href="/admin/chefs/requests" className="text-sm underline">Special requests →</Link><Link href="/admin/chefs/requirements" className="text-sm underline">Document rules →</Link></span>} />
-      <Tabs tabs={[{ id: 'applications', label: 'Applications' }, { id: 'dishes', label: 'Dish review' }, { id: 'chefs', label: 'Chefs' }, { id: 'fees', label: 'Fees & policy' }]} active={tab} onChange={setTab} />
-      {tab === 'applications' ? <Applications /> : tab === 'dishes' ? <DishReview /> : tab === 'fees' ? <FeesPolicy /> : <Chefs />}
+      <SectionTitle title="Chef Network" hint="Independent chefs: applications, kitchens and documents, approvals and chef accounts." action={<span className="flex flex-wrap gap-4"><Link href="/admin/chefs/analytics" className="text-sm underline">Analytics →</Link><Link href="/admin/chefs/requests" className="text-sm underline">Special requests →</Link><Link href="/admin/chefs/requirements" className="text-sm underline">Document rules →</Link></span>} />
+      <Tabs tabs={[{ id: 'applications', label: 'Applications' }, { id: 'dishes', label: 'Dish review' }, { id: 'chefs', label: 'Chefs' }, { id: 'kitchens', label: 'Kitchens & documents' }, { id: 'quality', label: 'Quality' }, { id: 'fees', label: 'Fees & policy' }]} active={tab} onChange={setTab} />
+      {tab === 'applications' ? <Applications /> : tab === 'dishes' ? <DishReview /> : tab === 'fees' ? <FeesPolicy /> : tab === 'kitchens' ? <KitchensTab /> : tab === 'quality' ? <QualityTab /> : <Chefs />}
     </div>
   );
 }
@@ -176,9 +179,11 @@ function Chefs() {
   const [next, setNext] = useState('PAUSED');
   const [reason, setReason] = useState('');
   const [cal, setCal] = useState<ChefRow | null>(null);
+  const [rec, setRec] = useState<ChefRow | null>(null);
   return (
     <>
       {cal && <ChefCalendarModal chef={cal} onClose={() => setCal(null)} />}
+      {rec && <ChefRecordModal chefId={rec.id} name={rec.displayName} onClose={() => { setRec(null); void reload(); }} />}
       <div className="flex gap-2"><Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All chefs</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option><option value="SUSPENDED">Suspended</option></Select></div>
       {error && <Alert>{error}</Alert>}
       <Table rows={data || []} empty="No chefs yet." cols={[
@@ -186,7 +191,7 @@ function Chefs() {
         { key: 'a', label: 'Area', render: (c) => <span className="text-xs">{c.serviceCity}, {c.serviceRegion}</span> },
         { key: 'c', label: 'Cuisines', render: (c) => <span className="text-xs">{c.cuisines.join(', ')}</span> },
         { key: 's', label: 'Status', render: (c) => <div><Badge tone={c.status === 'ACTIVE' ? 'good' : c.status === 'SUSPENDED' ? 'bad' : 'warn'}>{c.status.toLowerCase()}</Badge>{c.status === 'ACTIVE' && <span className="ml-1 text-xs text-ink-500">{c.acceptingOrders ? 'accepting' : 'not accepting'}</span>}{c.statusReason && <div className="text-xs text-ink-500">{c.statusReason}</div>}</div> },
-        { key: 'x', label: '', render: (c) => <div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => setCal(c)}>Calendar</Button>{can('chefs.manage') ? <Button size="sm" variant="secondary" onClick={() => { setSel(c); setNext(c.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'); setReason(''); }}>Change status</Button> : null}</div> },
+        { key: 'x', label: '', render: (c) => <div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => setCal(c)}>Calendar</Button><Button size="sm" variant="ghost" onClick={() => setRec(c)}>Quality & earnings</Button>{can('chefs.manage') ? <Button size="sm" variant="secondary" onClick={() => { setSel(c); setNext(c.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'); setReason(''); }}>Change status</Button> : null}</div> },
       ]} />
       {sel && (
         <Modal open title={`Status of ${sel.displayName}`} onClose={() => setSel(null)}>
@@ -215,10 +220,16 @@ function FeesPolicy() {
   const [p, setP] = useState<ChefPolicy | null>(null);
   const [advance, setAdvance] = useState<string | null>(null);
   const [rq, setRq] = useState<ChefRequestPolicy | null>(null);
+  const [qp, setQp] = useState<ChefQualityPolicy | null>(null);
   if (!data) return <p className="text-sm text-ink-500">Loading…</p>;
   const fv = f || { commissionPct: String(curFees.commissionBps / 100), servicePct: String(curFees.customer.service.bps / 100), serviceMin: (curFees.customer.service.minCents / 100).toFixed(2), serviceCap: ((curFees.customer.service.capCents || 0) / 100).toFixed(2), smallThreshold: (curFees.customer.smallOrder.thresholdCents / 100).toFixed(2), smallFee: (curFees.customer.smallOrder.feeCents / 100).toFixed(2) };
   const pv = p || curPol;
   const rv = rq || { ...DEFAULT_CHEF_REQUEST_POLICY, ...((data.settings['chefs.requests'] as Partial<ChefRequestPolicy>) || {}) };
+  const qv = qp || { ...DEFAULT_CHEF_QUALITY_POLICY, ...((data.settings['chefs.quality'] as Partial<ChefQualityPolicy>) || {}) };
+  const saveQuality = () => run(async () => {
+    await api.post('/admin/settings', { key: 'chefs.quality', value: qv, reason: 'Chef Network quality rules' });
+    setMsg('Quality rules saved.'); setQp(null); await reload();
+  });
   const saveRequests = () => run(async () => {
     await api.post('/admin/settings', { key: 'chefs.requests', value: rv, reason: 'Chef Network special requests' });
     setMsg('Special-request deadlines saved.'); setRq(null); await reload();
@@ -269,9 +280,24 @@ function FeesPolicy() {
           <Input label="Default quote validity (hours)" type="number" min={1} max={168} value={rv.quoteValidHours} onChange={(e) => setRq({ ...rv, quoteValidHours: Number(e.target.value) })} />
           <Input label="Hours a customer has to reply" type="number" min={1} max={336} value={rv.customerReplyHours} onChange={(e) => setRq({ ...rv, customerReplyHours: Number(e.target.value) })} />
           <Input label="Open requests per customer" type="number" min={1} max={50} value={rv.maxOpenPerCustomer} onChange={(e) => setRq({ ...rv, maxOpenPerCustomer: Number(e.target.value) })} />
+          <Input label="Remind the chef after (% of window)" type="number" min={10} max={95} value={rv.reminderAtPct} onChange={(e) => setRq({ ...rv, reminderAtPct: Number(e.target.value) })} />
+          <Input label="Alert Gutad when hours left" type="number" min={1} max={72} value={rv.escalateHoursBefore} onChange={(e) => setRq({ ...rv, escalateHoursBefore: Number(e.target.value) })} />
         </div>
         <p className="mt-2 text-xs text-ink-500">Requests expire when the chef or customer doesn’t answer in time, and quotes when they aren’t accepted and paid. A quote never outlives the order cutoff for its day. <Link className="underline" href="/admin/chefs/requests">Open requests →</Link></p>
         <Button className="mt-3" disabled={busy || !rq} onClick={saveRequests}>Save request deadlines</Button>
+      </Card>
+      <Card title="Quality and documents">
+        <div className="grid grid-cols-2 gap-2">
+          <Input label="Window (days)" type="number" min={7} max={365} value={qv.windowDays} onChange={(e) => setQp({ ...qv, windowDays: Number(e.target.value) })} />
+          <Input label="Judge rates from (orders)" type="number" min={1} max={500} value={qv.minOrders} onChange={(e) => setQp({ ...qv, minOrders: Number(e.target.value) })} />
+          <Input label="Max incident rate (%)" type="number" min={1} max={100} value={qv.maxIncidentRatePct} onChange={(e) => setQp({ ...qv, maxIncidentRatePct: Number(e.target.value) })} />
+          <Input label="Max declined/unconfirmed (%)" type="number" min={1} max={100} value={qv.maxDeclineRatePct} onChange={(e) => setQp({ ...qv, maxDeclineRatePct: Number(e.target.value) })} />
+          <Select label="Food-safety report on a chef order" value={qv.foodSafetyAction} onChange={(e) => setQp({ ...qv, foodSafetyAction: e.target.value as ChefQualityPolicy['foodSafetyAction'] })}><option value="SUSPEND_DISH">Suspend the dish</option><option value="PAUSE_CHEF">Pause the chef</option><option value="ALERT">Alert only</option></Select>
+          <Select label="Required document expires" value={qv.expiredDocumentAction} onChange={(e) => setQp({ ...qv, expiredDocumentAction: e.target.value as ChefQualityPolicy['expiredDocumentAction'] })}><option value="PAUSE_CHEF">Pause until renewed</option><option value="ALERT">Alert only</option></Select>
+          <Input label="Reminder days before expiry" value={qv.documentReminderDays.join(', ')} onChange={(e) => setQp({ ...qv, documentReminderDays: e.target.value.split(',').map((x) => Number(x.trim())).filter((x) => x > 0) })} />
+        </div>
+        <p className="mt-2 text-xs text-ink-500">Over a limit, the chef is flagged (quality record + operations alert, at most weekly); suspensions over rates stay a staff decision. Food-safety reports act immediately.</p>
+        <Button className="mt-3" disabled={busy || !qp} onClick={saveQuality}>Save quality rules</Button>
       </Card>
     </div>
   );

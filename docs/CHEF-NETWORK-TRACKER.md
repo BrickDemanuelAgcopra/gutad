@@ -77,10 +77,20 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Web: dish page “Request something special” and the customizer’s “Ask Chef X to add …”; request form; `/account/requests/[id]` and the account “Special requests” tab; chef `/chef/requests` inbox and detail with the four actions; dashboard banner; `/admin/chefs/requests`; checkout locks quoted lines and points to the quoted day.
 - [x] Mobile: `requests/new`, `requests/index`, `requests/[id]` (customer and staff), `chef/requests`, `chef/request/[id]`, `ops/chef-requests`, dish screen entry points, checkout support.
 - [x] Smoke `scripts/smoke-chef-f.mjs` (37 checks). Full suite 773/773.
-## Phase 7 — Admin operations & analytics [ ] (next)
-## Phase 8 — Hardening & docs [ ]
+## Phase 7 — Admin operations & analytics [x]
+- [x] Migration 0024: `chef_quality_events` (automatic and staff actions, one automatic action per incident), `chef_profiles.status_cause` (DOCUMENTS, QUALITY, ADMIN), `chef_requests.reminded_at` / `escalated_at`.
+- [x] Kitchens and documents: hourly job expires chef documents, reminds chefs 30 and 7 days before expiry, pauses a chef whose required document expired (cause DOCUMENTS), and reinstates them once the renewal is approved (the chef then reopens availability). Renewals use the existing upload; staff approve or reject them from Admin → Chef Network → Kitchens & documents.
+- [x] Quality: per-chef metrics over a window (orders, declined and unconfirmed, cancellations, incidents excluding reversed responsibility, food safety, ratings, request response). A food-safety report on a chef order suspends the dish (or pauses the chef when the dish is unknown), once per report. Chefs over the incident or decline limits are flagged at most weekly (record + ops alert). Staff actions: warning, probation, internal note, dish suspend/reinstate, chef pause/suspend/reinstate, recorded and sent to the chef (notes stay internal). Setting `chefs.quality`.
+- [x] Earnings: `GET chef/earnings` and `GET admin/chefs/:id/earnings` (payable, held until completion, per-order food/tax/commission/net, last 30 days, adjustments). Admin adjustments post through `finance/adjustments`; statements and disputes stay in merchant finance.
+- [x] Special-request escalation (setting `chefs.requests`): reminder to the chef at 50% of the window, ops alert 4 hours before the deadline (high severity for allergies), resolved when the chef answers, the request closes or Gutad extends it. Escalated filter and count in Admin → Special requests.
+- [x] Analytics `GET admin/chef-network/analytics?days=`: activation funnel, orders and gross bookings, Gutad revenue and take rate, declined/unconfirmed/cancelled rates, confirmation time, lead days, requests, repeat customers, daily orders, popular options, top dishes and chefs.
+- [x] Web: admin tabs Kitchens & documents and Quality, chef quality & earnings modal with actions and adjustments, `/admin/chefs/analytics`, quality and escalation settings in Fees & policy; chef `/chef/earnings` and `/chef/compliance` (renewal upload, metrics vs limits, record).
+- [x] Mobile: `chef/compliance`, `chef/earnings`, `ops/chef-kitchens`, `ops/chef-quality` (+ detail with actions and adjustments), `ops/chef-analytics`; dashboard paused notice.
+- [x] Smoke `scripts/smoke-chef-g.mjs` (28 checks). Full suite 801/801.
+## Phase 8 — Hardening & docs [ ] (next)
 
 ## Log
+- 2026-11-17 Phase 7 built and verified locally (801/801 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 6 built and verified locally (773/773 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 5 built and verified locally (736/736 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 4 built and verified locally (709/709 smoke, web build, typecheck of shared, API, web and mobile).

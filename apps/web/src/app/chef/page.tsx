@@ -48,7 +48,7 @@ function Dashboard() {
         <Badge tone={p.status !== 'ACTIVE' ? 'bad' : p.acceptingOrders ? 'good' : 'warn'}>{p.status !== 'ACTIVE' ? p.status.toLowerCase() : p.acceptingOrders ? 'Accepting orders' : 'Not accepting orders'}</Badge>
       </div>
       {sp.get('done') && <Alert tone="good">Thanks — your payout details were submitted to our payment provider.</Alert>}
-      {p.status !== 'ACTIVE' && <Alert>Your chef account is {p.status.toLowerCase()}{p.statusReason ? `: ${p.statusReason}` : ''}. Contact Gutad support.</Alert>}
+      {p.status !== 'ACTIVE' && <Alert>Your chef account is {p.status.toLowerCase()}{p.statusReason ? `: ${p.statusReason}` : ''}. {(p as { statusCause?: string | null }).statusCause === 'DOCUMENTS' ? <Link className="underline" href="/chef/compliance">Upload your renewal</Link> : 'Contact Gutad support.'}</Alert>}
       {actErr && <Alert>{actErr}</Alert>}
       {!!reqs?.counts.needsReply && <Link href='/chef/requests' className='block rounded-2xl border border-brand-200 bg-brand-50 p-4 hover:border-brand-400'><span className='font-semibold'>{reqs.counts.needsReply} special request{reqs.counts.needsReply === 1 ? "" : "s"} need{reqs.counts.needsReply === 1 ? "s" : ""} your reply</span><span className='block text-sm text-ink-600'>Quote, suggest an alternative, ask or decline before the deadline. →</span></Link>}
       <div className="grid gap-4 lg:grid-cols-2">

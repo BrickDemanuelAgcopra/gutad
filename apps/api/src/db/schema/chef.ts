@@ -115,6 +115,8 @@ export const chefProfiles = pgTable(
     /** ACTIVE | PAUSED | SUSPENDED */
     status: text('status').notNull().default('ACTIVE'),
     statusReason: text('status_reason'),
+    /** why the chef isn't active: DOCUMENTS (auto, lifted when renewed documents are approved) | QUALITY | ADMIN */
+    statusCause: text('status_cause'),
     /** chef switch: dishes appear only while true (and status ACTIVE) */
     acceptingOrders: boolean('accepting_orders').notNull().default(false),
     verifiedCredentials: text('verified_credentials').array().notNull().default([]),
@@ -331,6 +333,9 @@ export const chefRequests = pgTable(
     /** PENDING | NEEDS_INFO | QUOTED | ACCEPTED | ORDERED | DECLINED | WITHDRAWN | EXPIRED | CLOSED */
     status: text('status').notNull().default('PENDING'),
     respondBy: ts('respond_by'),
+    /** escalation rules: the chef was reminded, then Gutad was alerted before the deadline */
+    remindedAt: ts('reminded_at'),
+    escalatedAt: ts('escalated_at'),
     currentQuoteId: uuid('current_quote_id'),
     orderId: uuid('order_id').references(() => orders.id),
     /** first chef response (quote, question or decline), for response-time metrics */
@@ -402,4 +407,30 @@ export const chefRequestMessages = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('chef_request_messages_req_idx').on(t.requestId, t.createdAt)],
+);
+
+/**
+ * A chef's quality record (Phase 7): automatic actions (food-safety report → dish suspended, expired document →
+ * paused, threshold breach) and staff actions (warning, probation, suspension, reinstatement, notes).
+ */
+export const chefQualityEvents = pgTable(
+  'chef_quality_events',
+  {
+    id: id(),
+    chefProfileId: uuid('chef_profile_id')
+      .notNull()
+      .references(() => chefProfiles.id, { onDelete: 'cascade' }),
+    /** WARNING | PROBATION | NOTE | THRESHOLD_BREACH | DISH_SUSPENDED | DISH_REINSTATED | CHEF_PAUSED | CHEF_SUSPENDED | CHEF_REINSTATED | DOCUMENT_EXPIRED */
+    kind: text('kind').notNull(),
+    /** AUTO | STAFF */
+    source: text('source').notNull().default('STAFF'),
+    incidentId: uuid('incident_id'),
+    chefDishId: uuid('chef_dish_id'),
+    /** the metrics at the time (threshold breaches) */
+    data: jsonb('data'),
+    note: text('note').notNull(),
+    createdById: uuid('created_by_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('chef_quality_events_chef_idx').on(t.chefProfileId, t.createdAt), uniqueIndex('chef_quality_events_incident_uq').on(t.incidentId, t.kind)],
 );

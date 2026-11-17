@@ -14,7 +14,8 @@ const NAV: [string, string][] = [
   ['/chef/profile', 'Public profile'],
   ['/merchant/orders', 'Orders'],
   ['/merchant/kitchen', 'Kitchen tickets'],
-  ['/merchant/finance', 'Earnings'],
+  ['/chef/earnings', 'Earnings'],
+  ['/chef/compliance', 'Documents & quality'],
 ];
 
 export default function ChefLayout({ children }: { children: React.ReactNode }) {

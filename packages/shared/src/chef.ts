@@ -522,8 +522,54 @@ export interface ChefRequestPolicy {
   customerReplyHours: number;
   /** open requests one customer may have at a time */
   maxOpenPerCustomer: number;
+  /** escalation: remind the chef once this share (%) of their reply window has passed */
+  reminderAtPct: number;
+  /** escalation: alert Gutad operations when this many hours are left and the chef still hasn't answered */
+  escalateHoursBefore: number;
 }
-export const DEFAULT_CHEF_REQUEST_POLICY: ChefRequestPolicy = { chefResponseHours: 24, quoteValidHours: 48, customerReplyHours: 72, maxOpenPerCustomer: 5 };
+export const DEFAULT_CHEF_REQUEST_POLICY: ChefRequestPolicy = { chefResponseHours: 24, quoteValidHours: 48, customerReplyHours: 72, maxOpenPerCustomer: 5, reminderAtPct: 50, escalateHoursBefore: 4 };
 
 /** Short human code for a request ("R-7F3K2A") derived from its id. */
 export function chefRequestCode(id: string) { return `R-${id.replace(/-/g, '').slice(0, 6).toUpperCase()}`; }
+
+// ───── Phase 7: operations, quality and analytics ─────
+
+/** Quality and compliance rules (setting `chefs.quality`). */
+export interface ChefQualityPolicy {
+  /** rolling window for quality metrics */
+  windowDays: number;
+  /** rates are judged only once a chef has this many orders in the window */
+  minOrders: number;
+  /** incidents (customer problems the chef owns) per 100 orders */
+  maxIncidentRatePct: number;
+  /** declined + unconfirmed orders per 100 orders */
+  maxDeclineRatePct: number;
+  /** a food-safety report on a chef order: suspend the dish (or pause the chef when the dish is unknown), pause the chef, or only alert */
+  foodSafetyAction: 'SUSPEND_DISH' | 'PAUSE_CHEF' | 'ALERT';
+  /** a required document expires: pause the chef until a renewal is approved, or only alert */
+  expiredDocumentAction: 'PAUSE_CHEF' | 'ALERT';
+  /** reminder days before a document expires */
+  documentReminderDays: number[];
+}
+export const DEFAULT_CHEF_QUALITY_POLICY: ChefQualityPolicy = { windowDays: 30, minOrders: 10, maxIncidentRatePct: 10, maxDeclineRatePct: 20, foodSafetyAction: 'SUSPEND_DISH', expiredDocumentAction: 'PAUSE_CHEF', documentReminderDays: [30, 7] };
+
+export const CHEF_QUALITY_EVENT_LABELS: Record<string, string> = {
+  WARNING: 'Warning',
+  PROBATION: 'Probation',
+  NOTE: 'Note',
+  THRESHOLD_BREACH: 'Quality threshold crossed',
+  DISH_SUSPENDED: 'Dish suspended',
+  DISH_REINSTATED: 'Dish reinstated',
+  CHEF_PAUSED: 'Chef paused',
+  CHEF_SUSPENDED: 'Chef suspended',
+  CHEF_REINSTATED: 'Chef reinstated',
+  DOCUMENT_EXPIRED: 'Document expired',
+};
+
+/** Staff quality actions (the API applies the suspension or reinstatement and records it). */
+export const CHEF_QUALITY_ACTIONS = ['WARNING', 'PROBATION', 'NOTE', 'DISH_SUSPENDED', 'DISH_REINSTATED', 'CHEF_PAUSED', 'CHEF_SUSPENDED', 'CHEF_REINSTATED'] as const;
+export type ChefQualityAction = (typeof CHEF_QUALITY_ACTIONS)[number];
+
+/** A required document's state for a chef kitchen. */
+export type ChefDocState = 'VALID' | 'EXPIRING' | 'EXPIRED' | 'MISSING' | 'IN_REVIEW' | 'REJECTED';
+export const CHEF_DOC_STATE_LABELS: Record<ChefDocState, string> = { VALID: 'Valid', EXPIRING: 'Expiring soon', EXPIRED: 'Expired', MISSING: 'Missing', IN_REVIEW: 'Renewal in review', REJECTED: 'Rejected' };

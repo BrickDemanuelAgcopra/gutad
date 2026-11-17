@@ -169,6 +169,13 @@
       "when": 1794917796787,
       "tag": "0023_chef_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794919425307,
+      "tag": "0024_chef_operations",
+      "breakpoints": true
     }
   ]
 }

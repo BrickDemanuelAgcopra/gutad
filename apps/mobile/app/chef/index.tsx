@@ -16,10 +16,12 @@ interface ChefMe {
 export default function ChefHome() {
   const { data, setData, loading, error } = useApi<ChefMe>('/chef/me');
   const { data: inbox } = useApi<{ counts: { needsReply: number; waiting: number } }>(data ? '/chef/requests?status=needsReply' : null, { deps: [!!data], poll: 60000 });
+  const { data: comp } = useApi<{ documents: { state: string }[] }>(data ? '/chef/compliance' : null, { deps: [!!data] });
   const { run, busy, error: actErr } = useAction();
   if (loading) return <Loading />;
   if (error || !data) return <View style={[s.screen, s.pad]}><Card title="Not a Gutad chef yet"><Muted>Finish your application to unlock the chef dashboard.</Muted><Link href="/chefs/apply" asChild><Button title="Open application" onPress={() => undefined} /></Link></Card></View>;
   const p = data.profile;
+  const docIssues = comp ? comp.documents.filter((d) => d.state !== 'VALID' && d.state !== 'IN_REVIEW').length : 0;
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       <Card>
@@ -30,6 +32,13 @@ export default function ChefHome() {
         <View style={{ marginTop: 8 }}><Badge text={p.status !== 'ACTIVE' ? p.status : p.acceptingOrders ? 'Accepting orders' : 'Not accepting orders'} tone={p.status !== 'ACTIVE' ? 'bad' : p.acceptingOrders ? 'good' : 'warn'} /></View>
         {p.statusReason && p.status !== 'ACTIVE' && <Text style={{ color: C.bad, marginTop: 6 }}>{p.statusReason}</Text>}
       </Card>
+      {p.status === 'PAUSED' && (
+        <View style={{ backgroundColor: '#fee2e2', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+          <Text style={{ color: '#991b1b', fontWeight: '700' }}>Your listings are paused</Text>
+          <Text style={{ color: '#991b1b', marginTop: 4 }}>{p.statusReason || 'Customers can’t order from you right now.'}</Text>
+          <Link href="/chef/compliance" asChild><Button variant="danger" title="See what to fix" onPress={() => undefined} /></Link>
+        </View>
+      )}
       <ErrorText msg={actErr} />
       <Card title="Getting started">{data.checklist.map((c) => <Text key={c.key} style={{ marginBottom: 4, color: c.done ? C.good : C.ink7 }}>{c.done ? '✓' : '○'} {c.label}</Text>)}</Card>
       <Card title="Availability">
@@ -43,6 +52,14 @@ export default function ChefHome() {
       <Card title="Special requests">
         <Muted>{inbox ? (inbox.counts.needsReply ? `${inbox.counts.needsReply} waiting for your reply` : 'Nothing waiting for your reply') : 'Customers asking for changes your options don’t cover'}{inbox?.counts.waiting ? ` · ${inbox.counts.waiting} waiting on customers` : ''}</Muted>
         <Link href="/chef/requests" asChild><Button title={inbox?.counts.needsReply ? `Reply to requests (${inbox.counts.needsReply})` : 'Open requests'} variant={inbox?.counts.needsReply ? 'primary' : 'secondary'} onPress={() => undefined} /></Link>
+      </Card>
+      <Card title="Documents & quality">
+        <Muted>{comp ? (docIssues ? `${docIssues} ${docIssues === 1 ? 'document needs' : 'documents need'} attention` : 'Documents up to date') : 'Permits, certificates and your quality record'}</Muted>
+        <Link href="/chef/compliance" asChild><Button title="Documents & quality" variant={docIssues ? 'primary' : 'secondary'} onPress={() => undefined} /></Link>
+      </Card>
+      <Card title="Earnings">
+        <Muted>Payable balance, money held until orders complete, and adjustments.</Muted>
+        <Link href="/chef/earnings" asChild><Button variant="secondary" title="Open earnings" onPress={() => undefined} /></Link>
       </Card>
       <Card title="Dishes">
         <Muted>Build dishes, set fixed or customizable, reorder your menu.</Muted>

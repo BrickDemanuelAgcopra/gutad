@@ -472,8 +472,35 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
       });
 
+    // ── Chef Network operations ─────────────────────────────────────────────
+    case 'chef.document.expiring':
+      return sub(`Your ${p.label} expires in ${p.days} days`, `Your ${p.label} expires ${when(p.expiresAt)}. Upload the renewed document so your dishes stay on Gutad.`, {
+        eyebrow: 'Chef Network', tone: 'warning', heading: `Renew your ${p.label}`,
+        paragraphs: [`Your ${p.label} expires ${when(p.expiresAt)}.`, 'Upload the renewed document now. If a required document expires, your listings pause until we approve the renewal.'],
+        cta: { label: 'Upload a renewal', url: `${web}/chef/compliance` },
+      });
+    case 'chef.document.expired':
+      return sub(`Your ${p.labels} expired`, p.paused ? `Your ${p.labels} expired, so your Gutad listings are paused. Upload a renewal to reopen.` : `Your ${p.labels} expired. Upload a renewal.`, {
+        eyebrow: 'Chef Network', tone: 'danger', heading: p.paused ? 'Your listings are paused' : 'A document expired',
+        paragraphs: [`Your ${p.labels} expired.`, p.paused ? 'Your dishes are hidden and no new orders come in. Orders already placed are not affected. Upload the renewed document; we reopen your account as soon as it is approved.' : 'Upload the renewed document as soon as you can.'],
+        cta: { label: 'Upload a renewal', url: `${web}/chef/compliance` },
+      });
+    case 'chef.document.renewed':
+      return sub('Your documents are approved', 'Your renewed documents are approved and your chef account is active again. Turn your availability back on to take orders.', {
+        eyebrow: 'Chef Network', tone: 'success', heading: 'You’re cleared to cook again',
+        paragraphs: ['Your renewed documents are approved and your account is active again.', 'Turn your availability back on from your dashboard to start taking orders.'],
+        cta: { label: 'Open your dashboard', url: `${web}/chef` },
+      });
+    case 'chef.quality.action':
+      return sub(`Gutad quality update: ${p.label}`, String(p.note || ''), {
+        eyebrow: 'Chef Network', tone: ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'success' : 'warning', heading: String(p.label || 'Quality update'),
+        paragraphs: [String(p.note || ''), ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'Thanks for working with us on this.' : 'Reply to this email or contact Gutad chef support if you have questions or want to share your side.'],
+        cta: { label: 'View your quality record', url: `${web}/chef/compliance` },
+      });
+
     // ── Chef Network special requests ───────────────────────────────────────
     case 'chef.request.new':
+    case 'chef.request.reminder':
     case 'chef.request.quoted':
     case 'chef.request.question':
     case 'chef.request.message':
@@ -496,6 +523,8 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
       switch (template) {
         case 'chef.request.new':
           return sub(`New special request ${code}`, `A customer asked for a change to ${dish} for ${day}. Reply by ${when(p.respondBy)}.`, { eyebrow: 'Chef Network', heading: 'New special request', paragraphs: [`A customer asked for a change to ${dish} for ${day}.`, `Quote it, suggest an alternative, ask a question or decline by ${when(p.respondBy)}. Unanswered requests expire.`], details, cta });
+        case 'chef.request.reminder':
+          return sub(`Reminder: special request ${code} needs your reply`, `A customer is waiting on ${code} for ${dish}. Reply by ${when(p.respondBy)} or it expires.`, { eyebrow: 'Chef Network', tone: 'warning', heading: 'A customer is waiting on you', paragraphs: [`Special request ${code} for ${dish} (${day}) still needs an answer.`, `Quote it, suggest an alternative, ask a question or decline by ${when(p.respondBy)}. Unanswered requests expire and count against your response time.`], details, cta });
         case 'chef.request.quoted':
           return sub(`${chef} quoted your request: ${total}`, `${chef} quoted ${total} for ${day}${p.kind === 'ALTERNATIVE' ? ' (a suggested alternative)' : ''}. Accept by ${when(p.quoteExpiresAt)}.`, { eyebrow: 'Chef Network', tone: 'success', heading: p.kind === 'ALTERNATIVE' ? `${chef} suggested an alternative` : `${chef} sent you a quote`, paragraphs: [`Total ${total} for ${day}. The price is confirmed by the chef and sold by Gutad.`, `Accept and pay by ${when(p.quoteExpiresAt)}, or ask for a revision.`], details: [...details, ['Quote', `v${p.version}`], ['Total', total]], cta: { label: 'Review the quote', url } });
         case 'chef.request.question':
@@ -529,6 +558,11 @@ export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'chef.application.approved': { displayName: 'Chef Carlos' },
   'chef.application.rejected': { reason: 'The kitchen permit does not cover meals prepared for sale.' },
   'chef.application.waitlisted': { reason: 'not open in WY yet' },
+  'chef.document.expiring': { label: 'Food handler card', days: 30, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() },
+  'chef.document.expired': { labels: 'Food handler card', paused: true },
+  'chef.document.renewed': {},
+  'chef.quality.action': { kind: 'DISH_SUSPENDED', label: 'Dish suspended', note: 'Food-safety report: Spaghetti suspended pending review' },
+  'chef.request.reminder': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', respondBy: new Date(Date.now() + 6 * 3_600_000).toISOString(), audience: 'chef' },
   'chef.request.new': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', respondBy: new Date(Date.now() + 86_400_000).toISOString(), audience: 'chef' },
   'chef.request.quoted': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', totalCents: 3800, version: 2, kind: 'QUOTE', quoteExpiresAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), serviceDate: '2026-11-28', audience: 'customer' },
   'chef.request.question': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', body: 'Is the shrimp for an allergy-free table, or just a preference?', respondBy: new Date(Date.now() + 3 * 86_400_000).toISOString(), audience: 'customer' },

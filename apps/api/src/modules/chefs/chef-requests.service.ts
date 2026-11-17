@@ -15,7 +15,7 @@ import {
   type ChefRequestSummary,
 } from '@gutad/shared';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { chefDishes, chefProfiles, chefRequestMessages, chefRequestQuotes, chefRequests, locations, menuItems, orders, orgMemberships, users } from '../../db/schema';
+import { chefDishes, chefProfiles, chefRequestMessages, chefRequestQuotes, chefRequests, locations, menuItems, opsAlerts, orders, orgMemberships, users } from '../../db/schema';
 import { can, isPlatformStaff, JwtPayload } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
 import { NotifyService } from '../../core/notify.service';
@@ -174,7 +174,7 @@ export class ChefRequestsService {
     const pol = await this.policy();
     await this.db.transaction(async (tx) => {
       await tx.update(chefRequestQuotes).set({ status: 'REVISION_REQUESTED' }).where(eq(chefRequestQuotes.id, r.currentQuoteId!));
-      await tx.update(chefRequests).set({ status: 'PENDING', respondBy: hours(pol.chefResponseHours), lastActivityAt: new Date() }).where(eq(chefRequests.id, r.id));
+      await tx.update(chefRequests).set({ status: 'PENDING', respondBy: hours(pol.chefResponseHours), remindedAt: null, escalatedAt: null, lastActivityAt: new Date() }).where(eq(chefRequests.id, r.id));
       await tx.insert(chefRequestMessages).values({ requestId: r.id, authorId: user.sub, authorRole: 'CUSTOMER', body: `Revision requested: ${note.trim()}` });
     });
     await this.notifyParty('CHEF', r.id, 'chef.request.revision', { body: note });
@@ -190,6 +190,7 @@ export class ChefRequestsService {
       await tx.update(chefRequests).set({ status: 'WITHDRAWN', respondBy: null, closedReason: reason?.trim() || 'Withdrawn by the customer', lastActivityAt: new Date() }).where(eq(chefRequests.id, r.id));
       await this.system(tx, r.id, `Withdrawn by the customer${reason ? `: ${reason.trim()}` : ''}`);
     });
+    await this.resolveAlert(r.id, 'Withdrawn by the customer');
     await this.notifyParty('CHEF', r.id, 'chef.request.withdrawn', { reason });
     return this.detail(user, r.id);
   }
@@ -203,7 +204,7 @@ export class ChefRequestsService {
     await this.db.transaction(async (tx) => {
       await tx.insert(chefRequestMessages).values({ requestId: r.id, authorId: user.sub, authorRole: role, body: body.trim() });
       const back = role === 'CUSTOMER' && r.status === 'NEEDS_INFO';
-      await tx.update(chefRequests).set({ lastActivityAt: new Date(), ...(back ? { status: 'PENDING', respondBy: hours(pol.chefResponseHours) } : {}) }).where(eq(chefRequests.id, r.id));
+      await tx.update(chefRequests).set({ lastActivityAt: new Date(), ...(back ? { status: 'PENDING', respondBy: hours(pol.chefResponseHours), remindedAt: null, escalatedAt: null } : {}) }).where(eq(chefRequests.id, r.id));
     });
     if (role === 'CUSTOMER') await this.notifyParty('CHEF', r.id, 'chef.request.message', { body, from: 'the customer' });
     else if (role === 'CHEF') await this.notifyParty('CUSTOMER', r.id, 'chef.request.message', { body });
@@ -293,6 +294,7 @@ export class ChefRequestsService {
       return q.id;
     });
     await this.audit.log({ actorId: user.sub, action: 'chef.request.quote', entityType: 'chef_request', entityId: r.id, after: { quoteId: qid, kind: input.kind, unitPriceCents: input.unitPriceCents, quantity, serviceDate: input.serviceDate } });
+    await this.resolveAlert(r.id, 'The chef sent a quote');
     await this.notifyParty('CUSTOMER', r.id, 'chef.request.quoted');
     return this.detail(user, r.id);
   }
@@ -310,6 +312,7 @@ export class ChefRequestsService {
       await tx.insert(chefRequestMessages).values({ requestId: r.id, authorId: user.sub, authorRole: 'CHEF', body: body.trim() });
       await tx.update(chefRequests).set({ status: 'NEEDS_INFO', respondBy: hours(pol.customerReplyHours), lastActivityAt: now, firstResponseAt: r.firstResponseAt ?? now }).where(eq(chefRequests.id, r.id));
     });
+    await this.resolveAlert(r.id, 'The chef asked a question');
     await this.notifyParty('CUSTOMER', r.id, 'chef.request.question', { body });
     return this.detail(user, r.id);
   }
@@ -326,18 +329,20 @@ export class ChefRequestsService {
       await tx.update(chefRequests).set({ status: 'DECLINED', respondBy: null, closedReason: reason.trim(), lastActivityAt: now, firstResponseAt: r.firstResponseAt ?? now }).where(eq(chefRequests.id, r.id));
       await this.outbox.publish('chef_request.declined', r.id, { requestId: r.id, reason }, tx);
     });
+    await this.resolveAlert(r.id, 'The chef declined');
     await this.notifyParty('CUSTOMER', r.id, 'chef.request.declined', { reason });
     return this.detail(user, r.id);
   }
 
   // ───── Gutad staff supervision ─────
 
-  async adminList(user: JwtPayload, f: { status?: string; chefId?: string; overdue?: boolean }) {
+  async adminList(user: JwtPayload, f: { status?: string; chefId?: string; overdue?: boolean; escalated?: boolean }) {
     if (!isPlatformStaff(user) || !can(user, 'chefs.read')) throw new ForbiddenException();
     const conds = [];
     if (f.status === 'OPEN') conds.push(inArray(chefRequests.status, OPEN));
     else if (f.status) conds.push(eq(chefRequests.status, f.status));
     if (f.chefId) conds.push(eq(chefRequests.chefProfileId, f.chefId));
+    if (f.escalated) conds.push(sql`${chefRequests.escalatedAt} is not null`, inArray(chefRequests.status, OPEN));
     if (f.overdue) conds.push(inArray(chefRequests.status, ['PENDING', 'NEEDS_INFO']), sql`${chefRequests.respondBy} < now() + interval '4 hours'`);
     const rows = await this.db.select().from(chefRequests).where(conds.length ? and(...conds) : undefined).orderBy(desc(chefRequests.lastActivityAt)).limit(200);
     const since = new Date(Date.now() - 30 * 86_400_000);
@@ -346,6 +351,7 @@ export class ChefRequestsService {
         open: sql<number>`count(*) filter (where ${chefRequests.status} in ('PENDING','NEEDS_INFO','QUOTED','ACCEPTED'))::int`,
         waitingOnChef: sql<number>`count(*) filter (where ${chefRequests.status} = 'PENDING')::int`,
         dueSoon: sql<number>`count(*) filter (where ${chefRequests.status} = 'PENDING' and ${chefRequests.respondBy} < now() + interval '4 hours')::int`,
+        escalated: sql<number>`count(*) filter (where ${chefRequests.status} in ('PENDING','NEEDS_INFO','QUOTED','ACCEPTED') and ${chefRequests.escalatedAt} is not null)::int`,
         total30: sql<number>`count(*) filter (where ${chefRequests.createdAt} >= ${since.toISOString()})::int`,
         avgResponseMinutes: sql<number | null>`round(avg(extract(epoch from (${chefRequests.firstResponseAt} - ${chefRequests.createdAt})) / 60) filter (where ${chefRequests.firstResponseAt} is not null and ${chefRequests.createdAt} >= ${since.toISOString()}))::int`,
         quoted30: sql<number>`count(*) filter (where ${chefRequests.currentQuoteId} is not null and ${chefRequests.createdAt} >= ${since.toISOString()})::int`,
@@ -362,13 +368,14 @@ export class ChefRequestsService {
     const r = await this.load(id);
     if (!OPEN.includes(r.status)) throw new ConflictException({ message: `This request is ${r.status.toLowerCase()}`, code: 'REQUEST_STATE' });
     await this.db.transaction(async (tx) => {
-      if (['PENDING', 'NEEDS_INFO'].includes(r.status)) await tx.update(chefRequests).set({ respondBy: hours(addHours, r.respondBy && r.respondBy > new Date() ? r.respondBy : new Date()) }).where(eq(chefRequests.id, r.id));
+      if (['PENDING', 'NEEDS_INFO'].includes(r.status)) await tx.update(chefRequests).set({ respondBy: hours(addHours, r.respondBy && r.respondBy > new Date() ? r.respondBy : new Date()), escalatedAt: null }).where(eq(chefRequests.id, r.id));
       else if (r.currentQuoteId) {
         const q = await this.quoteRow(r.currentQuoteId, tx);
         await tx.update(chefRequestQuotes).set({ expiresAt: hours(addHours, q.expiresAt > new Date() ? q.expiresAt : new Date()) }).where(eq(chefRequestQuotes.id, q.id));
       }
       await this.system(tx, r.id, `Gutad extended the deadline by ${addHours} hours`);
     });
+    await this.resolveAlert(r.id, `Deadline extended by ${addHours} hours`);
     await this.audit.log({ actorId: user.sub, action: 'chef.request.extend', entityType: 'chef_request', entityId: r.id, after: { addHours } });
     return this.detail(user, r.id);
   }
@@ -382,6 +389,7 @@ export class ChefRequestsService {
       await tx.update(chefRequests).set({ status: 'CLOSED', respondBy: null, closedReason: reason.trim(), lastActivityAt: new Date() }).where(eq(chefRequests.id, r.id));
       await tx.insert(chefRequestMessages).values({ requestId: r.id, authorId: user.sub, authorRole: 'STAFF', body: `Closed by Gutad: ${reason.trim()}` });
     });
+    await this.resolveAlert(r.id, 'Closed by Gutad');
     await this.audit.log({ actorId: user.sub, action: 'chef.request.close', entityType: 'chef_request', entityId: r.id, after: { reason } });
     await this.notifyParty('CUSTOMER', r.id, 'chef.request.closed', { reason });
     await this.notifyParty('CHEF', r.id, 'chef.request.closed', { reason });
@@ -392,6 +400,7 @@ export class ChefRequestsService {
 
   /** Expire requests the chef didn't answer, questions the customer didn't answer, and quotes not accepted or paid in time. */
   async expireDue(now = new Date()) {
+    const escalation = await this.escalate(now);
     const late = await this.db.select().from(chefRequests).where(and(inArray(chefRequests.status, ['PENDING', 'NEEDS_INFO']), lt(chefRequests.respondBy, now)));
     const quoted = await this.db
       .select({ r: chefRequests, q: chefRequestQuotes })
@@ -426,7 +435,38 @@ export class ChefRequestsService {
       await this.notifyParty('CUSTOMER', e.id, 'chef.request.expired', { reason: e.why }).catch(() => undefined);
       await this.notifyParty('CHEF', e.id, 'chef.request.expired', { reason: e.why }).catch(() => undefined);
     }
-    return { expired: expired.length };
+    return { expired: expired.length, ...escalation };
+  }
+
+  /**
+   * Escalation rules (setting `chefs.requests`): remind the chef once `reminderAtPct` of the reply window has passed,
+   * then alert Gutad operations when `escalateHoursBefore` hours are left (allergy requests at high severity).
+   */
+  private async escalate(now: Date) {
+    const pol = await this.policy();
+    const waiting = await this.db.select({ r: chefRequests, chef: chefProfiles.displayName, org: chefProfiles.organizationId }).from(chefRequests).innerJoin(chefProfiles, eq(chefProfiles.id, chefRequests.chefProfileId)).where(and(eq(chefRequests.status, 'PENDING'), sql`${chefRequests.respondBy} > ${now.toISOString()}`));
+    let reminded = 0, escalated = 0;
+    for (const { r, chef, org } of waiting) {
+      const due = r.respondBy!.getTime();
+      const windowMs = pol.chefResponseHours * 3_600_000;
+      const left = due - now.getTime();
+      if (!r.remindedAt && left <= windowMs * (1 - pol.reminderAtPct / 100)) {
+        await this.db.update(chefRequests).set({ remindedAt: now }).where(eq(chefRequests.id, r.id));
+        await this.notifyParty('CHEF', r.id, 'chef.request.reminder').catch(() => undefined);
+        reminded++;
+      }
+      if (!r.escalatedAt && left <= pol.escalateHoursBefore * 3_600_000) {
+        await this.db.update(chefRequests).set({ escalatedAt: now }).where(eq(chefRequests.id, r.id));
+        await this.db.insert(opsAlerts).values({ type: 'CHEF_REQUEST_ESCALATED', severity: r.reason === 'ALLERGY' ? 'HIGH' : 'MEDIUM', title: `${chef} hasn’t answered special request ${chefRequestCode(r.id)}`, detail: `${r.reason === 'ALLERGY' ? 'Allergy request. ' : ''}Due ${r.respondBy!.toISOString()}. Nudge the chef, extend the deadline, or close it.`, subjectType: 'chef_request', subjectId: r.id, organizationId: org, locationId: r.locationId, dedupeKey: `chef-request:${r.id}`, ownerRole: 'OPERATIONS', escalateAt: r.respondBy, history: [{ at: now.toISOString(), by: null, action: 'RAISED', note: 'Chef request escalation rule' }] }).onConflictDoNothing();
+        escalated++;
+      }
+    }
+    return { reminded, escalated };
+  }
+
+  /** The chef answered (or the request closed): the escalation alert is done. */
+  private resolveAlert(requestId: string, resolution: string) {
+    return this.db.update(opsAlerts).set({ status: 'RESOLVED', resolvedAt: new Date(), resolution }).where(and(eq(opsAlerts.dedupeKey, `chef-request:${requestId}`), sql`${opsAlerts.status} <> 'RESOLVED'`));
   }
 
   // ───── reading ─────

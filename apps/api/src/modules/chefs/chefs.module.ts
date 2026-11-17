@@ -9,7 +9,9 @@ import { ChefDishesService } from './chef-dishes.service';
 import { ChefOptionsService } from './chef-options.service';
 import { ChefRequestsController } from './chef-requests.controller';
 import { ChefRequestsService } from './chef-requests.service';
+import { ChefOpsController } from './chef-ops.controller';
+import { ChefOpsService } from './chef-ops.service';
 
 /** Gutad Chef Network: chef applications, profiles, files dishes, options and special requests. */
-@Module({ imports: [PaymentsModule], controllers: [ChefsController, ChefRequestsController], providers: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService, StorageService], exports: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService] })
+@Module({ imports: [PaymentsModule], controllers: [ChefsController, ChefRequestsController, ChefOpsController], providers: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService, ChefOpsService, StorageService], exports: [ChefApplicationsService, ChefFilesService, ChefsService, ChefDishesService, ChefOptionsService, ChefRequestsService, ChefOpsService] })
 export class ChefsModule {}
