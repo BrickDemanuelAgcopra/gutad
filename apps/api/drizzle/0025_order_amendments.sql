@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN "amended_from_order_id" uuid;

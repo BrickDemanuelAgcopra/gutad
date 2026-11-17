@@ -185,7 +185,7 @@ export class OrdersService {
    * Creates the order, its lines, capacity confirmation, credits/points/gift redemption, the delivery job and the
    * SUBMITTED event. Payment is handled by the caller (authorization, or the chef charge for one or more orders).
    */
-  private async placeInTx(tx: Tx, user: JwtPayload | null, input: CheckoutInput, q: typeof quotes.$inferSelect, loc: typeof locations.$inferSelect, groupId: string | null) {
+  private async placeInTx(tx: Tx, user: JwtPayload | null, input: CheckoutInput, q: typeof quotes.$inferSelect, loc: typeof locations.$inferSelect, groupId: string | null, amendedFrom?: { id: string; number: string }) {
     const snap = q.snapshot as { lines: QuoteSnapshotLine[]; commissionCents: number; terms: { contractId: string | null; commissionBps: number }; couponId: string | null; creditsCents: number; loyaltyCents: number; giftCents?: number; deliveryFleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM'; deliveryProviderCostCents: number; platformDeliverySubsidyCents: number; deliveryAddress: Address | null; chef?: { freeCancelUntil: string | null; lateRefundPct: number; acceptHours: number } };
     const userId = user?.sub ?? null;
     const number = orderNumber(q.fulfillmentType === 'DELIVERY' ? 'D' : 'P');
@@ -234,6 +234,7 @@ export class OrdersService {
         campusAccountId: input.campusAccountId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
         checkoutGroupId: groupId,
+        amendedFromOrderId: amendedFrom?.id ?? null,
         prepaid: !!chef,
         acceptBy,
         freeCancelUntil: chef?.freeCancelUntil ? new Date(chef.freeCancelUntil) : null,
@@ -263,7 +264,7 @@ export class OrdersService {
     }
     await this.event(o.id, 'SUBMITTED', userId, 'CUSTOMER', { number, ...(groupId ? { checkoutGroupId: groupId } : {}) }, tx);
     const chefName = chef ? await this.chefCalendar.chefNameFor(loc.id) : null;
-    await this.outbox.publish('order.submitted', o.id, { number, locationId: loc.id, userId, totalCents: o.totalCents, ...(chefName ? { chefName, scheduledFor: o.scheduledFor, acceptBy: o.acceptBy, freeCancelUntil: o.freeCancelUntil } : {}) }, tx);
+    await this.outbox.publish('order.submitted', o.id, { number, locationId: loc.id, userId, totalCents: o.totalCents, ...(chefName ? { chefName, scheduledFor: o.scheduledFor, acceptBy: o.acceptBy, freeCancelUntil: o.freeCancelUntil } : {}), ...(amendedFrom ? { amendedFromNumber: amendedFrom.number } : {}) }, tx);
     return o;
   }
 
@@ -587,6 +588,76 @@ export class OrdersService {
   }
 
   /** Reorder against the current menu: returns a fresh quote (prices may differ; sold-out items are reported). */
+  /** Reorder into the cart: the past order's lines checked against today's menu (see QuoteService.rebuildCart). */
+  async reorderCart(user: JwtPayload, orderId: string) {
+    const [o] = await this.db.select().from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, user.sub))).limit(1);
+    if (!o) throw new NotFoundException();
+    const lines = await this.db.select().from(orderLines).where(eq(orderLines.orderId, orderId));
+    const snapLines = ((o.priceSnapshot as { lines?: QuoteSnapshotLine[] } | null)?.lines || []);
+    return this.quotesSvc.rebuildCart(o.locationId, ['MARKETPLACE', 'DIRECT', 'WIDGET', 'QR'].includes(o.channel) ? (o.channel as 'MARKETPLACE') : 'MARKETPLACE', lines.map((l) => ({ menuItemId: l.menuItemId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents + l.modifiersCents, modifierIds: ((l.modifiers as { id: string; qty?: number }[]) || []).flatMap((m) => Array(m.qty || 1).fill(m.id)), specialInstructions: l.specialInstructions, chefRequestQuoteId: snapLines.find((s) => s.menuItemId === l.menuItemId && s.name === l.name)?.chefRequestQuoteId })));
+  }
+
+  /**
+   * Whether a paid chef order can still be changed: its customer, before the date's order cutoff (the full-refund
+   * window), while the chef hasn't started, and without a special-request line (those are quoted for one order).
+   */
+  async amendment(user: JwtPayload, orderId: string) {
+    const [o] = await this.db.select().from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, user.sub))).limit(1);
+    if (!o) throw new NotFoundException();
+    return this.amendCheck(o);
+  }
+
+  private amendCheck(o: typeof orders.$inferSelect, now = new Date()) {
+    const lines = ((o.priceSnapshot as { lines?: QuoteSnapshotLine[] } | null)?.lines || []);
+    const base = { until: o.freeCancelUntil?.toISOString() ?? null, scheduledFor: o.scheduledFor?.toISOString() ?? null, chargedCents: o.totalCents };
+    if (!o.prepaid) return { ...base, allowed: false, code: 'NOT_AMENDABLE', reason: 'Only Gutad Chef Network orders can be changed after payment. Cancel and order again.' };
+    if (!['SUBMITTED', 'ACCEPTED'].includes(o.status)) return { ...base, allowed: false, code: 'NOT_AMENDABLE', reason: `This order is ${o.status.toLowerCase()}` };
+    if (!o.freeCancelUntil || o.freeCancelUntil <= now) return { ...base, allowed: false, code: 'AMEND_WINDOW_CLOSED', reason: 'Changes close at the order cutoff for the day' };
+    if (lines.some((l) => l.chefRequestQuoteId)) return { ...base, allowed: false, code: 'HAS_SPECIAL_REQUEST', reason: 'Orders with a special request can’t be changed. Cancel for a full refund and ask the chef again.' };
+    return { ...base, allowed: true, code: 'OK', reason: 'You can change items, quantities, day and time until the cutoff. We charge the new total and refund the original in full; the chef confirms the changed order again.' };
+  }
+
+  /**
+   * Change a paid chef order before its cutoff: the new quote (made with `replacesOrderId`) becomes a new order that
+   * is charged, and the original is cancelled and refunded in full, in one transaction. A declined card changes
+   * nothing. The chef confirms the new order like any order (declined or unconfirmed → refunded in full).
+   */
+  async amend(user: JwtPayload, orderId: string, input: CheckoutInput) {
+    if (input.idempotencyKey) {
+      const [existing] = await this.db.select().from(orders).where(eq(orders.idempotencyKey, input.idempotencyKey)).limit(1);
+      if (existing) return this.present(existing.id);
+    }
+    const [o] = await this.db.select().from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, user.sub))).limit(1);
+    if (!o) throw new NotFoundException();
+    const check = this.amendCheck(o);
+    if (!check.allowed) throw new ConflictException({ message: check.reason, code: check.code });
+    const [q] = await this.db.select().from(quotes).where(eq(quotes.id, input.quoteId)).limit(1);
+    if (!q) throw new NotFoundException('Quote not found');
+    if (q.consumedByOrderId) throw new ConflictException({ message: 'This change was already placed', code: 'QUOTE_CONSUMED' });
+    if ((q.snapshot as { replacesOrderId?: string }).replacesOrderId !== o.id || q.userId !== user.sub || q.locationId !== o.locationId) throw new BadRequestException({ message: 'Price the change for this order first', code: 'QUOTE_NOT_FOR_ORDER' });
+    input = await this.precheck(user, input, [q]);
+    const loc = await this.placeAllowed(q.locationId);
+    const newId = await this.db.transaction(async (tx) => {
+      const [cur] = await tx.select().from(orders).where(eq(orders.id, o.id)).for('update');
+      const again = this.amendCheck(cur);
+      if (!again.allowed) throw new ConflictException({ message: again.reason, code: again.code });
+      const alloc = await this.payments.allocationFor(o.id, tx);
+      const charged = alloc ? alloc.a.amountCents - alloc.a.refundedCents : 0;
+      // the original stops counting against the kitchen's capacity before the new order confirms its portions
+      await tx.update(orders).set({ status: 'CANCELED', cancelReason: 'Changed by the customer', canceledAt: new Date() }).where(eq(orders.id, o.id));
+      const n = await this.placeInTx(tx, user, input, q, loc, null, { id: o.id, number: o.number });
+      await this.chargeChef(tx, user, input, [n], q.id, null);
+      // only after the new charge succeeded: refund the original in full and restore its credits and points
+      if (charged > 0) await this.payments.refundPrepaidOrder(o.id, charged, `Order changed: replaced by ${n.number}`, tx);
+      await this.restoreCreditsAndPoints(cur, tx);
+      await this.voidFulfillment(tx, o.id, 'Order changed by the customer');
+      await tx.update(orders).set({ cancelReason: `Changed by the customer: replaced by ${n.number}` }).where(eq(orders.id, o.id));
+      await this.event(o.id, 'AMENDED', user.sub, 'CUSTOMER', { replacedBy: n.id, number: n.number, refundCents: charged }, tx);
+      return n.id;
+    });
+    return this.present(newId);
+  }
+
   async reorder(user: JwtPayload, orderId: string, fulfillmentType?: 'PICKUP' | 'DELIVERY') {
     const [o] = await this.db.select().from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, user.sub))).limit(1);
     if (!o) throw new NotFoundException();
@@ -632,6 +703,8 @@ export class OrdersService {
       payment: alloc ? { status: alloc.a.refundedCents >= alloc.a.amountCents && alloc.a.amountCents > 0 ? 'REFUNDED' : alloc.a.refundedCents ? 'PARTIALLY_REFUNDED' : 'CAPTURED', amountCents: alloc.a.amountCents, capturedCents: alloc.a.amountCents, refundedCents: alloc.a.refundedCents, chargedAt: alloc.p.createdAt, sharedWithOrders: alloc.p.amountCents !== alloc.a.amountCents } : p ? { status: p.status, amountCents: p.amountCents, capturedCents: p.capturedCents, refundedCents: p.refundedCents, clientSecret: p.status === 'REQUIRES_ACTION' ? p.clientSecret : undefined } : null,
       delivery: job ? { id: job.id, status: job.status, etaAt: job.etaAt, trackingUrl: job.trackingUrl, hasProof: !!(job.proofPhotoUrl || job.proofSignature), fleet: job.fleet, arrivedAt: job.arrivedDropoffAt, exception: job.exception ? { kind: (job.exception as { kind: string }).kind, waitUntil: (job.exception as { waitUntil?: string }).waitUntil, resolution: (job.exception as { resolution?: string }).resolution ?? null } : null } : null,
       canCancel: o.prepaid ? ['SUBMITTED', 'ACCEPTED'].includes(o.status) : o.status === 'SUBMITTED',
+      // Gutad Chef Network: a paid order can be changed until its cutoff (see amendCheck)
+      amendable: o.prepaid ? this.amendCheck(o).allowed : false,
       // Gutad Chef Network: sold by Gutad, prepared by the chef; the cancellation terms accepted at checkout
       chefNetwork: o.prepaid ? { chefName: await this.chefCalendar.chefNameFor(o.locationId), freeCancelUntil: o.freeCancelUntil, lateRefundPct: o.lateRefundPct, acceptBy: o.acceptBy, checkoutGroupId: o.checkoutGroupId } : null,
     };

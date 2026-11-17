@@ -7,12 +7,14 @@ import { CaseThread } from '@/components/case-thread';
 import { api, money, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Select, Spinner, statusTone, Textarea } from '@/components/ui';
+import { useCart } from '@/lib/cart';
+import { preferredDate } from '@/components/date-slot-picker';
 
 interface Order {
   id: string; number: string; status: string; fulfillmentType: string; locationName: string; locationSlug: string; locationPhone: string | null; totalCents: number; subtotalCents: number; taxCents: number; tipCents: number; deliveryFeeCents: number; serviceFeeCents: number; discountCents: number; promiseAt: string | null; readyAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; createdAt: string;
   lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null; modifiers: { name: string }[] }[];
   payment: { status: string; capturedCents: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null;
-  prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null;
+  prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null; amendable?: boolean; amendedFromOrderId?: string | null;
   chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null;
   delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
@@ -23,6 +25,26 @@ const courierLabel = (s: string) => COURIER[s] || s.replace(/_/g, ' ').toLowerCa
 
 const catLabel = (k: string) => (SUPPORT_CATEGORIES as Record<string, { label: string }>)[k]?.label || k;
 const NEEDS_ITEM = ['MISSING_ITEM', 'WRONG_ITEM', 'QUALITY', 'DAMAGED', 'FOOD_SAFETY'];
+
+interface RebuiltCart { location: { id: string; slug: string; name: string; chefKitchen: boolean }; channel: 'MARKETPLACE' | 'DIRECT' | 'WIDGET' | 'QR'; lines: { menuItemId: string; name: string; quantity: number; unitPriceCents: number; modifierOptionIds: string[]; modifierNames: string[]; modifiersCents: number; specialInstructions?: string }[]; removed: { name: string; reason: string }[]; warnings: string[]; earliestDate: string | null }
+
+/** Reorder: the past order checked against today's menu, added to the cart (what changed is shown, not hidden). */
+function Reorder({ orderId, onMessage }: { orderId: string; onMessage: (m: React.ReactNode) => void }) {
+  const { add } = useCart();
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button variant="secondary" disabled={busy} onClick={async () => {
+      setBusy(true);
+      try {
+        const r = await api.post<RebuiltCart>(`/orders/${orderId}/reorder`, { mode: 'cart' });
+        for (const l of r.lines) add({ id: r.location.id, slug: r.location.slug, name: r.location.name }, l, r.channel, 'reorder', { park: true });
+        if (r.location.chefKitchen && r.earliestDate) preferredDate.set(r.location.id, r.earliestDate);
+        const notes = [...r.removed.map((x) => `${x.name}: ${x.reason}`), ...r.warnings];
+        onMessage(<>{r.lines.length ? <>Added {r.lines.reduce((a, l) => a + l.quantity, 0)} item(s) to your cart. <Link className="underline" href="/checkout">Go to checkout</Link></> : 'Nothing from this order is available right now.'}{notes.length > 0 && <ul className="mt-1 list-disc pl-5 text-xs">{notes.map((n) => <li key={n}>{n}</li>)}</ul>}</>);
+      } catch (e) { onMessage((e as Error).message); } finally { setBusy(false); }
+    }}>{busy ? 'Adding…' : 'Reorder'}</Button>
+  );
+}
 
 /** Gutad Chef Network cancellation: shows what cancelling refunds right now (full before the cutoff), then confirms. */
 function ChefCancel({ order, email, onDone }: { order: Order; email: string | null; onDone: () => void }) {
@@ -80,7 +102,7 @@ export default function OrderPage() {
   const { data: o, reload } = useApi<Order>(`/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`, { poll: 5000 });
   const { data: track } = useApi<{ status: string; etaAt: string | null; courierLocation: { lat: number; lng: number } | null; events: { type: string; at: string }[] }>(o?.delivery ? `/public/delivery/${o.delivery.id}/track` : null, { poll: 7000, deps: [o?.delivery?.id] });
   const [review, setReview] = useState({ rating: 5, body: '' });
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<React.ReactNode>(null);
   const [reporting, setReporting] = useState(false);
   const [thread, setThread] = useState<string | null>(null);
   const { data: allTickets, reload: reloadTickets } = useApi<{ id: string; orderId: string | null; category: string; description: string; status: string; remedy: string | null; remedyCents: number }[]>(user ? '/incidents' : null);
@@ -157,7 +179,8 @@ export default function OrderPage() {
       <div className="flex flex-wrap gap-2">
         {o.canCancel && o.prepaid && user && <ChefCancel order={o} email={email} onDone={reload} />}
         {o.canCancel && !o.prepaid && user && <Button variant="danger" onClick={async () => { await api.post(`/orders/${o.id}/cancel`, { reason: 'Changed my mind' }); reload(); }}>Cancel order</Button>}
-        {user && <Button variant="secondary" onClick={async () => { const q = await api.post<{ id: string; warnings: string[] }>(`/orders/${o.id}/reorder`, {}); setMsg(`Rebuilt as quote ${q.id.slice(0, 8)}${q.warnings.length ? ' — ' + q.warnings.join('; ') : ''}. Open the restaurant page to add items to your cart.`); }}>Reorder</Button>}
+        {o.amendable && user && <Link href={`/orders/${o.id}/change`}><Button variant="secondary">Change order</Button></Link>}
+        {user && <Reorder orderId={o.id} onMessage={setMsg} />}
         {user && !terminalBad && !reporting && <Button variant="secondary" onClick={() => setReporting(true)}>Report a problem</Button>}
         <Link href={`/r/${o.locationSlug}`}><Button variant="ghost">Back to {o.locationName}</Button></Link>
       </div>

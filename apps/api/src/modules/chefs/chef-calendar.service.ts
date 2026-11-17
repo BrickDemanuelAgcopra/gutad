@@ -137,7 +137,7 @@ export class ChefCalendarService {
   }
 
   /** Units counted per date: unexpired holds (except the caller's own checkout session) and confirmed live orders. */
-  private async usage(locationId: string, from: string, to: string, excludeHoldKey: string | null | undefined, tx: DbOrTx = this.db) {
+  private async usage(locationId: string, from: string, to: string, excludeHoldKey: string | null | undefined, tx: DbOrTx = this.db, excludeOrderId?: string | null) {
     const rows = await tx
       .select({ date: kitchenCapacityLedger.serviceDate, item: kitchenCapacityLedger.menuItemId, units: kitchenCapacityLedger.units, status: kitchenCapacityLedger.status, orderId: kitchenCapacityLedger.orderId })
       .from(kitchenCapacityLedger)
@@ -147,7 +147,7 @@ export class ChefCalendarService {
           eq(kitchenCapacityLedger.locationId, locationId),
           gte(kitchenCapacityLedger.serviceDate, from),
           lte(kitchenCapacityLedger.serviceDate, to),
-          sql`((${kitchenCapacityLedger.status} = 'HELD' and ${kitchenCapacityLedger.expiresAt} > now() and ${kitchenCapacityLedger.holdKey} is distinct from ${excludeHoldKey ?? null}) or (${kitchenCapacityLedger.status} = 'CONFIRMED' and ${orders.status} not in ('CANCELED', 'REJECTED')))`,
+          sql`((${kitchenCapacityLedger.status} = 'HELD' and ${kitchenCapacityLedger.expiresAt} > now() and ${kitchenCapacityLedger.holdKey} is distinct from ${excludeHoldKey ?? null}) or (${kitchenCapacityLedger.status} = 'CONFIRMED' and ${orders.status} not in ('CANCELED', 'REJECTED')${excludeOrderId ? sql` and ${kitchenCapacityLedger.orderId} <> ${excludeOrderId}::uuid` : sql``}))`,
         ),
       );
     const m = new Map<string, Usage>();
@@ -201,7 +201,7 @@ export class ChefCalendarService {
   // ───── customer availability ─────
 
   /** Per-date availability for a kitchen and a set of dishes (the date picker on the dish page and at checkout). */
-  async availability(input: { locationId: string; lines?: { menuItemId: string; quantity: number }[]; from?: string; to?: string; holdKey?: string | null }): Promise<ChefAvailability> {
+  async availability(input: { locationId: string; lines?: { menuItemId: string; quantity: number }[]; from?: string; to?: string; holdKey?: string | null; excludeOrderId?: string | null }): Promise<ChefAvailability> {
     const [loc] = await this.db.select({ id: locations.id, timezone: locations.timezone, chefKitchen: locations.chefKitchen }).from(locations).where(eq(locations.id, input.locationId)).limit(1);
     if (!loc?.chefKitchen) throw new NotFoundException('Not a chef kitchen');
     const today = localParts(new Date(), loc.timezone).ymd;
@@ -216,7 +216,7 @@ export class ChefCalendarService {
     const rules = await this.dishRules(ctx, lines.map((l) => l.menuItemId));
     const qty = new Map<string, number>();
     for (const l of lines) qty.set(l.menuItemId, (qty.get(l.menuItemId) ?? 0) + Math.max(1, l.quantity));
-    const usage = await this.usage(ctx.loc.id, from, to, input.holdKey);
+    const usage = await this.usage(ctx.loc.id, from, to, input.holdKey, this.db, input.excludeOrderId);
     const days: ChefAvailabilityDay[] = [];
     for (let d = from; d <= to; d = addDaysYmd(d, 1)) days.push(this.day(ctx, d, rules, qty, usage));
     const rs = rules.length ? rules : [this.defaultsRule(ctx)];
@@ -236,6 +236,12 @@ export class ChefCalendarService {
   async kitchenTimes(locationId: string, days = 21) {
     const a = await this.availability({ locationId, to: addDaysYmd(localParts(new Date(), (await this.db.select({ tz: locations.timezone }).from(locations).where(eq(locations.id, locationId)).limit(1))[0]?.tz || 'America/New_York').ymd, days - 1) });
     return a.days.map((d) => ({ date: d.date, slots: d.slots }));
+  }
+
+  /** Whether the user placed this order at this kitchen (changing an order excludes its own portions). */
+  async ownsOrder(userId: string, orderId: string, locationId: string) {
+    const [o] = await this.db.select({ id: orders.id }).from(orders).where(and(eq(orders.id, orderId), eq(orders.userId, userId), eq(orders.locationId, locationId))).limit(1);
+    return !!o;
   }
 
   /** The chef's public name for a kitchen location (order pages and receipts). */
@@ -279,13 +285,13 @@ export class ChefCalendarService {
   }
 
   /** Validates an order date and time for a chef kitchen cart (no hold). Returns the kitchen's service date. */
-  async assertOrderable(locationId: string, scheduledFor: Date, lines: { menuItemId: string; quantity: number }[], holdKey?: string | null, tx: DbOrTx = this.db) {
-    const r = await this.evaluate(locationId, scheduledFor, lines, holdKey, tx);
+  async assertOrderable(locationId: string, scheduledFor: Date, lines: { menuItemId: string; quantity: number }[], holdKey?: string | null, tx: DbOrTx = this.db, excludeOrderId?: string | null) {
+    const r = await this.evaluate(locationId, scheduledFor, lines, holdKey, tx, excludeOrderId);
     this.explain(r.ctx, r.day, r.rules, r.qty, r.usage);
     return r.date;
   }
 
-  private async evaluate(locationId: string, scheduledFor: Date, lines: { menuItemId: string; quantity: number }[], holdKey: string | null | undefined, tx: DbOrTx) {
+  private async evaluate(locationId: string, scheduledFor: Date, lines: { menuItemId: string; quantity: number }[], holdKey: string | null | undefined, tx: DbOrTx, excludeOrderId?: string | null) {
     const [loc] = await tx.select({ timezone: locations.timezone }).from(locations).where(eq(locations.id, locationId)).limit(1);
     if (!loc) throw new NotFoundException();
     const lp = localParts(scheduledFor, loc.timezone);
@@ -293,7 +299,7 @@ export class ChefCalendarService {
     const rules = await this.dishRules(ctx, lines.map((l) => l.menuItemId), tx);
     const qty = new Map<string, number>();
     for (const l of lines) qty.set(l.menuItemId, (qty.get(l.menuItemId) ?? 0) + l.quantity);
-    const usage = await this.usage(locationId, lp.ymd, lp.ymd, holdKey, tx);
+    const usage = await this.usage(locationId, lp.ymd, lp.ymd, holdKey, tx, excludeOrderId);
     const day = this.day(ctx, lp.ymd, rules, qty, usage);
     // the chosen time must be one of that day's times
     if (day.status === 'AVAILABLE' && !day.slots.includes(lp.hhmm) && !day.slots.some((s) => toMin(s) <= toMin(lp.hhmm) && toMin(lp.hhmm) < toMin(s) + SLOT_MINUTES)) {
@@ -306,12 +312,12 @@ export class ChefCalendarService {
    * Validates the cart for its date and holds the capacity until the quote expires. A new quote from the same
    * checkout session (holdKey) replaces that session's earlier hold, so re-pricing never double-counts.
    */
-  async hold(input: { locationId: string; scheduledFor: Date; lines: { menuItemId: string; quantity: number }[]; quoteId: string; holdKey?: string | null; expiresAt: Date }) {
+  async hold(input: { locationId: string; scheduledFor: Date; lines: { menuItemId: string; quantity: number }[]; quoteId: string; holdKey?: string | null; expiresAt: Date; excludeOrderId?: string | null }) {
     return this.db.transaction(async (tx) => {
       const lp = localParts(input.scheduledFor, (await tx.select({ tz: locations.timezone }).from(locations).where(eq(locations.id, input.locationId)).limit(1))[0]?.tz || 'UTC');
       await this.lock(tx, input.locationId, lp.ymd);
       if (input.holdKey) await tx.update(kitchenCapacityLedger).set({ status: 'RELEASED' }).where(and(eq(kitchenCapacityLedger.locationId, input.locationId), eq(kitchenCapacityLedger.holdKey, input.holdKey), eq(kitchenCapacityLedger.status, 'HELD')));
-      const r = await this.evaluate(input.locationId, input.scheduledFor, input.lines, null, tx);
+      const r = await this.evaluate(input.locationId, input.scheduledFor, input.lines, null, tx, input.excludeOrderId);
       this.explain(r.ctx, r.day, r.rules, r.qty, r.usage);
       await tx.insert(kitchenCapacityLedger).values([...r.qty.entries()].map(([menuItemId, units]) => ({ locationId: input.locationId, menuItemId, serviceDate: r.date, units, status: 'HELD', holdKey: input.holdKey ?? null, quoteId: input.quoteId, expiresAt: input.expiresAt })));
       return { serviceDate: r.date, orderBy: r.day.orderBy, remaining: r.day.remaining === null ? null : r.day.remaining - [...r.qty.values()].reduce((a, n) => a + n, 0) };

@@ -20,6 +20,7 @@ const QuoteDto = z.object({
   useLoyaltyPoints: z.number().int().min(0).optional(),
   useGiftBalance: z.boolean().optional(),
   holdKey: z.string().max(80).optional(),
+  replacesOrderId: z.string().uuid().optional(),
 });
 const CheckoutDto = z.object({ tableNumber: z.string().max(10).optional(), utensils: z.boolean().optional(), quoteId: z.string().uuid(), paymentMethodId: z.string().optional(), savedPaymentMethodId: z.string().uuid().optional(), guest: z.object({ name: z.string(), email: z.string().email(), phone: z.string().optional() }).optional(), specialInstructions: z.string().max(500).optional(), groupOrderId: z.string().uuid().optional(), campusAccountId: z.string().uuid().optional() });
 const GroupCheckoutDto = CheckoutDto.omit({ quoteId: true, tableNumber: true, groupOrderId: true, campusAccountId: true }).extend({ quoteIds: z.array(z.string().uuid()).min(1).max(6) });
@@ -46,7 +47,9 @@ export class OrdersController {
   @ApiBearerAuth() @Get('me/orders') mine(@CurrentUser() u: JwtPayload) { return this.svc.myOrders(u); }
   @ApiBearerAuth() @Get('orders/:id/timeline') timeline(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.timeline(u, id); }
   @ApiBearerAuth() @Post('orders/:id/cancel') cancel(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ReasonDto)) b: z.infer<typeof ReasonDto>) { return this.svc.cancelByCustomer(u, id, b.reason); }
-  @ApiBearerAuth() @Post('orders/:id/reorder') reorder(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ fulfillmentType: z.enum(['PICKUP', 'DELIVERY']).optional() }))) b: { fulfillmentType?: 'PICKUP' | 'DELIVERY' }) { return this.svc.reorder(u, id, b.fulfillmentType); }
+  @ApiBearerAuth() @Post('orders/:id/reorder') reorder(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ fulfillmentType: z.enum(['PICKUP', 'DELIVERY']).optional(), mode: z.enum(['quote', 'cart']).optional() }))) b: { fulfillmentType?: 'PICKUP' | 'DELIVERY'; mode?: 'quote' | 'cart' }) { return b.mode === 'cart' ? this.svc.reorderCart(u, id) : this.svc.reorder(u, id, b.fulfillmentType); }
+  @ApiBearerAuth() @Get('orders/:id/amendment') amendment(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.amendment(u, id); }
+  @ApiBearerAuth() @Post('orders/:id/amend') amend(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(CheckoutDto.pick({ quoteId: true, paymentMethodId: true, savedPaymentMethodId: true, specialInstructions: true }))) b: { quoteId: string; paymentMethodId?: string; savedPaymentMethodId?: string; specialInstructions?: string }, @Headers('idempotency-key') key?: string) { return this.svc.amend(u, id, { ...b, idempotencyKey: key }); }
   @ApiBearerAuth() @Post('orders/:id/resolve-line') resolve(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(ResolveDto)) b: z.infer<typeof ResolveDto>) { return this.svc.resolveUnavailableLine(u, id, b.lineId, b.choice, b.replacementNote); }
 
   // merchant intake

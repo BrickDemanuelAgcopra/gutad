@@ -43,6 +43,8 @@ export interface QuoteInput {
   userId?: string | null;
   /** Chef Network: the checkout session; a new quote replaces this session's earlier capacity hold */
   holdKey?: string | null;
+  /** Chef Network: price a change to this paid order (its portions don't count against the new date) */
+  replacesOrderId?: string | null;
 }
 
 export interface QuoteSnapshotLine {
@@ -185,7 +187,7 @@ export class QuoteService {
       // Gutad Chef Network special request: price, quantity, date and labels come from the chef's accepted quote
       if (l.chefRequestQuoteId) {
         const sq = await this.specialRequestLine(tx, l, item, loc, scheduledFor, input.userId ?? null, !!sim);
-        snapLines.push({ ...sq, name: `${chefName ? chefDishTitle(item.name, chefName) : item.name} · special request`, brandId: item.brandId, stationCode: item.stationCode, taxCategory: item.taxCategory });
+        snapLines.push({ ...sq, name: `${chefName ? chefDishTitle(item.name, chefName) : item.name} Â· special request`, brandId: item.brandId, stationCode: item.stationCode, taxCategory: item.taxCategory });
         continue;
       }
       const ev = this.resolveModifiers(item, l.modifierOptionIds || []);
@@ -195,7 +197,12 @@ export class QuoteService {
     }
     const subtotalCents = snapLines.reduce((a, l) => a + l.lineTotalCents, 0);
     const capacityLines = snapLines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity }));
-    if (loc.chefKitchen && scheduledFor && !sim) await this.chefCalendar.assertOrderable(loc.id, scheduledFor, capacityLines, input.holdKey, tx);
+    // a change to a paid order: only its customer, at the same kitchen; its own portions don't count
+    if (input.replacesOrderId && !sim) {
+      const [orig] = await tx.select({ userId: orders.userId, locationId: orders.locationId, prepaid: orders.prepaid }).from(orders).where(eq(orders.id, input.replacesOrderId)).limit(1);
+      if (!orig || !input.userId || orig.userId !== input.userId || orig.locationId !== loc.id || !orig.prepaid) throw new BadRequestException({ message: 'This order canâ€™t be changed here', code: 'NOT_AMENDABLE' });
+    }
+    if (loc.chefKitchen && scheduledFor && !sim) await this.chefCalendar.assertOrderable(loc.id, scheduledFor, capacityLines, input.holdKey, tx, input.replacesOrderId);
     if (subtotalCents < loc.minOrderCents) throw new BadRequestException(`Minimum order is ${loc.minOrderCents} cents`);
 
     // 25.1â€“25.3 promotions: automatic offers and the typed code, with eligibility and stacking rules
@@ -309,12 +316,13 @@ export class QuoteService {
       etaMinutes,
       membershipId: membership?.id || null,
       // 11.8 â€” the policies the customer accepted with this order
+      ...(input.replacesOrderId ? { replacesOrderId: input.replacesOrderId } : {}),
       policies: await this.settings.getObject('policies.versions', { cancellation: '2026-11-01', refund: '2026-11-01', terms: '2026-11-01' }),
     };
     const quoteId = randomUUID();
     // Chef Network: hold the date's capacity while the customer checks out (released when the quote lapses)
     if (loc.chefKitchen && scheduledFor && !sim) {
-      const h = await this.chefCalendar.hold({ locationId: loc.id, scheduledFor, lines: capacityLines, quoteId, holdKey: input.holdKey, expiresAt });
+      const h = await this.chefCalendar.hold({ locationId: loc.id, scheduledFor, lines: capacityLines, quoteId, holdKey: input.holdKey, expiresAt, excludeOrderId: input.replacesOrderId });
       // the cancellation terms the customer accepts: full refund until the date's cutoff, then the chef's late refund
       const policy = await this.settings.getObject<ChefPolicy>('chefs.policy', DEFAULT_CHEF_POLICY);
       const [cp] = await tx.select({ operating: chefProfiles.operating }).from(chefProfiles).where(eq(chefProfiles.locationId, loc.id)).limit(1);
@@ -408,19 +416,56 @@ export class QuoteService {
   }
 
   /**
+   * Reorder: rebuild a past order's lines as cart lines against today's menu. Unavailable or sold-out items and
+   * special-request lines are removed (with the reason); options that no longer fit fall back to the dish's
+   * defaults; current prices are used and changes are flagged. Chef kitchens get the next open date.
+   */
+  async rebuildCart(locationId: string, channel: Channel, lines: { menuItemId: string | null; name: string; quantity: number; unitPriceCents: number; modifierIds: string[]; specialInstructions: string | null; chefRequestQuoteId?: string }[]) {
+    const [loc] = await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
+    if (!loc) throw new NotFoundException('Restaurant not found');
+    const ids = lines.map((l) => l.menuItemId).filter((x): x is string => !!x);
+    const items = ids.length ? await this.catalog.resolveItems(loc.id, channel, ids, undefined) : new Map<string, ResolvedItem>();
+    const chefName = loc.chefKitchen ? ((await this.db.select({ n: chefProfiles.displayName }).from(chefProfiles).where(eq(chefProfiles.locationId, loc.id)).limit(1))[0]?.n ?? null) : null;
+    const out: { menuItemId: string; name: string; quantity: number; unitPriceCents: number; modifierOptionIds: string[]; modifierNames: string[]; modifiersCents: number; specialInstructions?: string }[] = [];
+    const removed: { name: string; reason: string; code: string }[] = [];
+    const warnings: string[] = [];
+    for (const l of lines) {
+      const label = l.name.replace(/ Â· special request$/, '');
+      if (l.chefRequestQuoteId || /^Special request R-/.test(l.specialInstructions || '')) { removed.push({ name: label, reason: 'Special requests are quoted for one order. Ask the chef again from the dish page.', code: 'SPECIAL_REQUEST' }); continue; }
+      const item = l.menuItemId ? items.get(l.menuItemId) : undefined;
+      if (!item) { removed.push({ name: label, reason: 'No longer on the menu', code: 'UNAVAILABLE' }); continue; }
+      if (item.soldOut) { removed.push({ name: label, reason: 'Sold out right now', code: 'SOLD_OUT' }); continue; }
+      let ev = evaluateCustomization(item.name, item.modifierGroups, l.modifierIds, { allergens: item.allergens, dietaryTags: item.dietaryTags || [] });
+      if (!ev.ok) {
+        ev = evaluateCustomization(item.name, item.modifierGroups, [], { allergens: item.allergens, dietaryTags: item.dietaryTags || [] });
+        if (!ev.ok) { removed.push({ name: label, reason: 'Its options changed; choose them again', code: 'OPTIONS_CHANGED' }); continue; }
+        warnings.push(`${item.name}: some options changed, so the defaults were used`);
+      }
+      const title = chefName ? chefDishTitle(item.name, chefName) : item.name;
+      const unit = item.priceCents + ev.modifiersCents;
+      if (unit !== l.unitPriceCents) warnings.push(`${item.name} is now $${(unit / 100).toFixed(2)} (was $${(l.unitPriceCents / 100).toFixed(2)})`);
+      out.push({ menuItemId: item.id, name: title, quantity: Math.min(l.quantity, item.maxPerOrder || 50), unitPriceCents: item.priceCents, modifierOptionIds: ev.optionIds, modifierNames: ev.chosen.map(modifierLabel), modifiersCents: ev.modifiersCents, ...(l.specialInstructions ? { specialInstructions: l.specialInstructions } : {}) });
+    }
+    let earliestDate: string | null = null;
+    if (loc.chefKitchen && out.length) earliestDate = (await this.chefCalendar.availability({ locationId: loc.id, lines: out.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })) }).catch(() => null))?.earliestDate ?? null;
+    if (loc.chefKitchen && out.length && !earliestDate) warnings.push('The chef has no open dates for these dishes right now');
+    return { location: { id: loc.id, slug: loc.slug, name: chefName ? `${chefName} (Gutad Chef Network)` : loc.name, chefKitchen: loc.chefKitchen }, channel, lines: out, removed, warnings, earliestDate };
+  }
+
+  /**
    * A cart line from an accepted special-request quote: only its customer, at the quoted kitchen, dish, quantity and
    * date (and time, when the chef fixed one), while the quote is valid. The chef's price replaces the menu price.
    */
   private async specialRequestLine(tx: DbOrTx, l: QuoteInput['lines'][number], item: ResolvedItem, loc: typeof locations.$inferSelect, scheduledFor: Date | null, userId: string | null, sim: boolean): Promise<Omit<QuoteSnapshotLine, 'name' | 'brandId' | 'stationCode' | 'taxCategory'>> {
     const x = await acceptedChefQuote(tx, l.chefRequestQuoteId!);
     const bad = (message: string, code = 'CHEF_QUOTE_INVALID') => new BadRequestException({ message, code });
-    if (!x || !userId || x.r.userId !== userId) throw bad('This special-request quote isn’t available. Open the request from My requests.');
+    if (!x || !userId || x.r.userId !== userId) throw bad('This special-request quote isnâ€™t available. Open the request from My requests.');
     const { q } = x;
     if (q.status === 'ORDERED') throw bad('This special request was already ordered', 'CHEF_QUOTE_USED');
-    if (q.status !== 'ACCEPTED' || x.r.currentQuoteId !== q.id) throw bad('Accept the chef’s current quote before checking out', 'CHEF_QUOTE_NOT_ACCEPTED');
-    if (!sim && q.expiresAt < new Date()) throw bad('The chef’s quote has expired. Ask for a new one from My requests.', 'CHEF_QUOTE_EXPIRED');
+    if (q.status !== 'ACCEPTED' || x.r.currentQuoteId !== q.id) throw bad('Accept the chefâ€™s current quote before checking out', 'CHEF_QUOTE_NOT_ACCEPTED');
+    if (!sim && q.expiresAt < new Date()) throw bad('The chefâ€™s quote has expired. Ask for a new one from My requests.', 'CHEF_QUOTE_EXPIRED');
     if (q.locationId !== loc.id || q.menuItemId !== l.menuItemId) throw bad('This quote is for a different dish or kitchen');
-    if (l.quantity !== q.quantity) throw bad(`The chef quoted ${q.quantity}; the quantity can’t be changed`, 'CHEF_QUOTE_QUANTITY');
+    if (l.quantity !== q.quantity) throw bad(`The chef quoted ${q.quantity}; the quantity canâ€™t be changed`, 'CHEF_QUOTE_QUANTITY');
     if (scheduledFor) {
       const lp = localParts(scheduledFor, loc.timezone);
       if (lp.ymd !== q.serviceDate || (q.serviceTime && lp.hhmm !== q.serviceTime)) throw bad(`The chef quoted this for ${q.serviceDate}${q.serviceTime ? ` at ${q.serviceTime}` : ''}. Choose that ${q.serviceTime ? 'day and time' : 'day'}.`, 'CHEF_QUOTE_DATE');

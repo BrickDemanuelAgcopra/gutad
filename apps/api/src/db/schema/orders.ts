@@ -68,6 +68,8 @@ export const orders = pgTable(
     groupOrderId: uuid('group_order_id'),
     /** Gutad Chef Network: one checkout across several chefs (one payment, one child order per kitchen) */
     checkoutGroupId: uuid('checkout_group_id'),
+    /** Gutad Chef Network: this order replaced a paid order the customer changed before its cutoff */
+    amendedFromOrderId: uuid('amended_from_order_id'),
     /** charged in full at checkout (no authorization); money sits in DEFERRED_REVENUE until completion */
     prepaid: boolean('prepaid').notNull().default(false),
     /** the chef must accept by then or the order is declined and refunded automatically */

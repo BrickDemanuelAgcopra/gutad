@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CUSTOMER_CATEGORIES, GutadApiError, SUPPORT_CATEGORIES, trackingStages } from '@gutad/shared';
 import { CaseThread } from '@/case-thread';
 import { api, money, when } from '@/api';
 import { useApi, useSession } from '@/hooks';
+import { useCart } from '@/cart';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
 
 const catLabel = (k: string) => (SUPPORT_CATEGORIES as Record<string, { label: string }>)[k]?.label || k;
@@ -12,12 +13,46 @@ const NEEDS_ITEM = ['MISSING_ITEM', 'WRONG_ITEM', 'QUALITY', 'DAMAGED', 'FOOD_SA
 
 type CancelPreview = { allowed: boolean; refundCents: number; full: boolean; reason: string; chargedCents?: number; freeCancelUntil: string | null };
 
+interface RebuiltCart { location: { id: string; slug: string; name: string; chefKitchen: boolean }; channel: string; lines: { menuItemId: string; name: string; quantity: number; unitPriceCents: number; modifierOptionIds: string[]; modifierNames: string[]; modifiersCents: number; specialInstructions?: string }[]; removed: { name: string; reason: string; code: string }[]; warnings: string[]; earliestDate: string | null }
+
+/** Reorder: the past order checked against today's menu, added to the cart (what changed is shown, not hidden). */
+function Reorder({ orderId }: { orderId: string }) {
+  const { add } = useCart();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ added: number; notes: string[]; chef: boolean; earliestDate: string | null } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const r = await api.post<RebuiltCart>(`/orders/${orderId}/reorder`, { mode: 'cart' });
+      for (const l of r.lines) add({ id: r.location.id, slug: r.location.slug, name: r.location.name }, { menuItemId: l.menuItemId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifierOptionIds: l.modifierOptionIds, modifierNames: l.modifierNames, modifiersCents: l.modifiersCents, specialInstructions: l.specialInstructions }, { park: true });
+      setResult({ added: r.lines.reduce((a, l) => a + l.quantity, 0), notes: [...r.removed.map((x) => `${x.name}: ${x.reason}`), ...r.warnings], chef: r.location.chefKitchen, earliestDate: r.earliestDate });
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <Button title={busy ? 'Adding…' : 'Reorder'} variant="secondary" disabled={busy} onPress={run} />
+      <ErrorText msg={err} />
+      {result && (
+        <Card>
+          <Text style={{ color: C.ink }}>{result.added ? `Added ${result.added} item${result.added === 1 ? '' : 's'} to your cart.` : 'Nothing from this order is available right now.'}</Text>
+          {result.added > 0 && result.chef && result.earliestDate && <Muted>Earliest cooking day: {new Date(`${result.earliestDate}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}. Pick the day at checkout.</Muted>}
+          {result.notes.map((n) => <Text key={n} style={{ color: C.warn, fontSize: 13, marginTop: 2 }}>• {n}</Text>)}
+          {result.added > 0 && <Button title="Go to checkout" onPress={() => router.push('/checkout')} />}
+        </Card>
+      )}
+    </>
+  );
+}
+
 const COURIER: Record<string, string> = { QUOTED: 'Waiting for the restaurant', REQUESTED: 'Finding a courier', ASSIGNED: 'Courier heading to pick up', PICKED_UP: 'Courier on the way', DELIVERED: 'Delivered', UNASSIGNED: 'Finding a new courier', CANCELED: 'Delivery canceled', FAILED: 'Delivery problem', RETURNED: 'Returned to the restaurant' };
 
 export default function Order() {
   const { id, email } = useLocalSearchParams<{ id: string; email?: string }>();
   const { user } = useSession();
-  const { data: o, reload } = useApi<{ id: string; number: string; status: string; fulfillmentType: string; locationName: string; totalCents: number; promiseAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null }[]; payment: { status: string; amountCents?: number; capturedCents?: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null; prepaid?: boolean; scheduledFor?: string | null; chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null; delivery: { id: string; status: string; etaAt: string | null; hasProof?: boolean; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null }>(`/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`, { poll: 5000 });
+  const router = useRouter();
+  const { data: o, reload } = useApi<{ id: string; number: string; status: string; fulfillmentType: string; locationName: string; totalCents: number; promiseAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null }[]; payment: { status: string; amountCents?: number; capturedCents?: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null; prepaid?: boolean; scheduledFor?: string | null; amendable?: boolean; amendedFromOrderId?: string | null; chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null; delivery: { id: string; status: string; etaAt: string | null; hasProof?: boolean; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null }>(`/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`, { poll: 5000 });
   const { data: track } = useApi<{ status: string; etaAt: string | null; courierLocation: { lat: number; lng: number } | null }>(o?.delivery ? `/public/delivery/${o.delivery.id}/track` : null, { poll: 7000, deps: [o?.delivery?.id] });
   const [report, setReport] = useState<{ category: string; itemId: string; text: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -47,6 +82,7 @@ export default function Order() {
       {o.chefNetwork && <Text style={{ color: C.ink7, marginTop: 2 }}>Prepared by {o.chefNetwork.chefName || o.locationName} · Sold by Gutad</Text>}
       {o.chefNetwork && o.status === 'SUBMITTED' && o.chefNetwork.acceptBy && <Muted>Chef confirms by {when(o.chefNetwork.acceptBy)}. If not, you get a full refund.</Muted>}
       {o.chefNetwork?.checkoutGroupId && <Muted>Part of a checkout with other chefs</Muted>}
+      {o.amendedFromOrderId && <Pressable accessibilityRole="link" onPress={() => router.push({ pathname: '/order/[id]', params: { id: o.amendedFromOrderId! } })}><Muted>Changed from an earlier order (refunded in full) · view it</Muted></Pressable>}
       {stages && <View style={{ flexDirection: 'row', gap: 4, marginVertical: 10 }}>{stages.map((st) => <View key={st.key} style={{ flex: 1 }}><View style={{ height: 6, borderRadius: 3, backgroundColor: st.done ? C.brand : st.current ? '#fdba74' : C.ink1 }} /><Text style={{ fontSize: 10, textAlign: 'center', marginTop: 3, color: st.done || st.current ? C.ink : C.ink5, fontWeight: st.current ? '700' : '400' }}>{st.label}</Text></View>)}</View>}
       {o.status === 'READY' && o.pickupCode && <Card><Text style={{ fontSize: 16 }}>Ready{o.shelfSlot ? ` on shelf ${o.shelfSlot}` : ''}! Show code</Text><Text style={{ fontSize: 40, fontWeight: '800', letterSpacing: 6 }}>{o.pickupCode}</Text></Card>}
       {o.promiseAt && !bad && o.status !== 'COMPLETED' && <Muted>Estimated {o.fulfillmentType === 'DELIVERY' ? 'delivery' : 'ready'}: {when(o.promiseAt)}</Muted>}
@@ -60,6 +96,8 @@ export default function Order() {
           <ErrorText msg={cancelErr} />
         </Card>
       ) : <Muted>{preview.reason}</Muted>)}
+      {o.amendable && user && <Button title="Change order" variant="secondary" onPress={() => router.push({ pathname: '/order/change/[id]', params: { id: o.id } })} />}
+      {user && <Reorder orderId={o.id} />}
       {o.canCancel && user && !o.prepaid && <Button title="Cancel order" variant="danger" onPress={() => api.post(`/orders/${o.id}/cancel`, { reason: 'Changed my mind' }).then(reload)} />}
       {user && !bad && !report && <Button title="Report a problem" variant="secondary" onPress={() => setReport({ category: 'MISSING_ITEM', itemId: '', text: '' })} />}
       {report && (

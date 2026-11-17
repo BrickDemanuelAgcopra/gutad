@@ -15,6 +15,7 @@ export default function RootLayout() {
         <Stack.Screen name="checkout-chefs" options={{ title: 'Chef checkout' }} />
         <Stack.Screen name="checkout-group/[id]" options={{ title: 'Orders placed' }} />
         <Stack.Screen name="order/[id]" options={{ title: 'Order' }} />
+        <Stack.Screen name="order/change/[id]" options={{ title: 'Change order' }} />
         <Stack.Screen name="reserve/[slug]" options={{ title: 'Reserve a table' }} />
         <Stack.Screen name="merchant/index" options={{ title: 'Merchant tablet' }} />
         <Stack.Screen name="merchant/host" options={{ title: 'Host stand' }} />

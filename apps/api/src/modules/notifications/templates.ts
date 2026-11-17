@@ -58,6 +58,13 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
 
     // ── Orders ──────────────────────────────────────────────────────────────
     case 'order.submitted':
+      // Gutad Chef Network: a paid order the customer changed before its cutoff
+      if (p.chefName && p.amendedFromNumber) return sub(`Order ${num} replaces ${p.amendedFromNumber}`, `Your changed order ${num} is placed: Gutad charged ${money(p.totalCents as number)} and refunds order ${p.amendedFromNumber} in full. ${p.chefName} confirms by ${when(p.acceptBy)}.`, {
+        eyebrow: 'Order changed', heading: 'Your changes are in',
+        paragraphs: [`Order ${num} replaces order ${p.amendedFromNumber}. We charged ${money(p.totalCents as number)} and refunded the original charge in full (refunds take 5–10 business days to appear).`, `It's booked for ${when(p.scheduledFor)}. ${p.chefName} confirms the changed order by ${when(p.acceptBy)}; if they can't, we refund you in full automatically.`],
+        details: [['Order', num], ['Replaces', String(p.amendedFromNumber)], ['Chef', p.chefName as string], ['For', when(p.scheduledFor)], ['Charged', money(p.totalCents as number)]],
+        cta: orderCta(),
+      });
       // Gutad Chef Network: charged now, cooked to order on the chosen day
       if (p.chefName) return sub(`Order ${num} placed with ${p.chefName}`, `Gutad charged ${money(p.totalCents as number)} for order ${num}. ${p.chefName} will confirm by ${when(p.acceptBy)}; if not, you get a full refund automatically.`, {
         eyebrow: 'Order placed', heading: `${p.chefName} is cooking for you`,

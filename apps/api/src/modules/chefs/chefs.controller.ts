@@ -33,7 +33,7 @@ const Hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM');
 const OperatingDto = z.object({ cookingDays: z.array(z.number().int().min(0).max(6)).max(7).optional(), cutoffHour: z.number().int().min(0).max(23).optional(), minLeadDays: z.number().int().min(0).max(30).optional(), dailyCapacity: z.number().int().min(1).max(2000).optional(), maxAdvanceDays: z.number().int().min(1).max(365).optional(), opens: Hhmm.optional(), closes: Hhmm.optional(), lateRefundPct: z.number().int().min(0).max(100).optional() });
 const DayDto = z.object({ open: z.boolean().nullable().optional(), capacity: z.number().int().min(0).max(2000).nullable().optional(), note: z.string().max(200).nullable().optional(), acknowledgeOrders: z.boolean().optional() });
 const PauseDto = z.object({ startDate: Ymd, endDate: Ymd, reason: z.string().max(200).nullable().optional(), acknowledgeOrders: z.boolean().optional() });
-const CartAvailDto = z.object({ lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1).max(50) })).max(50).default([]), from: Ymd.optional(), to: Ymd.optional(), holdKey: z.string().max(80).optional() });
+const CartAvailDto = z.object({ replacesOrderId: z.string().uuid().optional(), lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1).max(50) })).max(50).default([]), from: Ymd.optional(), to: Ymd.optional(), holdKey: z.string().max(80).optional() });
 const StatusDto = z.object({ status: z.enum(['ACTIVE', 'PAUSED', 'SUSPENDED']), reason: z.string().min(5).max(1000) });
 
 function send(res: Response, d: { fileName: string; mimeType: string; content: Buffer }, cache: 'public' | 'private') {
@@ -55,7 +55,12 @@ export class ChefsController {
 
   // ───── advance ordering: availability and the chef's cooking calendar
   @Public() @Get('public/chef-dishes/:id/availability') dishAvailability(@Param('id') id: string, @Query('from') from?: string, @Query('to') to?: string, @Query('quantity') quantity?: string, @Query('holdKey') holdKey?: string) { return this.calendar.dishAvailability(id, { from, to, quantity: quantity ? Number(quantity) || 1 : 1, holdKey }); }
-  @Public() @Post('public/chef-kitchens/:locationId/availability') cartAvailability(@Param('locationId') locationId: string, @Body(zod(CartAvailDto)) b: z.infer<typeof CartAvailDto>) { return this.calendar.availability({ locationId, ...b }); }
+  @Public() @Post('public/chef-kitchens/:locationId/availability') async cartAvailability(@CurrentUser() u: JwtPayload | undefined, @Param('locationId') locationId: string, @Body(zod(CartAvailDto)) b: z.infer<typeof CartAvailDto>) {
+    // changing a paid order: its own portions don't count, for its customer only
+    const { replacesOrderId, ...rest } = b;
+    const excludeOrderId = replacesOrderId && u && (await this.calendar.ownsOrder(u.sub, replacesOrderId, locationId)) ? replacesOrderId : null;
+    return this.calendar.availability({ locationId, ...rest, excludeOrderId });
+  }
   @Get('chef/calendar') myCalendar(@CurrentUser() u: JwtPayload, @Query('from') from?: string, @Query('to') to?: string) { return this.calendar.chefCalendar(u, from, to); }
   @Put('chef/calendar/settings') setOperating(@CurrentUser() u: JwtPayload, @Body(zod(OperatingDto)) b: z.infer<typeof OperatingDto>) { return this.calendar.setOperating(u, b); }
   @Put('chef/calendar/days/:date') setDay(@CurrentUser() u: JwtPayload, @Param('date') date: string, @Body(zod(DayDto)) b: z.infer<typeof DayDto>) { return this.calendar.setDay(u, date, b); }

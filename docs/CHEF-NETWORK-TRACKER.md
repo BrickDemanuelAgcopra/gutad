@@ -87,9 +87,16 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Web: admin tabs Kitchens & documents and Quality, chef quality & earnings modal with actions and adjustments, `/admin/chefs/analytics`, quality and escalation settings in Fees & policy; chef `/chef/earnings` and `/chef/compliance` (renewal upload, metrics vs limits, record).
 - [x] Mobile: `chef/compliance`, `chef/earnings`, `ops/chef-kitchens`, `ops/chef-quality` (+ detail with actions and adjustments), `ops/chef-analytics`; dashboard paused notice.
 - [x] Smoke `scripts/smoke-chef-g.mjs` (28 checks). Full suite 801/801.
-## Phase 8 — Hardening & docs [ ] (next)
+## Phase 8 — Hardening & docs [x]
+- [x] Migration 0025: `orders.amended_from_order_id`.
+- [x] Reorder revalidation: `POST /orders/:id/reorder` with `{ mode: 'cart' }` rebuilds cart lines against today's menu (unavailable, sold-out and special-request lines left out with a reason; options that no longer fit fall back to defaults; price changes listed; next open date for chef kitchens). Web and mobile reorder add to the cart.
+- [x] Changing a paid chef order before its cutoff: `GET /orders/:id/amendment`, quotes and the calendar accept `replacesOrderId` (the order's own portions don't count, for its customer only), `POST /orders/:id/amend` places and charges the changed order, then cancels and refunds the original in full, in one transaction (idempotent; declined card changes nothing; orders with a special request can't be changed). Email variant “Order N replaces M”. Web `/orders/[id]/change`, mobile `order/change/[id]`.
+- [x] Fix: special-request line titles and messages carried cp1252 bytes from an edit script (“�” instead of “·” and “’”); file repaired, all tracked files scanned, smoke check added.
+- [x] Docs: `CHEF-NETWORK-PLAN.md` (as built), `ARCHITECTURE.md` (prepaid money flow, lifecycles), `CAPABILITY-MAP.md`, `Pending_Tasks.md` (follow-ups CN.V, CN.1–CN.5), `Completed_Tasks.md`.
+- [x] Smoke `scripts/smoke-chef-h.mjs` (19 checks). Full suite 818/820; the 2 misses are the known timing-dependent campaign holdout checks (one of 10 orders hit the API rate limit).
 
 ## Log
+- 2026-11-17 Phase 8 built and verified locally (all Chef Network checks pass; web build; typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 7 built and verified locally (801/801 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 6 built and verified locally (773/773 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 5 built and verified locally (736/736 smoke, web build, typecheck of shared, API, web and mobile).

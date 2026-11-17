@@ -607,3 +607,17 @@ Plan and gap analysis: [`IAM-PLAN.md`](IAM-PLAN.md). Web `/admin/iam`, mobile Op
 - **K.18 Superadmin safeguards**: granter allowlist, last-superadmin lock, step-up verification, dual control, superadmin role locked. **API W**
 - **K.19 Service accounts & API keys**: own permissions and organization scope, IP allowlist, expiring hashed keys, rotation with grace period, revocation. **API W**
 - **K.20 Security notifications**: alert feed with email/push for privilege increases, new superadmins, suspicious sign-ins, lockouts, sensitive and API access changes, expiring keys, inactive accounts and offboarding. **API W M**
+
+## Gutad Chef Network (shipped 2026-11-16 to 2026-11-17)
+
+Design: [`CHEF-NETWORK-PLAN.md`](CHEF-NETWORK-PLAN.md); per-phase checklists: [`CHEF-NETWORK-TRACKER.md`](CHEF-NETWORK-TRACKER.md). Each phase was deployed to gutad.io after typecheck (shared, API, web, mobile), `next build` and the full smoke suite on a fresh database.
+
+- **CN-1** Foundations & onboarding: CHEF and KITCHEN_ASSISTANT roles, 9-step application with autosave and documents, review pipeline, approval provisioning. 76d1ecb. **API W M**
+- **CN-2** Chef portal & dish builder: dishes, Gutad review, storefront and directory, fixed-dish ordering. afd51c4. **API W M**
+- **CN-3** Customization engine: option groups, conditional groups, extras catalog, allergen and dietary effects. 19554c4. **API W M**
+- **CN-4** Advance ordering & capacity: cooking calendars, cutoffs, daily limits, capacity holds, date picker. 036e518. **API W M**
+- **CN-5** Checkout & payments: charge now, deferred revenue until completion, chef acceptance and automatic refunds, cancellation by cutoff, multi-chef checkout. 542994f. **API W M**
+- **CN-6** Special requests & versioned quotes; accepted quote → cart line. a4f0f97. **API W M**
+- **CN-7** Kitchens and document expiry, quality and food-safety actions, earnings, request escalation, analytics. c103515. **API W M**
+- **CN-8** Hardening: reorder revalidation into the cart, changing a paid order before its cutoff, UTF-8 fix for special-request line titles, docs (this file, CHEF-NETWORK-PLAN, ARCHITECTURE money flow, CAPABILITY-MAP, Pending_Tasks). **API W M**
+
