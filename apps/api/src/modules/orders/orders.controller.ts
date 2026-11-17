@@ -19,6 +19,7 @@ const QuoteDto = z.object({
   useCreditsCents: z.number().int().min(0).optional(),
   useLoyaltyPoints: z.number().int().min(0).optional(),
   useGiftBalance: z.boolean().optional(),
+  holdKey: z.string().max(80).optional(),
 });
 const CheckoutDto = z.object({ tableNumber: z.string().max(10).optional(), utensils: z.boolean().optional(), quoteId: z.string().uuid(), paymentMethodId: z.string().optional(), savedPaymentMethodId: z.string().uuid().optional(), guest: z.object({ name: z.string(), email: z.string().email(), phone: z.string().optional() }).optional(), specialInstructions: z.string().max(500).optional(), groupOrderId: z.string().uuid().optional(), campusAccountId: z.string().uuid().optional() });
 const CounterDto = z.object({ lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1), modifierOptionIds: z.array(z.string().uuid()).optional() })).min(1), guestName: z.string(), guestPhone: z.string().optional(), fulfillmentType: z.enum(['PICKUP', 'DINE_IN']).optional(), channel: z.enum(['PHONE', 'WALK_IN']).optional() });

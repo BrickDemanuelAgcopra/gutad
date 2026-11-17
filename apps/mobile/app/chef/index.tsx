@@ -1,6 +1,6 @@
 import { Image, Linking, ScrollView, Text, View } from 'react-native';
 import { Link } from 'expo-router';
-import { chefDishTitle, WEEKDAYS } from '@gutad/shared';
+import { chefDishTitle, chefNoticeText, WEEKDAYS } from '@gutad/shared';
 import { api } from '@/api';
 import { useAction, useApi } from '@/hooks';
 import { Badge, Button, C, Card, ErrorText, Loading, Muted, s } from '@/ui';
@@ -32,7 +32,8 @@ export default function ChefHome() {
       <ErrorText msg={actErr} />
       <Card title="Getting started">{data.checklist.map((c) => <Text key={c.key} style={{ marginBottom: 4, color: c.done ? C.good : C.ink7 }}>{c.done ? '✓' : '○'} {c.label}</Text>)}</Card>
       <Card title="Availability">
-        <Muted>Cooks {(p.operating.cookingDays || []).map((d) => WEEKDAYS[d]).join(', ')} · cutoff {p.operating.cutoffHour ?? 12}:00 the day before · {p.operating.dailyCapacity ?? '—'} orders/day</Muted>
+        <Muted>Cooks {(p.operating.cookingDays || []).map((d) => WEEKDAYS[d]).join(', ') || '—'} · {chefNoticeText(p.operating.minLeadDays ?? 1, p.operating.cutoffHour ?? 12)} · {p.operating.dailyCapacity ?? '—'} portions/day</Muted>
+        <Link href="/chef/calendar" asChild><Button title="Cooking calendar" onPress={() => undefined} /></Link>
         {p.acceptingOrders ? <Button variant="secondary" disabled={busy} title="Pause availability" onPress={() => run(async () => setData(await api.post<ChefMe>('/chef/me/availability', { accepting: false })))} /> : <Button disabled={busy || p.status !== 'ACTIVE'} title="Open availability" onPress={() => run(async () => setData(await api.post<ChefMe>('/chef/me/availability', { accepting: true })))} />}
       </Card>
       <Card title="Payouts">

@@ -2,13 +2,14 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { GutadApiError, type Quote } from '@gutad/shared';
+import { GutadApiError, type ChefAvailability, type Quote } from '@gutad/shared';
 import { api, money, newIdempotencyKey, when } from '@/lib/api';
 import { cartSubtotal, useCart } from '@/lib/cart';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input, Select, Textarea } from '@/components/ui';
 import { SmsNotice } from '@/components/legal';
 import { CardField, type CardToken } from '@/components/card-field';
+import { DateSlotPicker, preferredDate } from '@/components/date-slot-picker';
 
 type Fulfillment = 'PICKUP' | 'DELIVERY' | 'DINE_IN';
 
@@ -42,8 +43,25 @@ export default function CheckoutPage() {
   const [giftMsg, setGiftMsg] = useState<string | null>(null);
   const addGift = async () => { try { const r = await api.post<{ walletCents: number }>('/me/gift-cards/claim', { code: giftCode }); setGiftCode(''); setGiftMsg(`Gift balance ${money(r.walletCents)} ready to use.`); setUseGift(true); reloadGifts(); } catch (e) { setGiftMsg((e as Error).message); } };
   const { data: cards } = useApi<{ id: string; brand: string | null; last4: string | null; isDefault: boolean }[]>(user ? '/me/payment-methods' : null);
-  // chef dishes need notice: the cart is always scheduled, starting at the first cooking day with open slots
-  useEffect(() => { if (loc?.chefKitchen && !schedule) setSchedule({ date: loc.pickupTimes?.find((d) => d.slots.length)?.date || '', time: '' }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [loc?.id, loc?.chefKitchen]);
+  // Gutad Chef Network: chef dishes are cooked to order on a chosen day. The cart's calendar applies the strictest
+  // dish's notice and cutoff and every daily limit; quotes hold the portions for this checkout (holdKey).
+  const holdKey = useRef(newIdempotencyKey());
+  const chef = !!loc?.chefKitchen;
+  const [avail, setAvail] = useState<ChefAvailability | null>(null);
+  const [availLoading, setAvailLoading] = useState(false);
+  const [availNonce, setAvailNonce] = useState(0);
+  const cartKey = cart.lines.map((l) => `${l.menuItemId}:${l.quantity}`).join(',');
+  useEffect(() => {
+    if (!chef || !cart.locationId || !cart.lines.length) return;
+    let cancelled = false;
+    setAvailLoading(true);
+    api.post<ChefAvailability>(`/public/chef-kitchens/${cart.locationId}/availability`, { lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })), holdKey: holdKey.current })
+      .then((a) => { if (cancelled) return; setAvail(a); setSchedule((cur) => { const ok = (d?: string | null) => !!d && a.days.some((x) => x.date === d && x.status === 'AVAILABLE'); if (cur && ok(cur.date)) return a.days.find((x) => x.date === cur.date)!.slots.includes(cur.time) ? cur : { date: cur.date, time: '' }; const pref = preferredDate.get(cart.locationId!); return { date: ok(pref) ? pref! : a.earliestDate || '', time: '' }; }); })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setAvailLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chef, cart.locationId, cartKey, availNonce]);
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedCardId) setSavedCardId(d.id); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [cards]);
   const { data: me } = useApi<{ addresses: { line1: string; city: string; region: string; postalCode: string; lat: number | null; lng: number | null; isDefault: boolean }[] }>(user ? '/auth/me' : null);
 
@@ -62,14 +80,15 @@ export default function CheckoutPage() {
       setError(null);
       try {
         let scheduledFor: string | null = null;
+        if (chef && !(schedule?.date && schedule.time)) { if (!cancelled) { setQuote(null); setBlocked(null); } return; }
         if (schedule?.date && schedule.time) scheduledFor = (await api.get<{ iso: string }>(`/public/locations/${cart.locationId}/local-time?date=${schedule.date}&time=${schedule.time}`)).iso;
-        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), scheduledFor, tipCents, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined });
+        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), scheduledFor, tipCents, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined, ...(chef ? { holdKey: holdKey.current } : {}) });
         if (!cancelled) { setQuote(q); setBlocked(null); }
       } catch (e) {
         if (!cancelled) {
           setQuote(null);
           const body = e instanceof GutadApiError ? (e.body as unknown as { code?: string; nextOpenAt?: string } | null) : null;
-          if (body?.code) { setBlocked({ code: body.code, message: (e as Error).message, nextOpenAt: body.nextOpenAt }); setError(null); }
+          if (body?.code) { setBlocked({ code: body.code, message: (e as Error).message, nextOpenAt: body.nextOpenAt }); setError(null); if (CAPACITY_CODES.includes(body.code)) setAvailNonce((n) => n + 1); }
           else { setBlocked(null); setError((e as Error).message); }
         }
       }
@@ -105,6 +124,8 @@ export default function CheckoutPage() {
       const code = e instanceof GutadApiError ? (e.body as unknown as { code?: string } | null)?.code : undefined;
       // A declined card keeps the same quote; a fresh idempotency key lets the next card be tried.
       if (code === 'PAYMENT_DECLINED') { setDeclined(true); idem.current = newIdempotencyKey(); }
+      // capacity went while paying: refresh the calendar so the customer can pick another day
+      if (code && CAPACITY_CODES.includes(code)) { idem.current = newIdempotencyKey(); setQuote(null); setAvailNonce((n) => n + 1); }
       if ((e as Error).message.includes('expired')) idem.current = newIdempotencyKey();
     } finally {
       setBusy(false);
@@ -142,9 +163,15 @@ export default function CheckoutPage() {
           {fulfillment !== 'DINE_IN' && <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={utensils} onChange={(e) => setUtensils(e.target.checked)} /> Include utensils and napkins</label>}
           <div className="mt-3 flex flex-wrap items-end gap-2">
             {!loc?.chefKitchen && <Select label="When" value={schedule ? 'later' : 'now'} onChange={(e) => setSchedule(e.target.value === 'now' ? null : { date: loc?.pickupTimes?.find((d) => d.slots.length)?.date || '', time: '' })}><option value="now">As soon as possible</option><option value="later">Schedule for later</option></Select>}
-            {schedule && <Select label={loc?.chefKitchen ? 'Date (chef cooking days)' : 'Day'} value={schedule.date} onChange={(e) => setSchedule({ date: e.target.value, time: '' })}>{loc?.pickupTimes?.filter((d) => d.slots.length).map((d) => <option key={d.date} value={d.date}>{new Date(`${d.date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</option>)}</Select>}
-            {schedule && <Select label="Time" value={schedule.time} onChange={(e) => setSchedule({ ...schedule, time: e.target.value })}><option value="">Pick a time</option>{loc?.pickupTimes?.find((d) => d.date === schedule.date)?.slots.map((s) => <option key={s} value={s}>{s}</option>)}</Select>}
+            {schedule && !chef && <Select label="Day" value={schedule.date} onChange={(e) => setSchedule({ date: e.target.value, time: '' })}>{loc?.pickupTimes?.filter((d) => d.slots.length).map((d) => <option key={d.date} value={d.date}>{new Date(`${d.date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</option>)}</Select>}
+            {schedule && !chef && <Select label="Time" value={schedule.time} onChange={(e) => setSchedule({ ...schedule, time: e.target.value })}><option value="">Pick a time</option>{loc?.pickupTimes?.find((d) => d.date === schedule.date)?.slots.map((s) => <option key={s} value={s}>{s}</option>)}</Select>}
           </div>
+          {chef && (
+            <div className="mt-4 border-t border-ink-100 pt-4">
+              <DateSlotPicker availability={avail} value={schedule} onChange={(v) => { setSchedule(v); if (cart.locationId) preferredDate.set(cart.locationId, v.date); }} loading={availLoading} title={fulfillment === 'DELIVERY' ? 'Delivery day and time' : 'Pickup day and time'} />
+              <p className="mt-2 text-xs text-ink-500">Chef dishes are cooked to order for the day you choose. Your portions are held for 10 minutes while you check out.</p>
+            </div>
+          )}
           {fulfillment === 'DELIVERY' && (
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <Input label="Street address" value={address.line1} onChange={(e) => setAddress({ ...address, line1: e.target.value, lat: 0, lng: 0 })} className="sm:col-span-2" />
@@ -219,6 +246,8 @@ export default function CheckoutPage() {
             </div>
           ) : blocked ? (
             <div className="space-y-2 text-sm"><Alert tone="info">{BLOCKED_TEXT[blocked.code] || blocked.message}{blocked.nextOpenAt ? ` Opens ${when(blocked.nextOpenAt)}.` : ''}</Alert>{['CLOSED', 'PAUSED', 'SCHEDULE_TOO_SOON', 'SLOT_FULL', 'KITCHEN_BUSY'].includes(blocked.code) && <p className="text-xs text-ink-500">Choose “Schedule for later” to pick another time.</p>}{blocked.code === 'ACCOUNT_RESTRICTED' && <Link className="text-xs underline" href="/account">See account notice</Link>}</div>
+          ) : chef && !schedule?.time ? (
+            <p className="text-sm text-ink-500">{schedule?.date ? 'Pick a time to see your total.' : 'Pick a day and time to see your total.'}</p>
           ) : (
             <p className="text-sm text-ink-500">{fulfillment === 'DELIVERY' && !address.lat ? 'Verify your address to get a delivery quote.' : 'Calculating…'}</p>
           )}
@@ -238,7 +267,14 @@ const BLOCKED_TEXT: Record<string, string> = {
   SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.',
   ACCOUNT_RESTRICTED: 'Ordering is paused on your account.',
   KITCHEN_BUSY: 'The kitchen is at capacity right now. Schedule for a little later and it will be ready on time.',
+  SCHEDULE_REQUIRED: 'Chef dishes are cooked to order. Pick a day and time.',
+  CHEF_NOT_COOKING: 'The chef isn’t cooking that day. Pick another day.',
+  CHEF_PAUSED: 'The chef is away that day. Pick another day.',
+  CHEF_TOO_FAR: 'That day isn’t open for orders yet.',
+  CHEF_TIME_UNAVAILABLE: 'That time isn’t available. Pick one of the listed times.',
 };
+/** the server's own message names the dish and what's left; these refresh the calendar */
+const CAPACITY_CODES = ['DISH_CAPACITY_FULL', 'KITCHEN_CAPACITY_FULL', 'CHEF_CUTOFF_PASSED', 'CHEF_PAUSED', 'CHEF_NOT_COOKING'];
 
 function Row({ l, v }: { l: string; v: string }) {
   return <div className="flex justify-between"><span className="text-ink-500">{l}</span><span>{v}</span></div>;

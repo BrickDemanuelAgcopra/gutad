@@ -45,13 +45,23 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Mobile: customization on the dish screen; option editing in the chef dish editor (conditions and rules on web); extras approval in Ops.
 - [x] Demo: Spaghetti (7 option groups including conditional shrimp style, Large-size topping rule, included components) and celebration cake; 3 approved extras.
 - [x] Smoke `scripts/smoke-chef-c.mjs`. Full suite 657/659; the two failures are the older campaign-holdout checks, which are timing-dependent (likely the API rate limit during the busiest stretch).
-## Phase 4 — Advance ordering & capacity [ ] (next)
-## Phase 5 — Checkout, payments & multi-chef [ ]
+## Phase 4 — Advance ordering & capacity [x]
+- [x] Migration 0021: `chef_calendar_days` (per-date open/close and capacity overrides), `chef_pauses` (holiday ranges), `kitchen_capacity_ledger` (HELD / CONFIRMED / RELEASED units per kitchen location and service date). Existing scheduled chef orders backfilled as confirmed.
+- [x] `ChefCalendarService` (global module): a date D can be ordered until (D − notice days) at the cutoff hour, kitchen time. Statuses AVAILABLE, SOLD_OUT, NOT_COOKING, PAUSED, CLOSED, CUTOFF_PASSED, TOO_FAR. 30-minute times from the cooking-day window; same-day orders need an hour.
+- [x] Limits: per-dish daily limit (`chef_dishes.daily_capacity`) and kitchen limit (chef daily capacity or the date override), shared across dishes. A cart uses the strictest dish’s notice, cutoff and advance window. Admin cap `chefs.max_advance_days` (default 60).
+- [x] Quotes for chef kitchens require a day (`SCHEDULE_REQUIRED`), validate the calendar (`CHEF_CUTOFF_PASSED`, `CHEF_NOT_COOKING`, `CHEF_PAUSED`, `CHEF_TOO_FAR`, `CHEF_TIME_UNAVAILABLE`, `DISH_CAPACITY_FULL`, `KITCHEN_CAPACITY_FULL`) and hold the portions for the quote’s 10 minutes. A new quote with the same `holdKey` (checkout session) replaces its hold. Advisory lock per kitchen and date.
+- [x] Checkout confirms the portions inside its transaction and re-checks capacity (409 before payment if the date filled). Canceled or rejected orders stop counting automatically; lapsed holds are released by a 5-minute job.
+- [x] Endpoints: `GET public/chef-dishes/:id/availability`, `POST public/chef-kitchens/:locationId/availability` (cart), `GET chef/calendar`, `PUT chef/calendar/settings`, `PUT chef/calendar/days/:date`, `POST/DELETE chef/calendar/pauses`, `GET admin/chefs/:id/calendar`. Closing a day or pausing over existing orders needs `acknowledgeOrders`. The location page’s pickup times for chef kitchens come from the calendar.
+- [x] Web: `DateSlotPicker` (month grid with arrow-key navigation, “N left”, reasons for unavailable dates, order-by time, time chips) on the dish page (next available date; the chosen day carries to checkout) and at checkout (cart calendar, holdKey, capacity errors refresh the calendar). `/chef/calendar` (weekly settings, per-date changes, booked/held per day and dish, time away). Admin chef calendar view.
+- [x] Mobile: `DateSlotPicker`, checkout, dish screen availability, `chef/calendar`, dashboard link.
+- [x] Smoke `scripts/smoke-chef-d.mjs` (50 checks). Full suite 709/709.
+## Phase 5 — Checkout, payments & multi-chef [ ] (next)
 ## Phase 6 — Special requests & quotes [ ]
 ## Phase 7 — Admin operations & analytics [ ]
 ## Phase 8 — Hardening & docs [ ]
 
 ## Log
+- 2026-11-17 Phase 4 built and verified locally (709/709 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 3 built and verified locally (web build, API/web/mobile typecheck, smoke incl. 27 new checks).
 - 2026-11-16 Phase 2 built and verified locally (631/631 smoke, web build, API/web/mobile typecheck).
 - 2026-11-16 Phase 1 built and verified locally (598/598 smoke, web build, typecheck of API, web and mobile).

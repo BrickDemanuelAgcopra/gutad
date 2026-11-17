@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { Image, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { CHEF_FULFILLMENT_FORMATS, modifierLabel, type PublicChefDish } from '@gutad/shared';
+import { CHEF_FULFILLMENT_FORMATS, chefNoticeText, modifierLabel, type ChefAvailability, type PublicChefDish } from '@gutad/shared';
 import { money } from '@/api';
 import { useCart } from '@/cart';
 import { useApi } from '@/hooks';
 import { Badge, Button, C, Card, Loading, Muted, s } from '@/ui';
 import { Customizer, Summary, useCustomization } from '@/customize';
+import { DateSlotPicker, ymdLabel } from '@/date-slot-picker';
 
 type Dish = PublicChefDish & { acceptingOrders: boolean };
 
@@ -28,7 +29,11 @@ function DishView({ d }: { d: Dish }) {
   const customizable = groups.some((g) => g.selectionType !== 'INCLUDED');
   const [open, setOpen] = useState(false);
   const [qty, setQty] = useState(1);
-  const can = d.acceptingOrders && !d.soldOut;
+  const { data: avail, loading: availLoading } = useApi<ChefAvailability>(`/public/chef-dishes/${d.id}/availability?quantity=${qty}`);
+  const [showCal, setShowCal] = useState(false);
+  const [peek, setPeek] = useState<{ date: string; time: string } | null>(null);
+  const noDates = !!avail && !avail.earliestDate;
+  const can = d.acceptingOrders && !d.soldOut && !noDates;
   const unit = d.priceCents + ev.modifiersCents;
   const addToCart = () => {
     const names = ev.chosen.filter((c) => c.priceCents > 0 || !groups.find((g) => g.id === c.groupId)?.options.find((o) => o.id === c.id)?.isDefault).map(modifierLabel);
@@ -56,7 +61,11 @@ function DishView({ d }: { d: Dish }) {
                 <Text style={s.label}>Ingredients</Text><Text style={{ marginBottom: 6 }}>{d.ingredients.join(', ')}</Text>
                 <Text style={s.label}>Allergens</Text><Text style={{ color: ev.allergens.length ? C.bad : C.ink, fontWeight: ev.allergens.length ? '600' : '400' }}>{ev.allergens.length ? ev.allergens.map((a) => a.replace('_', ' ')).join(', ') : 'None of the major allergens declared'}</Text>
                 <Muted>Removing an ingredient doesn’t make a dish allergen-free.</Muted>
-                <Text style={[s.label, { marginTop: 6 }]}>Ordering</Text><Text>{d.minLeadDays ? `At least ${d.minLeadDays} day(s) ahead` : 'Same day available'}, up to {d.maxAdvanceDays} days ahead</Text>
+                <Text style={[s.label, { marginTop: 6 }]}>Ordering</Text><Text>{avail ? chefNoticeText(avail.rules.minLeadDays, avail.rules.cutoffHour) : chefNoticeText(d.minLeadDays, d.cutoffHour)}, up to {avail?.rules.maxAdvanceDays ?? d.maxAdvanceDays} days ahead</Text>
+                {avail && <Text style={{ marginTop: 4, fontWeight: '600', color: avail.earliestDate ? C.good : C.warn }}>{avail.earliestDate ? `Next available: ${ymdLabel(avail.earliestDate)}` : 'No dates open right now'}</Text>}
+                {avail && <Button variant="ghost" title={showCal ? 'Hide available dates' : 'See available dates'} onPress={() => setShowCal(!showCal)} />}
+                {showCal && <DateSlotPicker availability={avail} loading={availLoading} value={peek || (avail?.earliestDate ? { date: avail.earliestDate, time: '' } : null)} onChange={(v) => setPeek({ date: v.date, time: '' })} hideTimes />}
+                {showCal && <Muted>You’ll pick the exact day and time at checkout.</Muted>}
               </Card>
             </>
           )}
@@ -71,7 +80,7 @@ function DishView({ d }: { d: Dish }) {
             {open && <Button variant="ghost" title="Back to dish" onPress={() => setOpen(false)} />}
           </View>
         )}
-        {!can ? <Button disabled title={d.soldOut ? 'Sold out' : 'Not taking orders'} onPress={() => undefined} />
+        {!can ? <Button disabled title={d.soldOut ? 'Sold out' : noDates ? 'No dates open right now' : 'Not taking orders'} onPress={() => undefined} />
           : customizable && !open ? <Button title={`Customize & order — from ${money(d.priceCents)}`} onPress={() => setOpen(true)} />
           : <Button disabled={!ev.ok} title={ev.ok ? `Add to cart — ${money(unit * qty)}` : 'Finish required choices'} onPress={addToCart} />}
       </View>

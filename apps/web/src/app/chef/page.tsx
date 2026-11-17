@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect } from 'react';
-import { chefDishTitle, WEEKDAYS } from '@gutad/shared';
+import { chefDishTitle, chefNoticeText, WEEKDAYS } from '@gutad/shared';
 import { api, refreshSession, session } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Spinner } from '@/components/ui';
@@ -71,10 +71,11 @@ function Dashboard() {
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-2 text-xs text-ink-500">
             <div><dt>Cooking days</dt><dd className="font-medium text-ink-900">{(op.cookingDays || []).map((d) => WEEKDAYS[d]).join(', ') || '—'}</dd></div>
-            <div><dt>Order cutoff</dt><dd className="font-medium text-ink-900">{op.cutoffHour !== undefined ? `${op.cutoffHour}:00 the day before` : '—'}</dd></div>
-            <div><dt>Minimum notice</dt><dd className="font-medium text-ink-900">{op.minLeadDays ?? '—'} day(s)</dd></div>
-            <div><dt>Daily capacity</dt><dd className="font-medium text-ink-900">{op.dailyCapacity ?? '—'} orders</dd></div>
+            <div><dt>Ordering</dt><dd className="font-medium text-ink-900">{chefNoticeText(op.minLeadDays ?? 1, op.cutoffHour ?? 12)}</dd></div>
+            <div><dt>Daily capacity</dt><dd className="font-medium text-ink-900">{op.dailyCapacity ?? '—'} portions</dd></div>
+            <div><dt>Orders open</dt><dd className="font-medium text-ink-900">{op.maxAdvanceDays ?? 30} days ahead</dd></div>
           </dl>
+          <Link href="/chef/calendar" className="mt-3 inline-block text-sm font-medium text-brand-700 underline">Cooking calendar, holidays and capacity →</Link>
         </Card>
         <Card title="Payouts">
           {data.payouts?.state === 'COMPLETE' ? (

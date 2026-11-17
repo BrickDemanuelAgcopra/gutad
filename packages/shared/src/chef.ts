@@ -258,3 +258,102 @@ export interface PublicChefDish {
   chef: { id: string; slug: string; displayName: string; portraitUrl: string | null };
   location: { id: string; slug: string; name: string };
 }
+
+// ───── Phase 4: advance ordering and capacity ─────
+
+/** Why a date can or cannot be ordered for (chef cooking calendar). */
+export type ChefDayStatus = 'AVAILABLE' | 'SOLD_OUT' | 'NOT_COOKING' | 'PAUSED' | 'CLOSED' | 'CUTOFF_PASSED' | 'TOO_FAR';
+
+export const CHEF_DAY_STATUS_LABEL: Record<ChefDayStatus, string> = {
+  AVAILABLE: 'Available',
+  SOLD_OUT: 'Sold out',
+  NOT_COOKING: 'Not a cooking day',
+  PAUSED: 'Chef is away',
+  CLOSED: 'Closed',
+  CUTOFF_PASSED: 'Ordering closed',
+  TOO_FAR: 'Not open yet',
+};
+
+/** One date in a customer-facing availability calendar. */
+export interface ChefAvailabilityDay {
+  date: string;
+  status: ChefDayStatus;
+  /** last moment to order for this date (ISO), from the notice period and cutoff hour */
+  orderBy: string | null;
+  /** units still available for the dish (or the tightest dish of a cart); null = no limit */
+  remaining: number | null;
+  /** pickup/delivery times (local HH:MM) */
+  slots: string[];
+}
+
+export interface ChefAvailability {
+  locationId: string;
+  timezone: string;
+  /** today at the kitchen (YYYY-MM-DD) */
+  today: string;
+  earliestDate: string | null;
+  latestDate: string;
+  rules: { minLeadDays: number; cutoffHour: number; maxAdvanceDays: number };
+  days: ChefAvailabilityDay[];
+}
+
+/** A chef's weekly operating settings (the cooking calendar's defaults). */
+export interface ChefOperatingSettings {
+  /** 0 = Sunday … 6 = Saturday */
+  cookingDays: number[];
+  cutoffHour: number;
+  minLeadDays: number;
+  /** units per cooking day across all dishes (the kitchen limit) */
+  dailyCapacity: number;
+  maxAdvanceDays: number;
+  /** pickup/delivery window on cooking days (local HH:MM) */
+  opens: string;
+  closes: string;
+}
+
+/** One date in the chef's own calendar view. */
+export interface ChefCalendarDay {
+  date: string;
+  weekday: number;
+  /** a weekly cooking day */
+  cookingDay: boolean;
+  /** after overrides and pauses */
+  open: boolean;
+  override: { open: boolean | null; capacity: number | null; note: string | null } | null;
+  pause: { id: string; reason: string | null } | null;
+  capacity: number;
+  booked: number;
+  held: number;
+  orders: number;
+  /** ordering for this date has closed (cutoff passed) */
+  closedForOrders: boolean;
+  orderBy: string | null;
+  dishes: { menuItemId: string; name: string; units: number; limit: number | null }[];
+}
+
+export interface ChefPause { id: string; startDate: string; endDate: string; reason: string | null }
+
+/** "12 PM", "9 AM" */
+export function formatHour(h: number): string {
+  const hh = ((h % 24) + 24) % 24;
+  return `${hh % 12 === 0 ? 12 : hh % 12} ${hh < 12 ? 'AM' : 'PM'}`;
+}
+
+/** Customer-facing notice rule, e.g. "Order by 12 PM, 1 day before". */
+export function chefNoticeText(minLeadDays: number, cutoffHour: number): string {
+  if (!minLeadDays) return `Order by ${formatHour(cutoffHour)} on the day`;
+  return `Order by ${formatHour(cutoffHour)}, ${minLeadDays} day${minLeadDays > 1 ? 's' : ''} before`;
+}
+
+/** Add days to a YYYY-MM-DD date (calendar arithmetic, no time zone). */
+export function addDaysYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + days));
+  return t.toISOString().slice(0, 10);
+}
+
+/** Weekday (0 = Sunday) of a YYYY-MM-DD date. */
+export function weekdayYmd(ymd: string): number {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}

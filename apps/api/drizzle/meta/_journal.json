@@ -148,6 +148,13 @@
       "when": 1794888229208,
       "tag": "0020_chef_customization",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794914261674,
+      "tag": "0021_chef_capacity",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import { brands, deliveryZones, experiences, locations, menus, openingHours, pub
 import { RedisService } from '../../core/redis.service';
 import { haversineKm, isWithin, localParts, pointInPolygon } from '../../common/utils';
 import { can, EntitlementsService, type Entitlements } from '../entitlements/entitlements.service';
+import { ChefCalendarService } from '../chefs/chef-calendar.service';
 
 export interface SearchParams {
   q?: string;
@@ -21,7 +22,7 @@ export interface SearchParams {
 
 @Injectable()
 export class DiscoveryService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService, private readonly entitlements: EntitlementsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService, private readonly entitlements: EntitlementsService, private readonly chefCalendar: ChefCalendarService) {}
 
   /** Customers only see services the restaurant's plan includes (and the restaurant has switched on). */
   private masked<T extends { acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; acceptsCatering: boolean }>(s: T, e: Entitlements | undefined): T {
@@ -187,12 +188,14 @@ export class DiscoveryService {
     const [closedNow] = await this.db.select({ kind: locationClosures.kind }).from(locationClosures).where(and(eq(locationClosures.locationId, loc.id), sql`${locationClosures.startsAt} <= now()`, sql`${locationClosures.endsAt} > now()`, eq(locationClosures.kind, 'CLOSED'))).limit(1);
     const isOpenNow = !loc.isPaused && !closedNow && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
     const e = await this.entitlements.forLocation(loc.id);
+    // chef kitchens: open cooking days and times from the chef's calendar (notice, cutoff, pauses, capacity)
+    const times = loc.chefKitchen ? await this.chefCalendar.kitchenTimes(loc.id) : await this.withoutFullSlots(loc, this.eligibleTimes(loc, hours, 'ORDERING'));
     const result = {
       ...this.masked(this.summary(loc), e),
       isOpenNow,
       hours,
-      pickupTimes: await this.withoutFullSlots(loc, this.eligibleTimes(loc, hours, 'ORDERING')),
-      deliveryTimes: loc.acceptsDelivery && can(e, 'delivery') ? await this.withoutFullSlots(loc, this.eligibleTimes(loc, hours, 'ORDERING')) : [],
+      pickupTimes: times,
+      deliveryTimes: loc.acceptsDelivery && can(e, 'delivery') ? times : [],
       diningShifts: (can(e, 'reservations') ? shiftRows : []).map((s) => ({ id: s.id, name: s.name, daysOfWeek: s.daysOfWeek, startTime: s.startTime, endTime: s.endTime, maxPartySize: s.maxPartySize })),
       experiences: (can(e, 'experiences') ? exps : []).map((e) => ({ id: e.id, name: e.name, description: e.description, pricingMode: e.pricingMode, priceCents: e.priceCents, imageUrl: e.imageUrl })),
       partnerLinks: pubs.filter((p) => p.kind === 'PARTNER_LINK').map((p) => ({ id: p.id, partnerName: p.partnerName })),

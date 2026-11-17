@@ -1,9 +1,10 @@
 // Gutad Chef Network — independent chefs, their applications, documents and public profiles
-import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, id, ts, updatedAt } from './_common';
 import { organizations, users } from './accounts';
 import { locations } from './merchants';
 import { menuItems } from './catalog';
+import { orders } from './orders';
 
 /** A chef's guided, resumable application. `data` holds the per-step draft (ChefApplicationData). */
 export const chefApplications = pgTable(
@@ -225,4 +226,69 @@ export const chefDishExtras = pgTable(
     optionId: uuid('option_id').notNull(),
   },
   (t) => [uniqueIndex('chef_dish_extras_uq').on(t.dishId, t.extraId)],
+);
+
+/**
+ * Per-date overrides of a chef's weekly cooking calendar: open an extra day, close a cooking day, or change the
+ * kitchen's capacity for that date. `open` null = follow the weekly cooking days.
+ */
+export const chefCalendarDays = pgTable(
+  'chef_calendar_days',
+  {
+    id: id(),
+    chefProfileId: uuid('chef_profile_id')
+      .notNull()
+      .references(() => chefProfiles.id, { onDelete: 'cascade' }),
+    date: date('date', { mode: 'string' }).notNull(),
+    open: boolean('open'),
+    capacity: integer('capacity'),
+    note: text('note'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('chef_calendar_days_uq').on(t.chefProfileId, t.date)],
+);
+
+/** A holiday or time away: no orders for any date in [startDate, endDate]. */
+export const chefPauses = pgTable(
+  'chef_pauses',
+  {
+    id: id(),
+    chefProfileId: uuid('chef_profile_id')
+      .notNull()
+      .references(() => chefProfiles.id, { onDelete: 'cascade' }),
+    startDate: date('start_date', { mode: 'string' }).notNull(),
+    endDate: date('end_date', { mode: 'string' }).notNull(),
+    reason: text('reason'),
+    createdById: uuid('created_by_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('chef_pauses_chef_idx').on(t.chefProfileId, t.startDate)],
+);
+
+/**
+ * Units promised per kitchen location and service date. A quote briefly HOLDs capacity (until the quote expires);
+ * checkout turns it into CONFIRMED rows tied to the order. Confirmed rows of canceled or rejected orders stop
+ * counting automatically, and expired holds are ignored (and later marked RELEASED). Shared kitchens count once.
+ */
+export const kitchenCapacityLedger = pgTable(
+  'kitchen_capacity_ledger',
+  {
+    id: id(),
+    locationId: uuid('location_id')
+      .notNull()
+      .references(() => locations.id, { onDelete: 'cascade' }),
+    menuItemId: uuid('menu_item_id').notNull(),
+    serviceDate: date('service_date', { mode: 'string' }).notNull(),
+    units: integer('units').notNull(),
+    /** HELD | CONFIRMED | RELEASED */
+    status: text('status').notNull().default('HELD'),
+    /** the customer's checkout session: a new quote replaces the same session's earlier hold */
+    holdKey: text('hold_key'),
+    quoteId: uuid('quote_id'),
+    orderId: uuid('order_id').references(() => orders.id, { onDelete: 'cascade' }),
+    expiresAt: ts('expires_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('kitchen_capacity_ledger_day_idx').on(t.locationId, t.serviceDate), index('kitchen_capacity_ledger_quote_idx').on(t.quoteId), index('kitchen_capacity_ledger_order_idx').on(t.orderId)],
 );

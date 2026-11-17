@@ -83,8 +83,9 @@ export async function chefPhaseB({ call, check, A, C, O, API, chefToken: T, chef
   const carlosDishes = (await call('GET', '/public/chefs/chef-carlos/dishes')).json;
   const pie = carlosDishes.find((d) => d.dishName === 'Pumpkin pie');
   check('demo Chef Carlos has live dishes including a Thanksgiving pie', pie && pie.title === 'Gutad’s Pumpkin pie — by Chef Carlos' && pie.fulfillmentFormat === 'ROOM_TEMP', carlosDishes.map((d) => d.title));
-  const page = (await call('GET', `/public/locations/${pie.location.id}`)).json;
-  const day = (page.pickupTimes || []).find((d, i) => i >= 2 && d.slots.length);
+  // the pie needs 3 days' notice: take the first date its availability calendar offers
+  const page = (await call('GET', `/public/chef-dishes/${pie.id}/availability`)).json;
+  const day = (page.days || []).find((d) => d.status === 'AVAILABLE');
   if (day) {
     const iso = (await call('GET', `/public/locations/${pie.location.id}/local-time?date=${day.date}&time=${day.slots[Math.floor(day.slots.length / 2)]}`)).json.iso;
     const quote = (await call('POST', '/quotes', { locationId: pie.location.id, channel: 'MARKETPLACE', fulfillmentType: 'PICKUP', scheduledFor: iso, lines: [{ menuItemId: pie.menuItemId, quantity: 1 }] }, C)).json;
@@ -93,7 +94,7 @@ export async function chefPhaseB({ call, check, A, C, O, API, chefToken: T, chef
     check('the chef order is placed with the branded title on its lines', order.id && (order.lines || []).some((l) => l.name === 'Gutad’s Pumpkin pie — by Chef Carlos'), order.lines || order);
     const asap = await call('POST', '/quotes', { locationId: pie.location.id, channel: 'MARKETPLACE', fulfillmentType: 'PICKUP', lines: [{ menuItemId: pie.menuItemId, quantity: 1 }] }, C);
     check('a chef dish cannot be ordered for right now when the chef needs notice', asap.status === 400, asap.json);
-  } else check('Chef Carlos has scheduled pickup times', false, page.pickupTimes);
+  } else check('Chef Carlos has scheduled pickup times', false, page);
 
   // sold out, suspend, archive
   await call('POST', `/chef/dishes/${jollof.id}/sold-out`, { soldOut: true }, T);

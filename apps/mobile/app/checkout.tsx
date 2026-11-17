@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CardField, type CardToken } from '@/card-field';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
-import { GutadApiError, type Quote } from '@gutad/shared';
+import { GutadApiError, type ChefAvailability, type Quote } from '@gutad/shared';
 import { api, money, newIdempotencyKey, when } from '@/api';
 import { cartSubtotal, useCart } from '@/cart';
 import { useApi } from '@/hooks';
 import { useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Input, Muted, s } from '@/ui';
 import { SmsNotice } from '@/legal';
+import { DateSlotPicker } from '@/date-slot-picker';
 
-const BLOCKED: Record<string, string> = { KITCHEN_BUSY: 'The kitchen is at capacity right now. Try again shortly or order for later.', PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.' };
+const BLOCKED: Record<string, string> = { KITCHEN_BUSY: 'The kitchen is at capacity right now. Try again shortly or order for later.', PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.', SCHEDULE_REQUIRED: 'Chef dishes are cooked to order. Pick a cooking day and time.', CHEF_CUTOFF_PASSED: 'Ordering for that day has closed. Pick another date.', CHEF_NOT_COOKING: 'The chef isn’t cooking that day. Pick another date.', CHEF_PAUSED: 'The chef is away that day. Pick another date.', CHEF_TOO_FAR: 'That date isn’t open for orders yet. Pick an earlier date.', CHEF_TIME_UNAVAILABLE: 'That time isn’t available. Pick another time.', DISH_CAPACITY_FULL: 'A dish in your cart just sold out for that day. Pick another date or lower the quantity.', KITCHEN_CAPACITY_FULL: 'The chef is fully booked that day. Pick another date.' };
+const CAPACITY = ['DISH_CAPACITY_FULL', 'KITCHEN_CAPACITY_FULL', 'CHEF_CUTOFF_PASSED', 'CHEF_NOT_COOKING', 'CHEF_PAUSED', 'CHEF_TOO_FAR', 'CHEF_TIME_UNAVAILABLE'];
 const codeOf = (e: unknown) => (e instanceof GutadApiError ? (e.body as unknown as { code?: string; nextOpenAt?: string } | null) : null);
 
 export default function Checkout() {
@@ -42,7 +44,25 @@ export default function Checkout() {
   const [schedule, setSchedule] = useState<{ date: string; time: string } | null>(null);
   const [scheduledFor, setScheduledFor] = useState<string | undefined>(undefined);
   const days = (loc?.pickupTimes || []).filter((d) => d.slots.length);
-  useEffect(() => { if (loc?.chefKitchen && !schedule && days[0]) setSchedule({ date: days[0].date, time: '' }); }, [loc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // chef kitchens: cart-wide availability (the quote holds capacity under holdKey for 10 minutes, so our own hold isn't counted)
+  const holdKey = useRef(newIdempotencyKey());
+  const [avail, setAvail] = useState<ChefAvailability | null>(null);
+  const [availLoading, setAvailLoading] = useState(false);
+  const linesKey = cart.lines.map((l) => `${l.menuItemId}:${l.quantity}`).join(',');
+  const loadAvail = useCallback(async () => {
+    if (!loc?.chefKitchen || !cart.locationId || !cart.lines.length) return;
+    setAvailLoading(true);
+    const qty = new Map<string, number>();
+    cart.lines.forEach((l) => qty.set(l.menuItemId, (qty.get(l.menuItemId) || 0) + l.quantity));
+    try { setAvail(await api.post<ChefAvailability>(`/public/chef-kitchens/${cart.locationId}/availability`, { lines: [...qty].map(([menuItemId, quantity]) => ({ menuItemId, quantity })), holdKey: holdKey.current })); } catch { setAvail(null); } finally { setAvailLoading(false); }
+  }, [loc?.chefKitchen, cart.locationId, linesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadAvail(); }, [loadAvail]);
+  useEffect(() => {
+    if (!loc?.chefKitchen || !avail) return;
+    const d = schedule ? avail.days.find((x) => x.date === schedule.date) : undefined;
+    if (!d || d.status !== 'AVAILABLE') setSchedule(avail.earliestDate && !schedule ? { date: avail.earliestDate, time: '' } : null);
+    else if (schedule?.time && !d.slots.includes(schedule.time)) setSchedule({ date: d.date, time: '' });
+  }, [avail]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!schedule?.time || !cart.locationId) { setScheduledFor(undefined); return; }
     api.get<{ iso: string }>(`/public/locations/${cart.locationId}/local-time?date=${schedule.date}&time=${schedule.time}`).then((r) => setScheduledFor(r.iso)).catch(() => setScheduledFor(undefined));
@@ -52,9 +72,9 @@ export default function Checkout() {
     if (!cart.locationId || !cart.lines.length) return;
     if (needsTime || (schedule?.time && !scheduledFor)) { setQuote(null); return; }
     const t = setTimeout(() => {
-      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, scheduledFor, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, promoCode: promo || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
+      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, scheduledFor, holdKey: loc?.chefKitchen ? holdKey.current : undefined, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, promoCode: promo || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
         .then((q) => { setQuote(q); setError(null); })
-        .catch((e) => { setQuote(null); const b = codeOf(e); setError(b?.code && BLOCKED[b.code] ? `${BLOCKED[b.code]}${b.nextOpenAt ? ` Opens ${when(b.nextOpenAt)}.` : ''}` : (e as Error).message); });
+        .catch((e) => { setQuote(null); const b = codeOf(e); if (b?.code && CAPACITY.includes(b.code)) void loadAvail(); setError(b?.code && BLOCKED[b.code] ? `${BLOCKED[b.code]}${b.nextOpenAt ? ` Opens ${when(b.nextOpenAt)}.` : ''}` : (e as Error).message); });
     }, 350);
     return () => clearTimeout(t);
   }, [cart, fulfillment, tipCents, promo, addr, useGift, scheduledFor, needsTime]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -75,7 +95,7 @@ export default function Checkout() {
       setDeclined(false);
       clear();
       router.replace({ pathname: '/order/[id]', params: { id: o.id, email: user ? '' : guest.email } });
-    } catch (e) { setError((e as Error).message); if (codeOf(e)?.code === 'PAYMENT_DECLINED') setDeclined(true); idem.current = newIdempotencyKey(); } finally { setBusy(false); }
+    } catch (e) { setError((e as Error).message); const c = codeOf(e)?.code; if (c === 'PAYMENT_DECLINED') setDeclined(true); if (c && CAPACITY.includes(c)) { setError(BLOCKED[c]); setQuote(null); void loadAvail(); } idem.current = newIdempotencyKey(); } finally { setBusy(false); }
   };
   if (!cart.lines.length) return <View style={[s.screen, s.pad]}><Muted>Your cart is empty.</Muted></View>;
   return (
@@ -86,8 +106,8 @@ export default function Checkout() {
       </Card>
       <Card title="When">
         {!loc?.chefKitchen && <View style={{ flexDirection: 'row', gap: 8 }}><Button title="As soon as possible" variant={schedule ? 'secondary' : 'primary'} onPress={() => setSchedule(null)} /><Button title="Schedule" variant={schedule ? 'primary' : 'secondary'} onPress={() => setSchedule({ date: days[0]?.date || '', time: '' })} /></View>}
-        {loc?.chefKitchen && <Muted>Chef dishes are cooked to order. Pick a cooking day and time.</Muted>}
-        {schedule && (
+        {loc?.chefKitchen && <><Muted>Chef dishes are cooked to order. Pick a cooking day and time.</Muted><View style={{ marginTop: 8 }}><DateSlotPicker availability={avail} loading={availLoading} value={schedule} onChange={(v) => { setSchedule(v); setError(null); }} /></View></>}
+        {schedule && !loc?.chefKitchen && (
           <>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }} contentContainerStyle={{ gap: 6 }}>
               {days.map((d) => { const on = d.date === schedule.date; const dt = new Date(`${d.date}T12:00:00`); return <Pressable key={d.date} accessibilityRole="radio" accessibilityState={{ checked: on }} onPress={() => setSchedule({ date: d.date, time: '' })} style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: on ? C.brand : C.ink1, backgroundColor: on ? '#fff4ec' : C.white, alignItems: 'center' }}><Text style={{ fontSize: 11, color: C.ink5 }}>{dt.toLocaleDateString('en-US', { weekday: 'short' })}</Text><Text style={{ fontWeight: '700', color: C.ink }}>{dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</Text></Pressable>; })}

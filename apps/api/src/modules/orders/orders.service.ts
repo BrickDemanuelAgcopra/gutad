@@ -16,6 +16,7 @@ import { DeliveryService } from '../delivery/delivery.service';
 import { KitchenService } from '../kitchen/kitchen.service';
 import { GrowthService } from '../growth/growth.service';
 import { CrmService } from '../crm/crm.service';
+import { ChefCalendarService } from '../chefs/chef-calendar.service';
 import { QuoteService, QuoteSnapshotLine } from './quote.service';
 import { addMinutes, orderNumber, shortCode } from '../../common/utils';
 import type { Address } from '../delivery/providers/delivery-provider';
@@ -58,6 +59,7 @@ export class OrdersService {
     private readonly redis: RedisService,
     private readonly settings: SettingsService,
     private readonly ledger: LedgerService,
+    private readonly chefCalendar: ChefCalendarService,
   ) {}
 
   // ───── 07 checkout ─────
@@ -149,6 +151,8 @@ export class OrdersService {
         snap.lines.map((l) => ({ orderId: o.id, menuItemId: l.menuItemId, brandId: l.brandId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions ?? null, stationCode: l.stationCode, allergens: l.allergens ?? null, dietaryTags: l.dietaryTags ?? null })),
       );
       await tx.update(quotes).set({ consumedByOrderId: o.id }).where(eq(quotes.id, q.id));
+      // Gutad Chef Network: the quote's capacity hold becomes the order's confirmed portions for its cooking day
+      if (loc.chefKitchen && q.scheduledFor) await this.chefCalendar.confirm(tx, { locationId: loc.id, scheduledFor: q.scheduledFor, lines: snap.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })), quoteId: q.id, orderId: o.id });
 
       // credits / loyalty applied before the card
       if (userId && snap.creditsCents) await this.payments.redeemCredit(userId, snap.creditsCents, o.id, tx);

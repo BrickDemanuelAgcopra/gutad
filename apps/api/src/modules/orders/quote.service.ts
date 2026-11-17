@@ -16,6 +16,8 @@ import { KitchenService } from '../kitchen/kitchen.service';
 import { LocationLoadService } from '../kitchen/location-load.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 import { PaymentsService } from '../payments/payments.service';
+import { ChefCalendarService } from '../chefs/chef-calendar.service';
+import { randomUUID } from 'node:crypto';
 import { addMinutes, bps, isWithin, localParts, zonedTimeToUtc } from '../../common/utils';
 import { taxEngine } from './tax-provider';
 import type { Address } from '../delivery/providers/delivery-provider';
@@ -37,6 +39,8 @@ export interface QuoteInput {
   /** 25.9 / 11.6 pay part of the order from the gift balance in the customer's wallet */
   useGiftBalance?: boolean;
   userId?: string | null;
+  /** Chef Network: the checkout session; a new quote replaces this session's earlier capacity hold */
+  holdKey?: string | null;
 }
 
 export interface QuoteSnapshotLine {
@@ -77,6 +81,7 @@ export class QuoteService {
     private readonly payments: PaymentsService,
     private readonly entitlements: EntitlementsService,
     private readonly settings: SettingsService,
+    private readonly chefCalendar: ChefCalendarService,
   ) {}
 
   async quote(input: QuoteInput, tx: DbOrTx = this.db) {
@@ -120,6 +125,10 @@ export class QuoteService {
     if (input.scheduledFor) {
       scheduledFor = new Date(input.scheduledFor);
       if (isNaN(scheduledFor.getTime())) throw new BadRequestException('Invalid scheduledFor');
+      // Gutad Chef Network: the chef's cooking calendar decides (notice, cutoff, cooking days, pauses, times, capacity)
+      if (loc.chefKitchen && !sim) {
+        // checked with the cart below
+      } else {
       // 11.5 — lead time and slot capacity for scheduled orders
       const lead = Math.max(loc.defaultPrepMinutes, loc.scheduleLeadMinutes ?? 0);
       if (scheduledFor < addMinutes(now, lead)) throw new BadRequestException({ message: `Schedule at least ${lead} minutes ahead`, code: 'SCHEDULE_TOO_SOON', earliestAt: addMinutes(now, lead) });
@@ -129,6 +138,9 @@ export class QuoteService {
         const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(orders).where(and(eq(orders.locationId, loc.id), sql`${orders.scheduledFor} >= ${slot.toISOString()} and ${orders.scheduledFor} < ${new Date(slot.getTime() + 900_000).toISOString()}`, sql`${orders.status} not in ('CANCELED','REJECTED')`));
         if (n >= loc.scheduledSlotCapacity) throw new BadRequestException({ message: 'That time is fully booked; pick another slot', code: 'SLOT_FULL' });
       }
+      }
+    } else if (loc.chefKitchen && !sim) {
+      throw new BadRequestException({ message: 'Chef dishes are cooked to order. Choose a day and time.', code: 'SCHEDULE_REQUIRED' });
     } else if (!sim?.ignoreHours && !(await this.openAt(loc, now, tx))) {
       throw new BadRequestException({ message: 'Restaurant is closed right now; schedule for later', code: 'CLOSED', nextOpenAt: await this.nextOpenAt(loc, now, tx) });
     }
@@ -172,6 +184,8 @@ export class QuoteService {
       snapLines.push({ menuItemId: item.id, name: chefName ? chefDishTitle(item.name, chefName) : item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory, ...(ev.customized ? { allergens: ev.allergens, dietaryTags: ev.dietaryTags, prepMinutesDelta: ev.prepMinutesDelta } : {}) });
     }
     const subtotalCents = snapLines.reduce((a, l) => a + l.lineTotalCents, 0);
+    const capacityLines = snapLines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity }));
+    if (loc.chefKitchen && scheduledFor && !sim) await this.chefCalendar.assertOrderable(loc.id, scheduledFor, capacityLines, input.holdKey, tx);
     if (subtotalCents < loc.minOrderCents) throw new BadRequestException(`Minimum order is ${loc.minOrderCents} cents`);
 
     // 25.1–25.3 promotions: automatic offers and the typed code, with eligibility and stacking rules
@@ -284,10 +298,16 @@ export class QuoteService {
       // 11.8 — the policies the customer accepted with this order
       policies: await this.settings.getObject('policies.versions', { cancellation: '2026-11-01', refund: '2026-11-01', terms: '2026-11-01' }),
     };
+    const quoteId = randomUUID();
+    // Chef Network: hold the date's capacity while the customer checks out (released when the quote lapses)
+    if (loc.chefKitchen && scheduledFor && !sim) {
+      const h = await this.chefCalendar.hold({ locationId: loc.id, scheduledFor, lines: capacityLines, quoteId, holdKey: input.holdKey, expiresAt });
+      if (h.remaining !== null && h.remaining <= 3) warnings.push(h.remaining ? `Only ${h.remaining} more portion${h.remaining === 1 ? '' : 's'} left for that day` : 'You’re getting the last portions for that day');
+    }
     if (sim) return { promotions: promo.applied, giftCents, subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, creditsCents, loyaltyCents, totalCents, commissionCents, promotionFunder, promotionPlatformShareCents, taxLines: tax.lines, lines: snapLines, warnings };
     const [q] = await tx
       .insert(quotes)
-      .values({ locationId: loc.id, userId: input.userId ?? null, channel: input.channel, fulfillmentType: input.fulfillmentType, currency: loc.currency, snapshot, subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, totalCents, promoCode: input.promoCode?.toUpperCase() ?? null, promotionFunder, deliveryQuoteId, deliveryProviderCostCents, scheduledFor, promiseAt, expiresAt })
+      .values({ id: quoteId, locationId: loc.id, userId: input.userId ?? null, channel: input.channel, fulfillmentType: input.fulfillmentType, currency: loc.currency, snapshot, subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, totalCents, promoCode: input.promoCode?.toUpperCase() ?? null, promotionFunder, deliveryQuoteId, deliveryProviderCostCents, scheduledFor, promiseAt, expiresAt })
       .returning();
     return this.present(q, warnings);
   }

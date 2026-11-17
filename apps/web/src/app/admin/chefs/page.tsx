@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useState } from 'react';
-import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, WEEKDAYS, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
+import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, chefNoticeText, WEEKDAYS, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
 import { api, API_URL, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Table, Tabs, Textarea } from '@/components/ui';
@@ -175,8 +175,10 @@ function Chefs() {
   const [sel, setSel] = useState<ChefRow | null>(null);
   const [next, setNext] = useState('PAUSED');
   const [reason, setReason] = useState('');
+  const [cal, setCal] = useState<ChefRow | null>(null);
   return (
     <>
+      {cal && <ChefCalendarModal chef={cal} onClose={() => setCal(null)} />}
       <div className="flex gap-2"><Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All chefs</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option><option value="SUSPENDED">Suspended</option></Select></div>
       {error && <Alert>{error}</Alert>}
       <Table rows={data || []} empty="No chefs yet." cols={[
@@ -184,7 +186,7 @@ function Chefs() {
         { key: 'a', label: 'Area', render: (c) => <span className="text-xs">{c.serviceCity}, {c.serviceRegion}</span> },
         { key: 'c', label: 'Cuisines', render: (c) => <span className="text-xs">{c.cuisines.join(', ')}</span> },
         { key: 's', label: 'Status', render: (c) => <div><Badge tone={c.status === 'ACTIVE' ? 'good' : c.status === 'SUSPENDED' ? 'bad' : 'warn'}>{c.status.toLowerCase()}</Badge>{c.status === 'ACTIVE' && <span className="ml-1 text-xs text-ink-500">{c.acceptingOrders ? 'accepting' : 'not accepting'}</span>}{c.statusReason && <div className="text-xs text-ink-500">{c.statusReason}</div>}</div> },
-        { key: 'x', label: '', render: (c) => (can('chefs.manage') ? <Button size="sm" variant="secondary" onClick={() => { setSel(c); setNext(c.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'); setReason(''); }}>Change status</Button> : null) },
+        { key: 'x', label: '', render: (c) => <div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => setCal(c)}>Calendar</Button>{can('chefs.manage') ? <Button size="sm" variant="secondary" onClick={() => { setSel(c); setNext(c.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'); setReason(''); }}>Change status</Button> : null}</div> },
       ]} />
       {sel && (
         <Modal open title={`Status of ${sel.displayName}`} onClose={() => setSel(null)}>
@@ -196,6 +198,31 @@ function Chefs() {
         </Modal>
       )}
     </>
+  );
+}
+
+interface AdminCalendar { timezone: string; settings: { cookingDays: number[]; cutoffHour: number; minLeadDays: number; dailyCapacity: number; maxAdvanceDays: number }; pauses: { id: string; startDate: string; endDate: string; reason: string | null }[]; days: { date: string; open: boolean; pause: { reason: string | null } | null; capacity: number; booked: number; held: number; orders: number; override: { note: string | null } | null }[] }
+
+/** Read-only view of a chef's cooking calendar: settings, time away, and the days with bookings or changes. */
+function ChefCalendarModal({ chef, onClose }: { chef: ChefRow; onClose: () => void }) {
+  const { data, error } = useApi<AdminCalendar>(`/admin/chefs/${chef.id}/calendar`);
+  const busy = (data?.days || []).filter((d) => d.booked || d.held || d.override || d.pause || !d.open);
+  return (
+    <Modal open title={`${chef.displayName}: cooking calendar`} onClose={onClose}>
+      {error && <Alert>{error}</Alert>}
+      {!data ? <p className="text-sm text-ink-500">Loading…</p> : (
+        <div className="space-y-3 text-sm">
+          <p className="text-ink-700">Cooks {data.settings.cookingDays.map((d) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')} · {chefNoticeText(data.settings.minLeadDays, data.settings.cutoffHour)} · {data.settings.dailyCapacity} portions/day · {data.settings.maxAdvanceDays} days ahead</p>
+          {data.pauses.length > 0 && <p><strong>Time away:</strong> {data.pauses.map((p) => `${p.startDate}–${p.endDate}${p.reason ? ` (${p.reason})` : ''}`).join('; ')}</p>}
+          <div className="max-h-80 overflow-y-auto"><Table rows={busy.filter((d) => d.open || d.pause)} empty="No bookings in the next six weeks." cols={[
+            { key: 'd', label: 'Date', render: (d) => d.date },
+            { key: 's', label: 'Status', render: (d) => d.pause ? <Badge tone="warn">away</Badge> : <Badge tone={d.booked + d.held >= d.capacity ? 'bad' : 'good'}>{d.booked + d.held >= d.capacity ? 'full' : 'open'}</Badge> },
+            { key: 'b', label: 'Booked', render: (d) => `${d.booked}/${d.capacity}${d.held ? ` (+${d.held} held)` : ''}` },
+            { key: 'o', label: 'Orders', render: (d) => d.orders },
+          ]} /></div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
