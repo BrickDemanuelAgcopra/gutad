@@ -17,6 +17,7 @@ import { AuditService } from '../../core/audit.service';
 import { NotifyService } from '../../core/notify.service';
 import { SettingsService } from '../../core/settings.service';
 import { ChefFilesService, IncomingFile } from './chef-files.service';
+import { ChefDishesService } from './chef-dishes.service';
 
 type App = typeof chefApplications.$inferSelect;
 const EDITABLE = ['DRAFT', 'CHANGES_REQUESTED'];
@@ -32,6 +33,7 @@ export class ChefApplicationsService {
     private readonly audit: AuditService,
     private readonly notify: NotifyService,
     private readonly settings: SettingsService,
+    private readonly dishes: ChefDishesService,
   ) {}
 
   // ───────────────────────── requirements ─────────────────────────
@@ -420,6 +422,8 @@ export class ChefApplicationsService {
       await this.audit.log({ organizationId: org.id, actorId: user.sub, action: 'chef.application.approve', entityType: 'chef_application', entityId: a.id, after: { organizationId: org.id, locationId: loc.id, profileId: profile.id }, reason }, tx);
       return { organization: org, location: loc, profile, legalSellerId: seller.id };
     });
+    // the starter menu from the application becomes draft dishes in the builder
+    await this.dishes.importStarter(result.profile.id, d.menu?.dishes || []).catch(() => undefined);
     await this.notify.queue({ userId: a.userId, template: 'chef.application.approved', payload: { displayName: display }, dedupeKey: `chef.app:${a.id}:approved` });
     return { ...(await this.load(a.id)), ...result };
   }

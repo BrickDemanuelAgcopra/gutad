@@ -22,13 +22,19 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Mobile: `chefs/apply` (camera/library uploads via expo-image-picker), `chef/index`, `ops/chefs`.
 - [x] Smoke `scripts/smoke-chef-a.mjs`. Full suite 598/598.
 
-## Phase 2 — Chef portal & dish builder [ ]
-- [ ] `chef_dishes` extension (mode, format, lead days, capacity, review status) and the `chefDishTitle` snapshot on order lines.
-- [ ] 5-step dish builder with live preview; menu sections reordered by drag (with move up/down alternatives).
-- [ ] Dish review queue (allergen completeness, portion, photos, price); publish and suspend.
-- [ ] Storefront dishes and fixed-dish ordering (web + mobile).
+## Phase 2 — Chef portal & dish builder [x]
+- [x] `chef_dishes` (migration 0019) extends `menu_items`: mode, special requests (customizable only), fulfillment format, portion, ingredients, allergen declaration, prep time, per-dish capacity/lead/cutoff/advance overrides, photos, review status, pending changes.
+- [x] Quote lines at chef kitchens carry the branded title, so orders, tickets and receipts read “Gutad’s Pumpkin pie — by Chef Carlos”.
+- [x] Approval turns the application’s starter dishes into drafts.
+- [x] 5-step builder (describe → fixed/customizable → options → availability → preview & submit) with a live customer preview. Drafts autosave; ingredient tags and photo upload with a cover image.
+- [x] Live dishes: price and availability apply immediately; ingredients, allergens, photos, description and mode wait in `pendingChanges` for Gutad review (customers keep seeing the approved version).
+- [x] Menu sections with drag-and-drop plus ↑ ↓ buttons (W3C non-drag alternative), move between sections, sold out, archive.
+- [x] Gutad dish review (web tab and mobile Ops): new listings and change diffs; approve, send back with a note, suspend, reinstate.
+- [x] Public storefront dishes by section, dish page (dish first, chef attribution, format, portion, ingredients, allergens, ordering window, sticky or bottom action). Chef carts are scheduled-only at checkout (web and mobile); slots respect the chef’s notice, with a 21-day window.
+- [x] Mobile: chef dishes and editor (camera photos), chef directory, storefront, dish screen, date/time picker in checkout, home banner.
+- [x] Smoke `scripts/smoke-chef-b.mjs`. Full suite 631/631.
 
-## Phase 3 — Customization engine [ ]
+## Phase 3 — Customization engine [ ] (next)
 ## Phase 4 — Advance ordering & capacity [ ]
 ## Phase 5 — Checkout, payments & multi-chef [ ]
 ## Phase 6 — Special requests & quotes [ ]
@@ -36,4 +42,5 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 ## Phase 8 — Hardening & docs [ ]
 
 ## Log
+- 2026-11-16 Phase 2 built and verified locally (631/631 smoke, web build, API/web/mobile typecheck).
 - 2026-11-16 Phase 1 built and verified locally (598/598 smoke, web build, typecheck of API, web and mobile).

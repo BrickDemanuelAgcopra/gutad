@@ -9,17 +9,19 @@ import { Progress } from '@/chef-ui';
 
 interface Row { id: string; status: ChefApplicationStatus; displayName: string | null; email: string; city: string | null; region: string | null; kitchenType: string | null; percentComplete: number; flags: string[]; waitingHours: number | null }
 interface Detail { id: string; status: ChefApplicationStatus; data: ChefApplicationData; progress: { percent: number }; requirements: { key: string; label: string; required: boolean }[]; documents: { id: string; requirementKey: string; status: string; fileId: string; expiresAt: string | null }[]; history: { at: string; action: string; note?: string }[] }
-const Q = { review: 'SUBMITTED,IN_REVIEW,APPEALED', changes: 'CHANGES_REQUESTED', waitlist: 'WAITLISTED', approved: 'APPROVED' } as const;
+const Q = { review: 'SUBMITTED,IN_REVIEW,APPEALED', changes: 'CHANGES_REQUESTED', waitlist: 'WAITLISTED', approved: 'APPROVED', dishes: '' } as const;
+interface RDish { id: string; title: string; chefName: string; kind: string; priceCents: number; portionDesc: string; ingredients: string[]; allergens: string[]; allergensConfirmed: boolean; photos: string[]; pendingChanges: Record<string, unknown> | null; missing: string[] }
 
 /** Chef applications on the phone: queue, documents, approve / decline / waitlist. */
 export default function OpsChefs() {
   const [q, setQ] = useState<keyof typeof Q>('review');
   const [sel, setSel] = useState<string | null>(null);
-  const { data, reload } = useApi<{ items: Row[] }>(`/admin/chef-applications?status=${Q[q]}`, { deps: [q], poll: 30000 });
+  const { data, reload } = useApi<{ items: Row[] }>(q === 'dishes' ? null : `/admin/chef-applications?status=${Q[q]}`, { deps: [q], poll: 30000 });
+  if (q === 'dishes') return <ScrollView style={s.screen} contentContainerStyle={s.pad}><Pills value={q} onChange={setQ} options={[{ id: 'review', label: 'To review' }, { id: 'changes', label: 'Waiting on chef' }, { id: 'waitlist', label: 'Waitlist' }, { id: 'approved', label: 'Approved' }, { id: 'dishes', label: 'Dishes' }]} /><DishQueue /></ScrollView>;
   if (sel) return <AppDetail id={sel} onBack={() => { setSel(null); void reload(); }} />;
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
-      <Pills value={q} onChange={setQ} options={[{ id: 'review', label: 'To review' }, { id: 'changes', label: 'Waiting on chef' }, { id: 'waitlist', label: 'Waitlist' }, { id: 'approved', label: 'Approved' }]} />
+      <Pills value={q} onChange={setQ} options={[{ id: 'review', label: 'To review' }, { id: 'changes', label: 'Waiting on chef' }, { id: 'waitlist', label: 'Waitlist' }, { id: 'approved', label: 'Approved' }, { id: 'dishes', label: 'Dishes' }]} />
       {!data ? <Loading /> : !data.items.length ? <Card><Muted>Nothing in this queue.</Muted></Card> : data.items.map((r) => (
         <Pressable key={r.id} onPress={() => setSel(r.id)}>
           <Card>
@@ -79,5 +81,38 @@ function AppDetail({ id, onBack }: { id: string; onBack: () => void }) {
       )}
       <Card title="History">{d.history.slice().reverse().map((h, i) => <Muted key={i}>{when(h.at)} · {h.action.toLowerCase().replace(/_/g, ' ')}{h.note ? ` — ${h.note}` : ''}</Muted>)}</Card>
     </ScrollView>
+  );
+}
+
+/** Dish review on the phone: new listings and changes to live dishes. */
+function DishQueue() {
+  const { can } = useSession();
+  const { data, reload } = useApi<RDish[]>('/admin/chef-dishes/review');
+  const { run, error, busy } = useAction();
+  const [note, setNote] = useState<Record<string, string>>({});
+  if (!data) return <Loading />;
+  if (!data.length) return <Card><Muted>No dishes waiting for review.</Muted></Card>;
+  return (
+    <View>
+      <ErrorText msg={error} />
+      {data.map((d) => (
+        <Card key={d.id}>
+          {d.photos[0] && <Image source={{ uri: d.photos[0] }} style={{ width: '100%', height: 140, borderRadius: 10, marginBottom: 6 }} />}
+          <Text style={{ fontWeight: '700' }}>{d.title}</Text>
+          <Badge text={d.kind === 'NEW_LISTING' ? 'New listing' : 'Change to live dish'} tone={d.kind === 'NEW_LISTING' ? 'info' : 'warn'} />
+          <Muted>{d.portionDesc} · ${(d.priceCents / 100).toFixed(2)}</Muted>
+          <Muted>Ingredients: {d.ingredients.join(', ')}</Muted>
+          <Text style={{ color: d.allergensConfirmed ? C.ink7 : C.bad, fontSize: 12 }}>Allergens: {d.allergens.join(', ') || 'none'}{d.allergensConfirmed ? '' : ' (not confirmed)'}</Text>
+          {d.pendingChanges && <Text style={{ fontSize: 12, color: C.warn, marginTop: 4 }}>Proposed: {Object.entries(d.pendingChanges).map(([k, v]) => `${k} → ${Array.isArray(v) ? v.join(', ') : String(v)}`).join('; ')}</Text>}
+          {can('chefs.manage') && <>
+            <Input placeholder="Note to the chef (needed to send back)" value={note[d.id] || ''} onChangeText={(t) => setNote({ ...note, [d.id]: t })} />
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              <Button style={{ flex: 1 }} title="Approve" disabled={busy} onPress={() => run(async () => { await api.post(`/admin/chef-dishes/${d.id}/review`, { decision: 'APPROVE' }); await reload(); })} />
+              <Button style={{ flex: 1 }} variant="secondary" title="Send back" disabled={busy || (note[d.id] || '').trim().length < 5} onPress={() => run(async () => { await api.post(`/admin/chef-dishes/${d.id}/review`, { decision: 'CHANGES', note: note[d.id] }); await reload(); })} />
+            </View>
+          </>}
+        </Card>
+      ))}
+    </View>
   );
 }

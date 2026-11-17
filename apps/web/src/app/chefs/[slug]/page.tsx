@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { WEEKDAYS } from '@gutad/shared';
+import { WEEKDAYS, type PublicChefDish } from '@gutad/shared';
+import { ChefDishCard } from '@/components/chef-dish-card';
 import { useApi } from '@/lib/hooks';
 import { Alert, Badge, Card, Spinner } from '@/components/ui';
 import type { PublicChef } from '../page';
@@ -11,6 +12,8 @@ const CRED: Record<string, string> = { GOV_ID: 'Identity verified', FOOD_HANDLER
 export default function ChefStorefront() {
   const { slug } = useParams<{ slug: string }>();
   const { data: c, loading, error } = useApi<PublicChef>(`/public/chefs/${slug}`);
+  const { data: dishes } = useApi<PublicChefDish[]>(`/public/chefs/${slug}/dishes`);
+  const sections = Array.from(new Set((dishes || []).map((d) => d.section || 'Dishes')));
   if (loading) return <Spinner />;
   if (error || !c) return <Alert tone="info">This chef isn’t available. <Link className="underline" href="/chefs">Browse chefs</Link></Alert>;
   return (
@@ -25,6 +28,13 @@ export default function ChefStorefront() {
         </div>
         {!c.acceptingOrders && <Badge tone="warn">Not taking orders right now</Badge>}
       </section>
+      {sections.map((s) => (
+        <section key={s} className="space-y-3">
+          <h2 className="text-xl font-bold">{s}</h2>
+          <div className="grid gap-3 md:grid-cols-2">{(dishes || []).filter((d) => (d.section || 'Dishes') === s).map((d) => <ChefDishCard key={d.id} d={d} />)}</div>
+        </section>
+      ))}
+      {dishes && !dishes.length && <Card><p className="text-sm text-ink-500">{c.displayName} hasn’t published dishes yet.</p></Card>}
       {c.bio && <Card title={`About ${c.displayName}`}><p className="whitespace-pre-line text-sm text-ink-700">{c.bio}</p></Card>}
       <Card title="Ordering">
         <p className="text-sm text-ink-700">Cooks on {(c.operating.cookingDays || []).map((d) => WEEKDAYS[d]).join(', ') || 'selected days'} · order at least {c.operating.minLeadDays ?? 1} day(s) ahead, up to {c.operating.maxAdvanceDays ?? 30} days in advance.</p>

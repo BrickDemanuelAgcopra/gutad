@@ -33,8 +33,8 @@ export default function AdminChefs() {
   return (
     <div className="space-y-4">
       <SectionTitle title="Chef Network" hint="Independent chefs: applications, kitchens and documents, approvals and chef accounts." action={<Link href="/admin/chefs/requirements" className="text-sm underline">Document rules →</Link>} />
-      <Tabs tabs={[{ id: 'applications', label: 'Applications' }, { id: 'chefs', label: 'Chefs' }]} active={tab} onChange={setTab} />
-      {tab === 'applications' ? <Applications /> : <Chefs />}
+      <Tabs tabs={[{ id: 'applications', label: 'Applications' }, { id: 'dishes', label: 'Dish review' }, { id: 'chefs', label: 'Chefs' }]} active={tab} onChange={setTab} />
+      {tab === 'applications' ? <Applications /> : tab === 'dishes' ? <DishReview /> : <Chefs />}
     </div>
   );
 }
@@ -196,5 +196,59 @@ function Chefs() {
         </Modal>
       )}
     </>
+  );
+}
+
+interface ReviewDish { id: string; title: string; chefName: string; chefSlug: string; kind: 'NEW_LISTING' | 'CHANGE'; reviewStatus: string; priceCents: number; portionDesc: string; ingredients: string[]; allergens: string[]; dietaryTags: string[]; allergensConfirmed: boolean; photos: string[]; mode: string; acceptsSpecialRequests: boolean; fulfillmentFormat: string; description: string | null; pendingChanges: Record<string, unknown> | null; missing: string[]; submittedAt: string | null }
+
+/** New listings and material changes to live dishes: ingredients, allergens, portion, photos, price, recipe mode. */
+function DishReview() {
+  const { can } = useSession();
+  const { data, reload } = useApi<ReviewDish[]>('/admin/chef-dishes/review', { poll: 30000 });
+  const { run, error, busy } = useAction();
+  const [note, setNote] = useState<Record<string, string>>({});
+  const decide = (id: string, decision: string) => run(async () => { await api.post(`/admin/chef-dishes/${id}/review`, { decision, note: note[id] }); await reload(); });
+  if (!data) return <p className="text-sm text-ink-500">Loading…</p>;
+  if (!data.length) return <Card><p className="text-sm text-ink-500">No dishes waiting for review.</p></Card>;
+  const fmt = (v: unknown) => (Array.isArray(v) ? v.join(', ') || '—' : v === null || v === undefined ? '—' : String(v));
+  return (
+    <div className="space-y-3">
+      {error && <Alert>{error}</Alert>}
+      {data.map((d) => (
+        <Card key={d.id}>
+          <div className="flex flex-col gap-4 sm:flex-row">
+            {d.photos[0] && <img src={d.photos[0]} alt="" className="h-32 w-full rounded-xl object-cover sm:w-44" />}
+            <div className="min-w-0 flex-1 space-y-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2"><strong className="text-base">{d.title}</strong><Badge tone={d.kind === 'NEW_LISTING' ? 'info' : 'warn'}>{d.kind === 'NEW_LISTING' ? 'New listing' : 'Change to a live dish'}</Badge><Link href={`/chefs/${d.chefSlug}`} className="text-xs underline">{d.chefName}</Link></div>
+              <KeyValue rows={[
+                ['Price', money(d.priceCents)],
+                ['Portion', d.portionDesc || '—'],
+                ['Format', d.fulfillmentFormat.toLowerCase().replace('_', ' ')],
+                ['Recipe mode', `${d.mode.toLowerCase()}${d.acceptsSpecialRequests ? ' · accepts special requests' : ''}`],
+                ['Ingredients', d.ingredients.join(', ') || '—'],
+                ['Allergens', `${d.allergens.join(', ') || 'none'}${d.allergensConfirmed ? ' (confirmed by chef)' : ' — NOT confirmed'}`],
+                ['Dietary labels', d.dietaryTags.join(', ') || '—'],
+              ]} />
+              {d.description && <p className="text-ink-700">{d.description}</p>}
+              {d.pendingChanges && (
+                <div className="rounded-lg bg-amber-50 p-2 text-xs">
+                  <strong>Proposed changes</strong>
+                  <ul className="mt-1 space-y-0.5">{Object.entries(d.pendingChanges).map(([k, v]) => <li key={k}><span className="text-ink-500">{k}:</span> {fmt((d as unknown as Record<string, unknown>)[k])} → <strong>{fmt(v)}</strong></li>)}</ul>
+                  {Array.isArray(d.pendingChanges.ingredients) && !d.pendingChanges.allergens && <p className="mt-1 text-amber-800">⚠ Ingredients changed without an allergen update; check the allergen list.</p>}
+                </div>
+              )}
+              {!!d.missing.length && <p className="text-xs text-red-600">Missing: {d.missing.join(', ')}</p>}
+              {can('chefs.manage') && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <input className="min-w-[220px] flex-1 rounded-lg border border-ink-100 px-2 py-1.5 text-sm" placeholder="Note to the chef (needed to send back)" value={note[d.id] || ''} onChange={(e) => setNote({ ...note, [d.id]: e.target.value })} />
+                  <Button size="sm" disabled={busy} onClick={() => decide(d.id, 'APPROVE')}>{d.kind === 'NEW_LISTING' ? 'Approve & publish' : 'Approve changes'}</Button>
+                  <Button size="sm" variant="secondary" disabled={busy || (note[d.id] || '').trim().length < 5} onClick={() => decide(d.id, 'CHANGES')}>{d.kind === 'NEW_LISTING' ? 'Send back' : 'Decline changes'}</Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      ))}
+    </div>
   );
 }

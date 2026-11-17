@@ -35,13 +35,15 @@ export default function CheckoutPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idem = useRef(newIdempotencyKey());
-  const { data: loc } = useApi<{ id: string; name: string; acceptsDelivery: boolean; acceptsPickup: boolean; acceptsDineIn?: boolean; pickupTimes: { date: string; slots: string[] }[]; timezone: string }>(cart.locationId ? `/public/locations/${cart.locationId}` : null);
+  const { data: loc } = useApi<{ id: string; name: string; acceptsDelivery: boolean; acceptsPickup: boolean; acceptsDineIn?: boolean; chefKitchen?: boolean; pickupTimes: { date: string; slots: string[] }[]; timezone: string }>(cart.locationId ? `/public/locations/${cart.locationId}` : null);
   const { data: credits } = useApi<{ availableCents: number }>(user ? '/me/credits' : null);
   const { data: gifts, reload: reloadGifts } = useApi<{ balanceCents: number }>(user ? '/me/gift-cards' : null);
   const [giftCode, setGiftCode] = useState('');
   const [giftMsg, setGiftMsg] = useState<string | null>(null);
   const addGift = async () => { try { const r = await api.post<{ walletCents: number }>('/me/gift-cards/claim', { code: giftCode }); setGiftCode(''); setGiftMsg(`Gift balance ${money(r.walletCents)} ready to use.`); setUseGift(true); reloadGifts(); } catch (e) { setGiftMsg((e as Error).message); } };
   const { data: cards } = useApi<{ id: string; brand: string | null; last4: string | null; isDefault: boolean }[]>(user ? '/me/payment-methods' : null);
+  // chef dishes need notice: the cart is always scheduled, starting at the first cooking day with open slots
+  useEffect(() => { if (loc?.chefKitchen && !schedule) setSchedule({ date: loc.pickupTimes?.find((d) => d.slots.length)?.date || '', time: '' }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [loc?.id, loc?.chefKitchen]);
   useEffect(() => { const d = cards?.find((c) => c.isDefault) || cards?.[0]; if (d && !savedCardId) setSavedCardId(d.id); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [cards]);
   const { data: me } = useApi<{ addresses: { line1: string; city: string; region: string; postalCode: string; lat: number | null; lng: number | null; isDefault: boolean }[] }>(user ? '/auth/me' : null);
 
@@ -139,8 +141,8 @@ export default function CheckoutPage() {
           {fulfillment === 'DINE_IN' && <Input className="mt-3 w-40" label="Table number" value={table} onChange={(e) => setTable(e.target.value)} />}
           {fulfillment !== 'DINE_IN' && <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={utensils} onChange={(e) => setUtensils(e.target.checked)} /> Include utensils and napkins</label>}
           <div className="mt-3 flex flex-wrap items-end gap-2">
-            <Select label="When" value={schedule ? 'later' : 'now'} onChange={(e) => setSchedule(e.target.value === 'now' ? null : { date: loc?.pickupTimes?.[0]?.date || '', time: '' })}><option value="now">As soon as possible</option><option value="later">Schedule for later</option></Select>
-            {schedule && <Select label="Day" value={schedule.date} onChange={(e) => setSchedule({ date: e.target.value, time: '' })}>{loc?.pickupTimes?.map((d) => <option key={d.date} value={d.date}>{d.date}</option>)}</Select>}
+            {!loc?.chefKitchen && <Select label="When" value={schedule ? 'later' : 'now'} onChange={(e) => setSchedule(e.target.value === 'now' ? null : { date: loc?.pickupTimes?.find((d) => d.slots.length)?.date || '', time: '' })}><option value="now">As soon as possible</option><option value="later">Schedule for later</option></Select>}
+            {schedule && <Select label={loc?.chefKitchen ? 'Date (chef cooking days)' : 'Day'} value={schedule.date} onChange={(e) => setSchedule({ date: e.target.value, time: '' })}>{loc?.pickupTimes?.filter((d) => d.slots.length).map((d) => <option key={d.date} value={d.date}>{new Date(`${d.date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</option>)}</Select>}
             {schedule && <Select label="Time" value={schedule.time} onChange={(e) => setSchedule({ ...schedule, time: e.target.value })}><option value="">Pick a time</option>{loc?.pickupTimes?.find((d) => d.date === schedule.date)?.slots.map((s) => <option key={s} value={s}>{s}</option>)}</Select>}
           </div>
           {fulfillment === 'DELIVERY' && (

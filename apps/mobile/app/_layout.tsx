@@ -23,6 +23,11 @@ export default function RootLayout() {
         <Stack.Screen name="ops/chefs" options={{ title: 'Chef applications' }} />
         <Stack.Screen name="chefs/apply" options={{ title: 'Cook with Gutad' }} />
         <Stack.Screen name="chef/index" options={{ title: 'Chef dashboard' }} />
+        <Stack.Screen name="chef/dishes" options={{ title: 'Dishes' }} />
+        <Stack.Screen name="chef/dish/[id]" options={{ title: 'Edit dish' }} />
+        <Stack.Screen name="chefs/index" options={{ title: 'Chefs' }} />
+        <Stack.Screen name="chefs/[slug]" options={{ title: 'Chef' }} />
+        <Stack.Screen name="chefs/dish/[id]" options={{ title: 'Dish' }} />
         <Stack.Screen name="ops/executive" options={{ title: 'Executive dashboard' }} />
         <Stack.Screen name="ops/live" options={{ title: 'Live operations' }} />
         <Stack.Screen name="ops/alerts" options={{ title: 'Alerts' }} />

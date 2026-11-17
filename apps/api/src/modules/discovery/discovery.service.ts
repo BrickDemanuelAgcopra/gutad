@@ -161,6 +161,7 @@ export class DiscoveryService {
       acceptsEvents: loc.acceptsEvents,
       acceptsCatering: loc.acceptsCatering,
       platformOperated: loc.platformOperated,
+      chefKitchen: loc.chefKitchen,
       isPaused: loc.isPaused,
       pausedReason: loc.pausedReason,
       minOrderCents: loc.minOrderCents,
@@ -208,7 +209,7 @@ export class DiscoveryService {
   /** 11.5 — hide 15-minute slots already at the location's scheduled-order capacity. */
   private async withoutFullSlots(loc: typeof locations.$inferSelect, days: { date: string; slots: string[] }[]) {
     if (!loc.scheduledSlotCapacity) return days;
-    const r = await this.db.execute(sql`select to_timestamp(floor(extract(epoch from scheduled_for) / 900) * 900) as slot, count(*)::int as n from orders where location_id = ${loc.id} and scheduled_for > now() and scheduled_for < now() + interval '8 days' and status not in ('CANCELED','REJECTED') group by 1 having count(*) >= ${loc.scheduledSlotCapacity}`);
+    const r = await this.db.execute(sql`select to_timestamp(floor(extract(epoch from scheduled_for) / 900) * 900) as slot, count(*)::int as n from orders where location_id = ${loc.id} and scheduled_for > now() and scheduled_for < now() + interval '22 days' and status not in ('CANCELED','REJECTED') group by 1 having count(*) >= ${loc.scheduledSlotCapacity}`);
     const full = new Set(((r as unknown as { rows: { slot: string }[] }).rows || []).map((x) => { const lp = localParts(new Date(x.slot), loc.timezone); return `${lp.ymd} ${lp.hhmm}`; }));
     return full.size ? days.map((d) => ({ ...d, slots: d.slots.filter((t) => !full.has(`${d.date} ${t}`)) })) : days;
   }
@@ -216,7 +217,10 @@ export class DiscoveryService {
   private eligibleTimes(loc: typeof locations.$inferSelect, hours: (typeof openingHours.$inferSelect)[], service: string) {
     const out: { date: string; slots: string[] }[] = [];
     const now = new Date();
-    for (let d = 0; d < 7; d++) {
+    // scheduled-order notice (e.g. a chef's minimum lead days): no slot before now + lead
+    const lead = loc.scheduleLeadMinutes ? localParts(new Date(now.getTime() + loc.scheduleLeadMinutes * 60_000), loc.timezone) : null;
+    const days = loc.chefKitchen ? 21 : 7;
+    for (let d = 0; d < days; d++) {
       const day = new Date(now.getTime() + d * 86_400_000);
       const lp = localParts(day, loc.timezone);
       const todays = hours.filter((h) => h.dayOfWeek === lp.dayOfWeek && (h.service === 'ALL' || h.service === service));
@@ -228,6 +232,7 @@ export class DiscoveryService {
         for (let t = hh * 60 + mm; t + loc.defaultPrepMinutes <= closeMin; t += 15) {
           const s = `${String(Math.floor(t / 60) % 24).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
           if (d === 0 && s < lp.hhmm) continue;
+          if (lead && `${lp.ymd} ${s}` < `${lead.ymd} ${lead.hhmm}`) continue;
           slots.push(s);
         }
         hh = 0;

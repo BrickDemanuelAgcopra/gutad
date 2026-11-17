@@ -3,6 +3,7 @@ import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from
 import { createdAt, id, ts, updatedAt } from './_common';
 import { organizations, users } from './accounts';
 import { locations } from './merchants';
+import { menuItems } from './catalog';
 
 /** A chef's guided, resumable application. `data` holds the per-step draft (ChefApplicationData). */
 export const chefApplications = pgTable(
@@ -121,4 +122,53 @@ export const chefProfiles = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('chef_profiles_org_uq').on(t.organizationId), uniqueIndex('chef_profiles_slug_uq').on(t.slug), index('chef_profiles_user_idx').on(t.userId)],
+);
+
+/**
+ * A chef's dish: the sellable `menu_items` row plus Chef Network details. The customer-facing title is always
+ * "Gutad's <dishName> — by <chef>" (chefDishTitle). Material edits to a live dish wait in `pendingChanges` for review.
+ */
+export const chefDishes = pgTable(
+  'chef_dishes',
+  {
+    id: id(),
+    menuItemId: uuid('menu_item_id')
+      .notNull()
+      .references(() => menuItems.id, { onDelete: 'cascade' }),
+    chefProfileId: uuid('chef_profile_id')
+      .notNull()
+      .references(() => chefProfiles.id, { onDelete: 'cascade' }),
+    locationId: uuid('location_id')
+      .notNull()
+      .references(() => locations.id),
+    dishName: text('dish_name').notNull(),
+    description: text('description'),
+    cuisine: text('cuisine'),
+    portionDesc: text('portion_desc').notNull().default(''),
+    ingredients: text('ingredients').array().notNull().default([]),
+    allergensConfirmed: boolean('allergens_confirmed').notNull().default(false),
+    /** FIXED | CUSTOMIZABLE */
+    mode: text('mode').notNull().default('FIXED'),
+    acceptsSpecialRequests: boolean('accepts_special_requests').notNull().default(false),
+    /** HOT | CHILLED_REHEAT | FROZEN | ROOM_TEMP */
+    fulfillmentFormat: text('fulfillment_format').notNull().default('HOT'),
+    prepMinutes: integer('prep_minutes').notNull().default(45),
+    /** null = the chef's defaults */
+    dailyCapacity: integer('daily_capacity'),
+    minLeadDays: integer('min_lead_days'),
+    cutoffHour: integer('cutoff_hour'),
+    maxAdvanceDays: integer('max_advance_days'),
+    photos: text('photos').array().notNull().default([]),
+    /** DRAFT | IN_REVIEW | CHANGES_REQUESTED | PUBLISHED | SUSPENDED | ARCHIVED */
+    reviewStatus: text('review_status').notNull().default('DRAFT'),
+    reviewNote: text('review_note'),
+    /** material edits to a live dish waiting for review */
+    pendingChanges: jsonb('pending_changes'),
+    submittedAt: ts('submitted_at'),
+    publishedAt: ts('published_at'),
+    reviewedById: uuid('reviewed_by_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('chef_dishes_item_uq').on(t.menuItemId), index('chef_dishes_chef_idx').on(t.chefProfileId), index('chef_dishes_status_idx').on(t.reviewStatus)],
 );

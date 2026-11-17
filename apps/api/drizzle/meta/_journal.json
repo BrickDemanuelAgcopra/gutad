@@ -134,6 +134,13 @@
       "when": 1794883134427,
       "tag": "0018_chef_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794886258592,
+      "tag": "0019_chef_dishes",
+      "breakpoints": true
     }
   ]
 }

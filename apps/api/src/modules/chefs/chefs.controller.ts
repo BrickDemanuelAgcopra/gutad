@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -9,6 +9,7 @@ import { zod } from '../../common/zod.pipe';
 import { ChefApplicationsService } from './chef-applications.service';
 import { ChefFilesService, IncomingFile, MAX_CHEF_FILE_BYTES } from './chef-files.service';
 import { ChefsService } from './chefs.service';
+import { ChefDishesService } from './chef-dishes.service';
 
 const StepDto = z.record(z.string(), z.unknown());
 const DocDto = z.object({ requirementKey: z.string().min(2), expiresAt: z.string().optional().or(z.literal('').transform(() => undefined)) });
@@ -19,6 +20,9 @@ const ChangesDto = z.object({ steps: z.array(z.string()).min(1), note: z.string(
 const DecideDto = z.object({ decision: z.enum(['APPROVE', 'REJECT', 'WAITLIST']), reason: z.string().min(5).max(2000) });
 const ReqDto = z.object({ key: z.string().min(2).max(60), label: z.string().min(2).max(200), description: z.string().max(500).nullable().optional(), regions: z.array(z.string()).optional(), kitchenTypes: z.array(z.string()).optional(), required: z.boolean().optional(), needsExpiry: z.boolean().optional(), active: z.boolean().optional(), sortOrder: z.number().int().optional() });
 const ProfileDto = z.object({ bio: z.string().max(3000).optional(), cuisines: z.array(z.string()).max(10).optional(), languages: z.array(z.string()).max(10).optional(), experienceYears: z.number().int().min(0).max(80).nullable().optional(), portraitFileId: z.string().uuid().nullable().optional(), portfolioFileIds: z.array(z.string().uuid()).max(12).optional(), serviceRadiusKm: z.number().int().min(1).max(200).optional() });
+const DishDto = z.object({ dishName: z.string().min(1).max(80).optional(), description: z.string().max(1000).nullable().optional(), cuisine: z.string().max(60).nullable().optional(), portionDesc: z.string().max(120).optional(), ingredients: z.array(z.string().min(1).max(60)).max(40).optional(), allergens: z.array(z.string()).max(20).optional(), allergensConfirmed: z.boolean().optional(), dietaryTags: z.array(z.string()).max(12).optional(), priceCents: z.number().int().min(0).max(100_000).optional(), mode: z.enum(['FIXED', 'CUSTOMIZABLE']).optional(), acceptsSpecialRequests: z.boolean().optional(), fulfillmentFormat: z.enum(['HOT', 'CHILLED_REHEAT', 'FROZEN', 'ROOM_TEMP']).optional(), prepMinutes: z.number().int().min(5).max(24 * 60).optional(), dailyCapacity: z.number().int().min(1).max(500).nullable().optional(), minLeadDays: z.number().int().min(0).max(60).nullable().optional(), cutoffHour: z.number().int().min(0).max(23).nullable().optional(), maxAdvanceDays: z.number().int().min(1).max(365).nullable().optional(), photos: z.array(z.string()).max(8).optional(), sectionId: z.string().uuid().optional() });
+const ReorderDto = z.object({ sections: z.array(z.object({ id: z.string().uuid(), dishIds: z.array(z.string().uuid()) })).min(1) });
+const DishReviewDto = z.object({ decision: z.enum(['APPROVE', 'CHANGES', 'SUSPEND', 'REINSTATE']), note: z.string().max(1000).optional() });
 const StatusDto = z.object({ status: z.enum(['ACTIVE', 'PAUSED', 'SUSPENDED']), reason: z.string().min(5).max(1000) });
 
 function send(res: Response, d: { fileName: string; mimeType: string; content: Buffer }, cache: 'public' | 'private') {
@@ -36,7 +40,29 @@ function send(res: Response, d: { fileName: string; mimeType: string; content: B
 @ApiBearerAuth()
 @Controller()
 export class ChefsController {
-  constructor(private readonly apps: ChefApplicationsService, private readonly chefs: ChefsService, private readonly files: ChefFilesService) {}
+  constructor(private readonly apps: ChefApplicationsService, private readonly chefs: ChefsService, private readonly files: ChefFilesService, private readonly dishes: ChefDishesService) {}
+
+  // ───── dishes: public
+  @Public() @Get('public/chefs/:slug/dishes') storefront(@Param('slug') slug: string) { return this.dishes.storefront(slug); }
+  @Public() @Get('public/chef-dishes/:id') publicDish(@Param('id') id: string) { return this.dishes.publicDishById(id); }
+
+  // ───── dishes: chef builder
+  @Get('chef/menu') menu(@CurrentUser() u: JwtPayload) { return this.dishes.myMenu(u); }
+  @Post('chef/menu/sections') addSection(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ name: z.string().min(1).max(60) }))) b: { name: string }) { return this.dishes.addSection(u, b.name); }
+  @Patch('chef/menu/sections/:id') renameSection(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ name: z.string().min(1).max(60) }))) b: { name: string }) { return this.dishes.renameSection(u, id, b.name); }
+  @Delete('chef/menu/sections/:id') deleteSection(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.dishes.deleteSection(u, id); }
+  @Put('chef/menu/order') reorder(@CurrentUser() u: JwtPayload, @Body(zod(ReorderDto)) b: z.infer<typeof ReorderDto>) { return this.dishes.reorder(u, b); }
+  @Post('chef/dishes') createDish(@CurrentUser() u: JwtPayload, @Body(zod(DishDto)) b: z.infer<typeof DishDto>) { return this.dishes.create(u, b); }
+  @Get('chef/dishes/:id') getDish(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.dishes.get(u, id); }
+  @Patch('chef/dishes/:id') updateDish(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(DishDto)) b: z.infer<typeof DishDto>) { return this.dishes.update(u, id, b); }
+  @Post('chef/dishes/:id/submit') submitDish(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.dishes.submit(u, id); }
+  @Post('chef/dishes/:id/sold-out') soldOut(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ soldOut: z.boolean() }))) b: { soldOut: boolean }) { return this.dishes.setSoldOut(u, id, b.soldOut); }
+  @Post('chef/dishes/:id/archive') archiveDish(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.dishes.archive(u, id); }
+
+  // ───── dishes: Gutad review
+  @Get('admin/chef-dishes/review') dishQueue(@CurrentUser() u: JwtPayload) { return this.dishes.reviewQueue(u); }
+  @Get('admin/chef-dishes') dishList(@CurrentUser() u: JwtPayload, @Query('status') status?: string, @Query('chefId') chefId?: string) { return this.dishes.adminList(u, { status, chefId }); }
+  @Post('admin/chef-dishes/:id/review') reviewDish(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(DishReviewDto)) b: z.infer<typeof DishReviewDto>) { return this.dishes.review(u, id, b); }
 
   // ───── public
   @Public() @Get('public/chef-network/config') async config() {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CardField, type CardToken } from '@/card-field';
-import { ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import { GutadApiError, type Quote } from '@gutad/shared';
@@ -37,15 +37,27 @@ export default function Checkout() {
   const [busy, setBusy] = useState(false);
   const idem = useRef(newIdempotencyKey());
   const tipCents = Math.round((subtotal * tip) / 100);
+  // scheduled orders (required for Gutad Chef Network dishes, which need notice)
+  const { data: loc } = useApi<{ id: string; chefKitchen?: boolean; pickupTimes: { date: string; slots: string[] }[] }>(cart.locationId ? `/public/locations/${cart.locationId}` : null, { deps: [cart.locationId] });
+  const [schedule, setSchedule] = useState<{ date: string; time: string } | null>(null);
+  const [scheduledFor, setScheduledFor] = useState<string | undefined>(undefined);
+  const days = (loc?.pickupTimes || []).filter((d) => d.slots.length);
+  useEffect(() => { if (loc?.chefKitchen && !schedule && days[0]) setSchedule({ date: days[0].date, time: '' }); }, [loc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!schedule?.time || !cart.locationId) { setScheduledFor(undefined); return; }
+    api.get<{ iso: string }>(`/public/locations/${cart.locationId}/local-time?date=${schedule.date}&time=${schedule.time}`).then((r) => setScheduledFor(r.iso)).catch(() => setScheduledFor(undefined));
+  }, [schedule, cart.locationId]);
+  const needsTime = !!loc?.chefKitchen && !scheduledFor;
   useEffect(() => {
     if (!cart.locationId || !cart.lines.length) return;
+    if (needsTime || (schedule?.time && !scheduledFor)) { setQuote(null); return; }
     const t = setTimeout(() => {
-      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, promoCode: promo || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
+      api.post<Quote>('/quotes', { locationId: cart.locationId, channel: 'MARKETPLACE', fulfillmentType: fulfillment, scheduledFor, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions })), tipCents, promoCode: promo || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...addr, lat: addr.lat || undefined, lng: addr.lng || undefined } : undefined })
         .then((q) => { setQuote(q); setError(null); })
         .catch((e) => { setQuote(null); const b = codeOf(e); setError(b?.code && BLOCKED[b.code] ? `${BLOCKED[b.code]}${b.nextOpenAt ? ` Opens ${when(b.nextOpenAt)}.` : ''}` : (e as Error).message); });
     }, 350);
     return () => clearTimeout(t);
-  }, [cart, fulfillment, tipCents, promo, addr, useGift]);
+  }, [cart, fulfillment, tipCents, promo, addr, useGift, scheduledFor, needsTime]); // eslint-disable-line react-hooks/exhaustive-deps
   const useMyLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
@@ -71,6 +83,21 @@ export default function Checkout() {
       {parked.length > 0 && <Card title="Your other saved orders"><Muted>Separate orders. The next one opens after you place this one.</Muted>{parked.map((p) => <View key={p.locationId} style={[s.row, { marginTop: 6 }]}><Text style={{ flex: 1 }}>{p.locationName} · {money(cartSubtotal(p))}</Text><Button title="Do first" variant="secondary" onPress={() => switchTo(p.locationId!)} /><Button title="Remove" variant="ghost" onPress={() => discardParked(p.locationId!)} /></View>)}</Card>}
       <Card title={`Order from ${cart.locationName}`}>
         {cart.lines.map((l) => <View key={l.key} style={[s.row, { marginBottom: 6 }]}><View style={{ flex: 1 }}><Text>{l.name}</Text>{l.modifierNames.length > 0 && <Muted>{l.modifierNames.join(', ')}</Muted>}</View><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Button title="−" variant="secondary" onPress={() => setQty(l.key, l.quantity - 1)} /><Text>{l.quantity}</Text><Button title="+" variant="secondary" onPress={() => setQty(l.key, l.quantity + 1)} /><Text style={{ width: 60, textAlign: 'right' }}>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</Text></View></View>)}
+      </Card>
+      <Card title="When">
+        {!loc?.chefKitchen && <View style={{ flexDirection: 'row', gap: 8 }}><Button title="As soon as possible" variant={schedule ? 'secondary' : 'primary'} onPress={() => setSchedule(null)} /><Button title="Schedule" variant={schedule ? 'primary' : 'secondary'} onPress={() => setSchedule({ date: days[0]?.date || '', time: '' })} /></View>}
+        {loc?.chefKitchen && <Muted>Chef dishes are cooked to order. Pick a cooking day and time.</Muted>}
+        {schedule && (
+          <>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }} contentContainerStyle={{ gap: 6 }}>
+              {days.map((d) => { const on = d.date === schedule.date; const dt = new Date(`${d.date}T12:00:00`); return <Pressable key={d.date} accessibilityRole="radio" accessibilityState={{ checked: on }} onPress={() => setSchedule({ date: d.date, time: '' })} style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: on ? C.brand : C.ink1, backgroundColor: on ? '#fff4ec' : C.white, alignItems: 'center' }}><Text style={{ fontSize: 11, color: C.ink5 }}>{dt.toLocaleDateString('en-US', { weekday: 'short' })}</Text><Text style={{ fontWeight: '700', color: C.ink }}>{dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</Text></Pressable>; })}
+            </ScrollView>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+              {(days.find((d) => d.date === schedule.date)?.slots || []).filter((_, i) => i % 2 === 0).map((t) => { const on = t === schedule.time; return <Pressable key={t} accessibilityRole="radio" accessibilityState={{ checked: on }} onPress={() => setSchedule({ ...schedule, time: t })} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: on ? C.brand : C.white, borderWidth: 1, borderColor: on ? C.brand : C.ink1 }}><Text style={{ color: on ? C.white : C.ink7, fontSize: 12, fontWeight: '600' }}>{t}</Text></Pressable>; })}
+            </View>
+            {!days.length && <Muted>No times available right now.</Muted>}
+          </>
+        )}
       </Card>
       <Card title="Fulfillment">
         <View style={{ flexDirection: 'row', gap: 8 }}><Button title="Pickup" variant={fulfillment === 'PICKUP' ? 'primary' : 'secondary'} onPress={() => setFulfillment('PICKUP')} /><Button title="Delivery" variant={fulfillment === 'DELIVERY' ? 'primary' : 'secondary'} onPress={() => setFulfillment('DELIVERY')} /></View>

@@ -191,3 +191,42 @@ export function SaveBadge({ state, error }: { state: SaveState; error?: string |
   if (!t) return null;
   return <span className={`text-xs ${state === 'error' ? 'text-red-600' : 'text-ink-500'}`} aria-live="polite">{state === 'saved' ? '✓ ' : ''}{t}</span>;
 }
+
+/**
+ * Reorderable list: drag a row by its handle (pointer) or use the ↑ ↓ buttons (keyboard and touch), per W3C's
+ * requirement for a non-dragging alternative. Calls onChange with the new order.
+ */
+export function SortableList<T>({ items, getKey, onChange, render, label }: { items: T[]; getKey: (t: T) => string; onChange: (next: T[]) => void; render: (t: T, i: number) => ReactNode; label: (t: T) => string }) {
+  const [drag, setDrag] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= items.length || from === to) return;
+    const next = [...items];
+    const [x] = next.splice(from, 1);
+    next.splice(to, 0, x);
+    onChange(next);
+  };
+  return (
+    <ul className="space-y-2">
+      {items.map((t, i) => (
+        <li
+          key={getKey(t)}
+          draggable
+          onDragStart={(e) => { setDrag(i); e.dataTransfer.effectAllowed = 'move'; }}
+          onDragOver={(e) => { e.preventDefault(); setOver(i); }}
+          onDragLeave={() => setOver((o) => (o === i ? null : o))}
+          onDrop={(e) => { e.preventDefault(); if (drag !== null) move(drag, i); setDrag(null); setOver(null); }}
+          onDragEnd={() => { setDrag(null); setOver(null); }}
+          className={`flex items-stretch gap-2 rounded-xl border bg-white transition ${drag === i ? 'opacity-50' : ''} ${over === i && drag !== null && drag !== i ? 'border-brand-500 ring-2 ring-brand-100' : 'border-ink-100'}`}
+        >
+          <span className="flex cursor-grab select-none items-center px-2 text-ink-300 active:cursor-grabbing" aria-hidden title="Drag to reorder">⋮⋮</span>
+          <div className="min-w-0 flex-1 py-2">{render(t, i)}</div>
+          <div className="flex flex-col justify-center gap-0.5 pr-2">
+            <button type="button" aria-label={`Move ${label(t)} up`} disabled={i === 0} onClick={() => move(i, i - 1)} className="rounded px-1.5 text-xs text-ink-500 hover:bg-ink-50 disabled:opacity-30">↑</button>
+            <button type="button" aria-label={`Move ${label(t)} down`} disabled={i === items.length - 1} onClick={() => move(i, i + 1)} className="rounded px-1.5 text-xs text-ink-500 hover:bg-ink-50 disabled:opacity-30">↓</button>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}

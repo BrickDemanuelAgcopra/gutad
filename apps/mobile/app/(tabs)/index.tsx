@@ -31,6 +31,7 @@ export default function Discover() {
   return (
     <View style={s.screen}>
       <View style={[s.pad, { paddingBottom: 0 }]}>
+        <Link href="/chefs" asChild><Pressable accessibilityRole="link" style={{ backgroundColor: '#fff4ec', borderRadius: 14, padding: 12, marginBottom: 10 }}><Text style={{ fontWeight: '700', color: C.ink }}>👩‍🍳 Gutad Chef Network</Text><Text style={{ color: C.ink5, fontSize: 12 }}>Dishes by independent chefs · order ahead for holidays</Text></Pressable></Link>
         <Input placeholder="Search cuisine, dish or restaurant" value={q} onChangeText={setQ} />
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <View style={{ flex: 1 }}><Input placeholder="City" value={city} onChangeText={(v) => { setCity(v); setNear(null); }} /></View>

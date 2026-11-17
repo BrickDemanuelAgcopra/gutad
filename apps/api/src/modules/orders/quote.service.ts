@@ -1,12 +1,12 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { brands, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
+import { brands, chefProfiles, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
 import { brandSellable } from '../../common/brand-rules';
 import { DEFAULT_PAYMENT_METHODS, enabledMethods, type AppliedPromotion, type PaymentMethodsConfig } from '@gutad/shared';
 import { giftBalance } from '../growth/gift-tender';
 import { assertCashLimit, creditAllowance } from '../customers/limits';
-import { cartCompatibility, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
+import { cartCompatibility, chefDishTitle, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
@@ -140,6 +140,8 @@ export class QuoteService {
     const brandIds = [...new Set([...items.values()].map((i) => i.brandId).filter((x): x is string => !!x))];
     const brandRows = new Map((brandIds.length ? await tx.select().from(brands).where(inArray(brands.id, brandIds)) : []).map((b) => [b.id, b]));
     const snapLines: QuoteSnapshotLine[] = [];
+    // Gutad Chef Network: lines carry the branded title ("Gutad's Spaghetti — by Chef Carlos") onto orders, tickets and receipts
+    const chefName = loc.chefKitchen ? ((await tx.select({ n: chefProfiles.displayName }).from(chefProfiles).where(eq(chefProfiles.locationId, loc.id)).limit(1))[0]?.n ?? null) : null;
     for (const l of input.lines) {
       const item = items.get(l.menuItemId);
       if (!item) {
@@ -162,7 +164,7 @@ export class QuoteService {
       }
       const mods = this.resolveModifiers(item, l.modifierOptionIds || []);
       const modifiersCents = mods.reduce((a, m) => a + m.priceCents, 0);
-      snapLines.push({ menuItemId: item.id, name: item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory });
+      snapLines.push({ menuItemId: item.id, name: chefName ? chefDishTitle(item.name, chefName) : item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory });
     }
     const subtotalCents = snapLines.reduce((a, l) => a + l.lineTotalCents, 0);
     if (subtotalCents < loc.minOrderCents) throw new BadRequestException(`Minimum order is ${loc.minOrderCents} cents`);

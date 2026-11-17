@@ -169,3 +169,81 @@ export const DEFAULT_CHEF_DOC_REQUIREMENTS: (ChefDocRequirement & { sortOrder: n
   { key: 'LIABILITY_INSURANCE', label: 'General / product liability insurance', description: 'Certificate of insurance', regions: [], kitchenTypes: [], required: true, needsExpiry: true, sortOrder: 7 },
   { key: 'BUSINESS_REGISTRATION', label: 'Business registration', description: 'Articles of organization or business license, if you sell as a business', regions: [], kitchenTypes: [], required: false, needsExpiry: false, sortOrder: 8 },
 ];
+
+// ───────────────────────── Dishes ─────────────────────────
+
+export const CHEF_DISH_MODES = {
+  FIXED: { label: 'Fixed dish', customer: 'Choose quantity and an available fulfillment time. Recipe changes are unavailable.', chef: 'Prepare the published dish.' },
+  CUSTOMIZABLE: { label: 'Customizable dish', customer: 'Adjust only the ingredients, quantities and substitutions you enable. Price updates immediately.', chef: 'Prepare the configured dish without negotiating every order.' },
+} as const;
+export type ChefDishMode = keyof typeof CHEF_DISH_MODES;
+
+export const CHEF_DISH_STATUSES = ['DRAFT', 'IN_REVIEW', 'CHANGES_REQUESTED', 'PUBLISHED', 'SUSPENDED', 'ARCHIVED'] as const;
+export type ChefDishStatus = (typeof CHEF_DISH_STATUSES)[number];
+export const CHEF_DISH_STATUS_LABELS: Record<ChefDishStatus, string> = { DRAFT: 'Draft', IN_REVIEW: 'In review', CHANGES_REQUESTED: 'Changes requested', PUBLISHED: 'Live', SUSPENDED: 'Suspended', ARCHIVED: 'Archived' };
+
+export const DIETARY_TAGS = ['vegetarian', 'vegan', 'gluten_free', 'dairy_free', 'nut_free', 'halal', 'kosher', 'keto', 'spicy'] as const;
+
+/** Fields that change what the customer eats or is told; on a live dish they wait for Gutad review. */
+export const CHEF_DISH_MATERIAL_FIELDS = ['dishName', 'description', 'ingredients', 'allergens', 'dietaryTags', 'portionDesc', 'mode', 'acceptsSpecialRequests', 'fulfillmentFormat', 'photos'] as const;
+
+export interface ChefDishInput {
+  dishName?: string;
+  description?: string | null;
+  cuisine?: string | null;
+  portionDesc?: string;
+  ingredients?: string[];
+  allergens?: string[];
+  allergensConfirmed?: boolean;
+  dietaryTags?: string[];
+  priceCents?: number;
+  mode?: ChefDishMode;
+  acceptsSpecialRequests?: boolean;
+  fulfillmentFormat?: ChefFulfillmentFormat;
+  prepMinutes?: number;
+  dailyCapacity?: number | null;
+  minLeadDays?: number | null;
+  cutoffHour?: number | null;
+  maxAdvanceDays?: number | null;
+  photos?: string[];
+  sectionId?: string;
+}
+
+/** What a dish still needs before it can be submitted for review. */
+export function chefDishMissing(d: ChefDishInput & { photos?: string[] }): string[] {
+  const m: string[] = [];
+  if ((d.dishName || '').trim().length < 2) m.push('Dish name');
+  if (!d.priceCents || d.priceCents < 100) m.push('Price (at least $1)');
+  if (!(d.portionDesc || '').trim()) m.push('Portion (e.g. “1 bowl, 450 g”)');
+  if (!d.ingredients?.length) m.push('Ingredients');
+  if (!d.allergensConfirmed) m.push('Allergen declaration');
+  if (!d.photos?.length) m.push('At least one photo');
+  if (!d.fulfillmentFormat) m.push('Fulfillment format');
+  if (d.mode === 'FIXED' && d.acceptsSpecialRequests) m.push('Special requests are only for customizable dishes');
+  return m;
+}
+
+/** Public dish card (storefront, dish page). */
+export interface PublicChefDish {
+  id: string;
+  menuItemId: string;
+  title: string;
+  dishName: string;
+  description: string | null;
+  priceCents: number;
+  portionDesc: string;
+  ingredients: string[];
+  allergens: string[];
+  dietaryTags: string[];
+  photos: string[];
+  mode: ChefDishMode;
+  acceptsSpecialRequests: boolean;
+  fulfillmentFormat: ChefFulfillmentFormat;
+  soldOut: boolean;
+  minLeadDays: number;
+  maxAdvanceDays: number;
+  cutoffHour: number;
+  section: string | null;
+  chef: { id: string; slug: string; displayName: string; portraitUrl: string | null };
+  location: { id: string; slug: string; name: string };
+}

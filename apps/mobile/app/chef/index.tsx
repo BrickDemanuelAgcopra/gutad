@@ -38,6 +38,10 @@ export default function ChefHome() {
       <Card title="Payouts">
         {data.payouts?.state === 'COMPLETE' ? <Text style={{ color: C.good }}>✓ Payouts connected{data.payouts.bankLast4 ? ` · ••${data.payouts.bankLast4}` : ''}</Text> : <><Muted>Connect payouts through our payment provider’s secure onboarding.</Muted><Button disabled={busy} title="Connect payouts" onPress={() => run(async () => { const r = await api.post<{ onboardingUrl?: string | null }>('/chef/me/payouts', {}); if (r.onboardingUrl) await Linking.openURL(r.onboardingUrl); else setData(await api.get<ChefMe>('/chef/me')); })} /></>}
       </Card>
+      <Card title="Dishes">
+        <Muted>Build dishes, set fixed or customizable, reorder your menu.</Muted>
+        <Link href="/chef/dishes" asChild><Button title="Manage dishes" onPress={() => undefined} /></Link>
+      </Card>
       <Card title="Orders & tickets">
         <Muted>{data.location ? `${data.location.name} · ${data.location.addressLine1}, ${data.location.city}` : 'No kitchen on file'}</Muted>
         <Link href="/merchant" asChild><Button title="Open order tablet" onPress={() => undefined} /></Link>

@@ -7,6 +7,7 @@ import { Alert, Spinner } from '@/components/ui';
 /** Chef portal. Order handling, tickets and finance reuse the merchant workspace of the chef's organization. */
 const NAV: [string, string][] = [
   ['/chef', 'Dashboard'],
+  ['/chef/dishes', 'Dishes'],
   ['/chef/profile', 'Public profile'],
   ['/merchant/orders', 'Orders'],
   ['/merchant/kitchen', 'Kitchen tickets'],
@@ -24,7 +25,7 @@ export default function ChefLayout({ children }: { children: React.ReactNode }) 
         <div className="rounded-xl bg-ink-900 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-brand-300">Chef Network</div>
         <nav className="flex flex-row flex-wrap gap-1 md:flex-col">
           {NAV.map(([h, l]) => (
-            <Link key={h} href={h} className={`rounded-lg px-3 py-1.5 text-sm ${path === h ? 'bg-brand-50 font-medium text-brand-700' : 'text-ink-700 hover:bg-ink-50'}`}>{l}</Link>
+            <Link key={h} href={h} className={`rounded-lg px-3 py-1.5 text-sm ${path === h || (h !== '/chef' && path.startsWith(`${h}/`)) ? 'bg-brand-50 font-medium text-brand-700' : 'text-ink-700 hover:bg-ink-50'}`}>{l}</Link>
           ))}
         </nav>
       </aside>

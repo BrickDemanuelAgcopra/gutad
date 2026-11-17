@@ -62,6 +62,7 @@ async function main() {
   }
 
   await seedDemoChef(db, log);
+  await seedDemoChefDishes(db, log);
 
   // demo merchant
   const [existingOrg] = await db.select().from(s.organizations).where(eq(s.organizations.slug, 'demo-bistro')).limit(1);
@@ -191,6 +192,29 @@ async function main() {
 
   log(`demo ready: location ${loc.id} (${loc.slug}), kitchen location ${kloc.id}, owner owner@demo.gutad.io / merchant12345, customer customer@demo.gutad.io / customer12345, admin ${adminEmail}`);
   await pool.end();
+}
+
+/** Chef Carlos's live demo dishes (added once, also on databases seeded before dishes existed). */
+async function seedDemoChefDishes(db: ReturnType<typeof createDb>, log: (m: string) => void) {
+  const [p] = await db.select().from(s.chefProfiles).where(eq(s.chefProfiles.slug, 'chef-carlos')).limit(1);
+  if (!p || !p.locationId) return;
+  const [has] = await db.select({ id: s.chefDishes.id }).from(s.chefDishes).where(eq(s.chefDishes.chefProfileId, p.id)).limit(1);
+  if (has) return;
+  let [menu] = await db.select().from(s.menus).where(eq(s.menus.locationId, p.locationId)).limit(1);
+  if (!menu) [menu] = await db.insert(s.menus).values({ organizationId: p.organizationId, locationId: p.locationId, name: 'Chef Carlos menu', channels: ['MARKETPLACE', 'DIRECT'] }).returning();
+  const [pasta] = await db.insert(s.menuCategories).values({ menuId: menu.id, name: 'Pasta', sortOrder: 0 }).returning();
+  const [cakes] = await db.insert(s.menuCategories).values({ menuId: menu.id, name: 'Celebration cakes & pies', sortOrder: 1 }).returning();
+  const dishes = [
+    { cat: pasta.id, dishName: 'Spaghetti', description: 'Slow-simmered San Marzano tomato sauce, fresh basil and parmigiano over bronze-cut spaghetti.', priceCents: 1600, portionDesc: '1 bowl (450 g)', ingredients: ['spaghetti', 'San Marzano tomatoes', 'olive oil', 'garlic', 'basil', 'parmigiano'], allergens: ['wheat', 'milk'], dietaryTags: ['vegetarian'], mode: 'CUSTOMIZABLE', acceptsSpecialRequests: true, fulfillmentFormat: 'HOT', prepMinutes: 30, photo: 'https://images.unsplash.com/photo-1598866594230-a7c12756260f?w=1200' },
+    { cat: pasta.id, dishName: 'Beef lasagna', description: 'Layers of fresh pasta, slow-cooked beef ragù, béchamel and mozzarella. Chilled; reheat 35 minutes at 375°F.', priceCents: 2400, portionDesc: 'Tray for 2 (900 g)', ingredients: ['pasta sheets', 'beef', 'tomato', 'onion', 'carrot', 'béchamel', 'mozzarella'], allergens: ['wheat', 'milk', 'egg'], dietaryTags: [], mode: 'FIXED', acceptsSpecialRequests: false, fulfillmentFormat: 'CHILLED_REHEAT', prepMinutes: 90, photo: 'https://images.unsplash.com/photo-1574894709920-11b28e7367e3?w=1200' },
+    { cat: cakes.id, dishName: 'Pumpkin pie', description: 'Spiced pumpkin custard in an all-butter crust. Order ahead for Thanksgiving.', priceCents: 3200, portionDesc: '9-inch pie, serves 8', ingredients: ['pumpkin', 'eggs', 'cream', 'brown sugar', 'cinnamon', 'nutmeg', 'flour', 'butter'], allergens: ['wheat', 'milk', 'egg'], dietaryTags: ['vegetarian'], mode: 'FIXED', acceptsSpecialRequests: false, fulfillmentFormat: 'ROOM_TEMP', prepMinutes: 180, minLeadDays: 3, dailyCapacity: 8, photo: 'https://images.unsplash.com/photo-1509461399763-ae67a981b254?w=1200' },
+    { cat: cakes.id, dishName: 'Celebration layer cake', description: 'Vanilla sponge, Italian meringue buttercream and seasonal fruit.', priceCents: 6500, portionDesc: '8-inch cake, serves 12', ingredients: ['flour', 'eggs', 'butter', 'sugar', 'vanilla', 'seasonal fruit'], allergens: ['wheat', 'milk', 'egg'], dietaryTags: ['vegetarian'], mode: 'CUSTOMIZABLE', acceptsSpecialRequests: true, fulfillmentFormat: 'ROOM_TEMP', prepMinutes: 240, minLeadDays: 5, dailyCapacity: 3, photo: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=1200' },
+  ];
+  for (const [i, d] of dishes.entries()) {
+    const [item] = await db.insert(s.menuItems).values({ categoryId: d.cat, name: d.dishName, description: d.description, priceCents: d.priceCents, imageUrl: d.photo, photos: [d.photo], allergens: d.allergens, dietaryTags: d.dietaryTags, servingSize: d.portionDesc, cookMinutes: d.prepMinutes, handling: d.fulfillmentFormat === 'HOT' ? ['HOT'] : d.fulfillmentFormat === 'CHILLED_REHEAT' ? ['COLD'] : [], isActive: true, sortOrder: i }).returning();
+    await db.insert(s.chefDishes).values({ menuItemId: item.id, chefProfileId: p.id, locationId: p.locationId, dishName: d.dishName, description: d.description, portionDesc: d.portionDesc, ingredients: d.ingredients, allergensConfirmed: true, mode: d.mode, acceptsSpecialRequests: d.acceptsSpecialRequests, fulfillmentFormat: d.fulfillmentFormat, prepMinutes: d.prepMinutes, minLeadDays: d.minLeadDays ?? null, dailyCapacity: d.dailyCapacity ?? null, photos: [d.photo], reviewStatus: 'PUBLISHED', publishedAt: new Date(), submittedAt: new Date() });
+  }
+  log('demo chef dishes ready (Chef Carlos: 4 live dishes)');
 }
 
 /** Gutad Chef Network demo: Chef Carlos, approved, payouts connected, accepting orders (idempotent). */
