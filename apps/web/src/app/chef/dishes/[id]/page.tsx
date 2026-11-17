@@ -2,7 +2,8 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ALLERGENS, CHEF_CUISINES, CHEF_DISH_MODES, CHEF_DISH_STATUS_LABELS, CHEF_FULFILLMENT_FORMATS, chefDishMissing, chefDishTitle, DIETARY_TAGS, type ChefDishInput, type ChefDishStatus } from '@gutad/shared';
+import { ALLERGENS, CHEF_CUISINES, CHEF_DISH_MODES, CHEF_DISH_STATUS_LABELS, CHEF_FULFILLMENT_FORMATS, chefDishMissing, chefDishTitle, DIETARY_TAGS, validateOptionsConfig, type ChefDishInput, type ChefDishStatus, type OptionsConfigGroup } from '@gutad/shared';
+import { OptionsBuilder } from '@/components/options-builder';
 import { api, API_URL, money, uploadFile } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Spinner, Textarea } from '@/components/ui';
@@ -10,7 +11,7 @@ import { ChipGroup, FileDrop, RadioCards, SaveBadge, StepNav, useAutosave } from
 
 interface Dish extends Required<Pick<ChefDishInput, 'dishName' | 'portionDesc' | 'ingredients' | 'allergens' | 'dietaryTags' | 'priceCents' | 'mode' | 'acceptsSpecialRequests' | 'fulfillmentFormat' | 'prepMinutes' | 'photos'>> {
   id: string; title: string; description: string | null; cuisine: string | null; allergensConfirmed: boolean; dailyCapacity: number | null; minLeadDays: number | null; cutoffHour: number | null; maxAdvanceDays: number | null;
-  reviewStatus: ChefDishStatus; reviewNote: string | null; pendingChanges: Record<string, unknown> | null; missing: string[]; soldOut: boolean; live: boolean;
+  reviewStatus: ChefDishStatus; reviewNote: string | null; pendingChanges: Record<string, unknown> | null; missing: string[]; soldOut: boolean; live: boolean; optionsConfig: OptionsConfigGroup[];
 }
 interface Me { profile: { displayName: string; operating: { minLeadDays?: number; cutoffHour?: number; dailyCapacity?: number; maxAdvanceDays?: number } } }
 
@@ -45,7 +46,7 @@ export default function DishBuilder() {
     setF(next);
     if (draft && editable) auto.queue(patch);
   };
-  const payload = (x: Dish): ChefDishInput => ({ dishName: x.dishName, description: x.description, cuisine: x.cuisine, portionDesc: x.portionDesc, ingredients: x.ingredients, allergens: x.allergens, allergensConfirmed: x.allergensConfirmed, dietaryTags: x.dietaryTags, priceCents: x.priceCents, mode: x.mode, acceptsSpecialRequests: x.acceptsSpecialRequests, fulfillmentFormat: x.fulfillmentFormat, prepMinutes: x.prepMinutes, dailyCapacity: x.dailyCapacity, minLeadDays: x.minLeadDays, cutoffHour: x.cutoffHour, maxAdvanceDays: x.maxAdvanceDays, photos: x.photos });
+  const payload = (x: Dish): ChefDishInput => ({ dishName: x.dishName, description: x.description, cuisine: x.cuisine, portionDesc: x.portionDesc, ingredients: x.ingredients, allergens: x.allergens, allergensConfirmed: x.allergensConfirmed, dietaryTags: x.dietaryTags, priceCents: x.priceCents, mode: x.mode, acceptsSpecialRequests: x.acceptsSpecialRequests, fulfillmentFormat: x.fulfillmentFormat, prepMinutes: x.prepMinutes, dailyCapacity: x.dailyCapacity, minLeadDays: x.minLeadDays, cutoffHour: x.cutoffHour, maxAdvanceDays: x.maxAdvanceDays, photos: x.photos, optionsConfig: x.optionsConfig });
   const saveLive = () => run(async () => {
     const r = await api.patch<Dish & { needsReview: boolean }>(`/chef/dishes/${id}`, payload(f));
     setData(r);
@@ -57,7 +58,7 @@ export default function DishBuilder() {
   const stepDone: Record<string, boolean> = {
     describe: !missing.some((m) => /name|price|portion|ingredient|allergen|photo/i.test(m)),
     mode: !!f.mode,
-    options: true,
+    options: f.mode === 'FIXED' || (f.optionsConfig.some((g) => g.selectionType !== 'INCLUDED') && !validateOptionsConfig(f.optionsConfig).length),
     availability: !!f.fulfillmentFormat && f.prepMinutes > 0,
     preview: dish.reviewStatus !== 'DRAFT' && dish.reviewStatus !== 'CHANGES_REQUESTED',
   };
@@ -80,7 +81,7 @@ export default function DishBuilder() {
       {dish.reviewStatus === 'IN_REVIEW' && <Alert tone="info">Gutad is reviewing this dish (ingredients, allergens, portion, photos and price). You can edit it again after the decision.</Alert>}
       {msg && <Alert tone="good">{msg}</Alert>}
       {error && <Alert>{error}</Alert>}
-      <div className="grid gap-4 lg:grid-cols-[200px_1fr_320px]">
+      <div className={`grid gap-4 ${step === 'options' ? 'lg:grid-cols-[200px_1fr]' : 'lg:grid-cols-[200px_1fr_320px]'}`}>
         <div className="lg:sticky lg:top-20 lg:self-start"><StepNav active={step} onSelect={setStep} steps={STEPS.map((s) => ({ ...s, complete: stepDone[s.key] }))} /></div>
         <Card title={STEPS[idx].label}>
           <fieldset disabled={!editable} className="space-y-4 disabled:opacity-70">
@@ -118,10 +119,10 @@ export default function DishBuilder() {
             )}
             {step === 'options' && (
               f.mode === 'FIXED' ? <p className="text-sm text-ink-500">Fixed dishes have no customer options. Customers choose quantity and an available time.</p> : (
-                <div className="space-y-2 text-sm text-ink-700">
-                  <p>Customers will adjust only what you enable here: portion size, protein choices, sauce and cheese levels, extra toppings, and extras from your approved ingredient list.</p>
-                  <p className="rounded-xl bg-brand-50 p-3 text-brand-800">The option builder (templates such as Spice level, Choose protein, Extra toppings and Portion size, each with prices, limits and allergen effects) arrives in the next Chef Network update. Until then this dish sells as its standard recipe.</p>
-                </div>
+                <>
+                  <p className="text-sm text-ink-700">Customers adjust only what you enable here. Extras from your <a href="/chef/extras" className="underline">approved extras list</a> appear through ingredient search on the dishes you allow.</p>
+                  <OptionsBuilder value={f.optionsConfig} onChange={(optionsConfig) => set({ optionsConfig })} dishName={f.dishName} basePriceCents={f.priceCents} baseAllergens={f.allergens} baseDietary={f.dietaryTags} live={dish.reviewStatus === 'PUBLISHED'} onSoldOut={(optionId, soldOut) => void run(async () => { await api.post(`/chef/dishes/${id}/options/${optionId}/sold-out`, { soldOut }); })} />
+                </>
               )
             )}
             {step === 'availability' && (
@@ -151,7 +152,7 @@ export default function DishBuilder() {
             {idx < STEPS.length - 1 && <Button onClick={() => setStep(STEPS[idx + 1].key)}>Continue</Button>}
           </div>
         </Card>
-        <div className="lg:sticky lg:top-20 lg:self-start">
+        <div className={`lg:sticky lg:top-20 lg:self-start ${step === 'options' ? 'lg:hidden' : ''}`}>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">Customer preview</p>
           <Preview f={f} chef={chef} />
         </div>

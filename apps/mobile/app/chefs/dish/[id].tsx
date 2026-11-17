@@ -1,47 +1,79 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Image, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { CHEF_FULFILLMENT_FORMATS, type PublicChefDish } from '@gutad/shared';
+import { CHEF_FULFILLMENT_FORMATS, modifierLabel, type PublicChefDish } from '@gutad/shared';
 import { money } from '@/api';
 import { useCart } from '@/cart';
 import { useApi } from '@/hooks';
 import { Badge, Button, C, Card, Loading, Muted, s } from '@/ui';
+import { Customizer, Summary, useCustomization } from '@/customize';
 
-/** Dish screen with a persistent bottom action; fixed dishes choose quantity, then a date and time at checkout. */
-export default function ChefDish() {
+type Dish = PublicChefDish & { acceptingOrders: boolean };
+
+export default function ChefDishScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const router = useRouter();
-  const { data: d, error } = useApi<PublicChefDish & { acceptingOrders: boolean }>(`/public/chef-dishes/${id}`);
-  const { add } = useCart();
-  const [qty, setQty] = useState(1);
+  const { data: d, error } = useApi<Dish>(`/public/chef-dishes/${id}`);
   if (error) return <View style={[s.screen, s.pad]}><Muted>This dish isn’t available right now.</Muted></View>;
   if (!d) return <Loading />;
+  return <DishView d={d} />;
+}
+
+/** The dish first; "Customize" reveals the options. The bottom action always shows the confirmed price. */
+function DishView({ d }: { d: Dish }) {
+  const router = useRouter();
+  const { add } = useCart();
+  const groups = useMemo(() => d.groups || [], [d.groups]);
+  const base = useMemo(() => ({ allergens: d.allergens, dietaryTags: d.dietaryTags }), [d.allergens, d.dietaryTags]);
+  const { picks, setPicks, ev } = useCustomization(d.dishName, groups, base);
+  const customizable = groups.some((g) => g.selectionType !== 'INCLUDED');
+  const [open, setOpen] = useState(false);
+  const [qty, setQty] = useState(1);
   const can = d.acceptingOrders && !d.soldOut;
+  const unit = d.priceCents + ev.modifiersCents;
+  const addToCart = () => {
+    const names = ev.chosen.filter((c) => c.priceCents > 0 || !groups.find((g) => g.id === c.groupId)?.options.find((o) => o.id === c.id)?.isDefault).map(modifierLabel);
+    add({ id: d.location.id, slug: d.location.slug, name: `${d.chef.displayName} (Gutad Chef Network)` }, { menuItemId: d.menuItemId, name: d.title, quantity: qty, unitPriceCents: d.priceCents, modifierOptionIds: ev.optionIds, modifierNames: names, modifiersCents: ev.modifiersCents }, { park: true });
+    router.push('/checkout');
+  };
   return (
     <View style={s.screen}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
-        {d.photos[0] && <Image source={{ uri: d.photos[0] }} style={{ width: '100%', aspectRatio: 4 / 3 }} />}
+      <ScrollView contentContainerStyle={{ paddingBottom: 140 }} keyboardShouldPersistTaps="handled">
+        {d.photos[0] && !open && <Image source={{ uri: d.photos[0] }} style={{ width: '100%', aspectRatio: 4 / 3 }} />}
         <View style={s.pad}>
           <Text style={{ fontSize: 22, fontWeight: '700' }}>{d.title}</Text>
           <Muted>Prepared by {d.chef.displayName} at an approved partner kitchen</Muted>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginVertical: 8 }}><Badge text={CHEF_FULFILLMENT_FORMATS[d.fulfillmentFormat]} /><Badge text={d.mode === 'CUSTOMIZABLE' ? 'Customizable' : 'Fixed recipe'} tone={d.mode === 'CUSTOMIZABLE' ? 'info' : 'neutral'} />{d.dietaryTags.map((t) => <Badge key={t} text={t.replace('_', ' ')} tone="good" />)}</View>
-          {d.description && <Text style={{ color: C.ink7, marginBottom: 8 }}>{d.description}</Text>}
-          <Card>
-            <Text style={s.label}>Portion</Text><Text style={{ marginBottom: 6 }}>{d.portionDesc}</Text>
-            <Text style={s.label}>Ingredients</Text><Text style={{ marginBottom: 6 }}>{d.ingredients.join(', ')}</Text>
-            <Text style={s.label}>Allergens</Text><Text style={{ color: d.allergens.length ? C.bad : C.ink, fontWeight: d.allergens.length ? '600' : '400' }}>{d.allergens.length ? d.allergens.map((a) => a.replace('_', ' ')).join(', ') : 'None of the major allergens declared'}</Text>
-            <Muted>Prepared in a kitchen that may handle other allergens.</Muted>
-            <Text style={[s.label, { marginTop: 6 }]}>Ordering</Text><Text>{d.minLeadDays ? `At least ${d.minLeadDays} day(s) ahead` : 'Same day available'}, up to {d.maxAdvanceDays} days ahead</Text>
-          </Card>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginVertical: 8 }}><Badge text={CHEF_FULFILLMENT_FORMATS[d.fulfillmentFormat]} /><Badge text={customizable ? 'Customizable' : 'Fixed recipe'} tone={customizable ? 'info' : 'neutral'} />{ev.dietaryTags.map((t) => <Badge key={t} text={t.replace('_', ' ')} tone="good" />)}</View>
+          {open && customizable ? (
+            <Card title="Customize">
+              <Customizer groups={groups} picks={picks} setPicks={setPicks} ev={ev} chefName={d.chef.displayName} acceptsRequests={d.acceptsSpecialRequests} />
+              <Summary base={d.priceCents} ev={ev} qty={qty} baseAllergens={d.allergens} />
+            </Card>
+          ) : (
+            <>
+              {d.description && <Text style={{ color: C.ink7, marginBottom: 8 }}>{d.description}</Text>}
+              <Card>
+                <Text style={s.label}>Portion</Text><Text style={{ marginBottom: 6 }}>{d.portionDesc}</Text>
+                <Text style={s.label}>Ingredients</Text><Text style={{ marginBottom: 6 }}>{d.ingredients.join(', ')}</Text>
+                <Text style={s.label}>Allergens</Text><Text style={{ color: ev.allergens.length ? C.bad : C.ink, fontWeight: ev.allergens.length ? '600' : '400' }}>{ev.allergens.length ? ev.allergens.map((a) => a.replace('_', ' ')).join(', ') : 'None of the major allergens declared'}</Text>
+                <Muted>Removing an ingredient doesn’t make a dish allergen-free.</Muted>
+                <Text style={[s.label, { marginTop: 6 }]}>Ordering</Text><Text>{d.minLeadDays ? `At least ${d.minLeadDays} day(s) ahead` : 'Same day available'}, up to {d.maxAdvanceDays} days ahead</Text>
+              </Card>
+            </>
+          )}
         </View>
       </ScrollView>
-      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: C.white, borderTopWidth: 1, borderColor: C.ink1, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Button title="−" variant="secondary" disabled={qty <= 1} onPress={() => setQty(qty - 1)} />
-          <Text accessibilityLabel={`Quantity ${qty}`} style={{ minWidth: 24, textAlign: 'center', fontWeight: '700' }}>{qty}</Text>
-          <Button title="+" variant="secondary" disabled={qty >= 20} onPress={() => setQty(qty + 1)} />
-        </View>
-        <Button style={{ flex: 1 }} disabled={!can} title={!can ? (d.soldOut ? 'Sold out' : 'Not taking orders') : `Add to cart — ${money(d.priceCents * qty)}`} onPress={() => { add({ id: d.location.id, slug: d.location.slug, name: `${d.chef.displayName} (Gutad Chef Network)` }, { menuItemId: d.menuItemId, name: d.title, quantity: qty, unitPriceCents: d.priceCents, modifierOptionIds: [], modifierNames: [], modifiersCents: 0 }, { park: true }); router.push('/checkout'); }} />
+      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: C.white, borderTopWidth: 1, borderColor: C.ink1, padding: 12, gap: 8 }}>
+        {(open || !customizable) && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Button title="−" variant="secondary" disabled={qty <= 1} onPress={() => setQty(qty - 1)} />
+            <Text accessibilityLabel={`Quantity ${qty}`} style={{ minWidth: 24, textAlign: 'center', fontWeight: '700' }}>{qty}</Text>
+            <Button title="+" variant="secondary" disabled={qty >= 20} onPress={() => setQty(qty + 1)} />
+            {open && <Button variant="ghost" title="Back to dish" onPress={() => setOpen(false)} />}
+          </View>
+        )}
+        {!can ? <Button disabled title={d.soldOut ? 'Sold out' : 'Not taking orders'} onPress={() => undefined} />
+          : customizable && !open ? <Button title={`Customize & order — from ${money(d.priceCents)}`} onPress={() => setOpen(true)} />
+          : <Button disabled={!ev.ok} title={ev.ok ? `Add to cart — ${money(unit * qty)}` : 'Finish required choices'} onPress={addToCart} />}
       </View>
     </View>
   );

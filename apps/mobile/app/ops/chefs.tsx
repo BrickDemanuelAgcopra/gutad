@@ -88,13 +88,16 @@ function AppDetail({ id, onBack }: { id: string; onBack: () => void }) {
 function DishQueue() {
   const { can } = useSession();
   const { data, reload } = useApi<RDish[]>('/admin/chef-dishes/review');
+  const { data: extras, reload: reloadExtras } = useApi<{ id: string; name: string; chefName: string; priceCents: number; allergens: string[] }[]>('/admin/chef-extras/review');
   const { run, error, busy } = useAction();
   const [note, setNote] = useState<Record<string, string>>({});
   if (!data) return <Loading />;
-  if (!data.length) return <Card><Muted>No dishes waiting for review.</Muted></Card>;
+  const extrasCard = !!extras?.length && <Card title="Extras waiting for approval">{extras.map((e) => <View key={e.id} style={{ marginBottom: 8 }}><Text style={{ fontWeight: '600' }}>{e.name} · {e.chefName}</Text><Muted>${(e.priceCents / 100).toFixed(2)} · allergens: {e.allergens.join(', ') || 'none'}</Muted>{can('chefs.manage') && <View style={{ flexDirection: 'row', gap: 6 }}><Button style={{ flex: 1 }} title="Approve" disabled={busy} onPress={() => run(async () => { await api.post(`/admin/chef-extras/${e.id}/review`, { approve: true }); await reloadExtras(); })} /><Button style={{ flex: 1 }} variant="secondary" title="Reject" disabled={busy} onPress={() => run(async () => { await api.post(`/admin/chef-extras/${e.id}/review`, { approve: false, note: 'Not approved as an extra; please contact Gutad' }); await reloadExtras(); })} /></View>}</View>)}</Card>;
+  if (!data.length) return <View>{extrasCard}<Card><Muted>No dishes waiting for review.</Muted></Card></View>;
   return (
     <View>
       <ErrorText msg={error} />
+      {extrasCard}
       {data.map((d) => (
         <Card key={d.id}>
           {d.photos[0] && <Image source={{ uri: d.photos[0] }} style={{ width: '100%', height: 140, borderRadius: 10, marginBottom: 6 }} />}

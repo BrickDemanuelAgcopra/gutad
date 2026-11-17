@@ -34,13 +34,24 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Mobile: chef dishes and editor (camera photos), chef directory, storefront, dish screen, date/time picker in checkout, home banner.
 - [x] Smoke `scripts/smoke-chef-b.mjs`. Full suite 631/631.
 
-## Phase 3 — Customization engine [ ] (next)
-## Phase 4 — Advance ordering & capacity [ ]
+## Phase 3 — Customization engine [x]
+- [x] Shared engine `evaluateCustomization` (`@gutad/shared/customization`), used by the API quote, web and mobile. Selection types SINGLE, LEVEL, MULTI, QUANTITY and INCLUDED; legacy CHOICE groups unchanged. Quantities are sent as repeated option ids, so carts, quotes and orders keep their shape.
+- [x] Defaults, min/max, per-option max quantity, conditional groups (“only when”), per-context rules (price, max or unavailable when another option is chosen), locked components, sold-out options.
+- [x] Allergen and dietary effects. Options add allergens; adding fish/shellfish/milk/egg/wheat/nuts automatically removes the dietary labels they break (shrimp → not vegetarian).
+- [x] Migration 0020: modifier group/option columns, `chef_dishes.options_config` and `modifier_group_ids`, `chef_extras`, `chef_dish_extras`, `order_lines.allergens` and `dietary_tags` (purchase snapshot). Kitchen and packing flag ALLERGEN when a customization adds one.
+- [x] Chef option builder with templates (portion, protein, spice, sauce, cheese, toppings, leave out, included), an option table, reordering, rules, validation and a “try it as a customer” preview. Approved configs become modifier groups with stable ids. Option changes on live dishes wait for review; option sold-out is immediate.
+- [x] Extras catalog (`/chef/extras`): price per portion, synonyms, allergens, per-dish or all-dish allowance. New extras and allergen changes are Gutad-reviewed (web and mobile Ops); approved extras sync into each dish’s searchable extras group.
+- [x] Customer UI: dish first, then Customize. Desktop shows options beside a sticky summary; phones get a full-height sheet with a bottom action. Radio cards, segmented levels, checkboxes with prices, −/+ steppers, locked “included”, extras search with an “Ask Chef X” entry (requests in Phase 6), live price, added-allergen and lost-label warnings. Deep link `?customize=1`.
+- [x] Mobile: customization on the dish screen; option editing in the chef dish editor (conditions and rules on web); extras approval in Ops.
+- [x] Demo: Spaghetti (7 option groups including conditional shrimp style, Large-size topping rule, included components) and celebration cake; 3 approved extras.
+- [x] Smoke `scripts/smoke-chef-c.mjs`. Full suite 657/659; the two failures are the older campaign-holdout checks, which are timing-dependent (likely the API rate limit during the busiest stretch).
+## Phase 4 — Advance ordering & capacity [ ] (next)
 ## Phase 5 — Checkout, payments & multi-chef [ ]
 ## Phase 6 — Special requests & quotes [ ]
 ## Phase 7 — Admin operations & analytics [ ]
 ## Phase 8 — Hardening & docs [ ]
 
 ## Log
+- 2026-11-17 Phase 3 built and verified locally (web build, API/web/mobile typecheck, smoke incl. 27 new checks).
 - 2026-11-16 Phase 2 built and verified locally (631/631 smoke, web build, API/web/mobile typecheck).
 - 2026-11-16 Phase 1 built and verified locally (598/598 smoke, web build, typecheck of API, web and mobile).

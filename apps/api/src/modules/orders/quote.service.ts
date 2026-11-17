@@ -6,7 +6,7 @@ import { brandSellable } from '../../common/brand-rules';
 import { DEFAULT_PAYMENT_METHODS, enabledMethods, type AppliedPromotion, type PaymentMethodsConfig } from '@gutad/shared';
 import { giftBalance } from '../growth/gift-tender';
 import { assertCashLimit, creditAllowance } from '../customers/limits';
-import { cartCompatibility, chefDishTitle, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
+import { cartCompatibility, chefDishTitle, evaluateCustomization, modifierLabel, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
@@ -48,9 +48,13 @@ export interface QuoteSnapshotLine {
   unitPriceCents: number;
   modifiersCents: number;
   lineTotalCents: number;
-  modifiers: { id: string; name: string; priceCents: number }[];
+  modifiers: { id: string; name: string; priceCents: number; qty?: number }[];
   specialInstructions?: string;
   taxCategory?: string;
+  /** effective allergens and dietary labels after customization (Chef Network dishes) */
+  allergens?: string[];
+  dietaryTags?: string[];
+  prepMinutesDelta?: number;
 }
 
 /** Simulation inputs (9.8): draft fee rules, tax rates and item prices; nothing is stored. */
@@ -162,9 +166,10 @@ export class QuoteService {
         const b = brandRows.get(item.brandId);
         if (b && !brandSellable(b, loc.regionId, input.channel)) throw new BadRequestException({ message: `${item.name} (${b.name}) is not available here right now`, code: 'BRAND_NOT_AVAILABLE' });
       }
-      const mods = this.resolveModifiers(item, l.modifierOptionIds || []);
+      const ev = this.resolveModifiers(item, l.modifierOptionIds || []);
+      const mods = ev.mods;
       const modifiersCents = mods.reduce((a, m) => a + m.priceCents, 0);
-      snapLines.push({ menuItemId: item.id, name: chefName ? chefDishTitle(item.name, chefName) : item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory });
+      snapLines.push({ menuItemId: item.id, name: chefName ? chefDishTitle(item.name, chefName) : item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory, ...(ev.customized ? { allergens: ev.allergens, dietaryTags: ev.dietaryTags, prepMinutesDelta: ev.prepMinutesDelta } : {}) });
     }
     const subtotalCents = snapLines.reduce((a, l) => a + l.lineTotalCents, 0);
     if (subtotalCents < loc.minOrderCents) throw new BadRequestException(`Minimum order is ${loc.minOrderCents} cents`);
@@ -346,22 +351,19 @@ export class QuoteService {
     return this.present(q, q.expiresAt < new Date() ? ['Quote expired; revalidate before checkout'] : []);
   }
 
+  /**
+   * Validates and prices customizations with the shared engine (defaults, quantities as repeated ids, conditional
+   * groups, per-context rules, locked components) and returns the effective allergens and dietary labels.
+   */
   private resolveModifiers(item: ResolvedItem, optionIds: string[]) {
-    const chosen: { id: string; name: string; priceCents: number }[] = [];
-    for (const g of item.modifierGroups) {
-      const picked = g.options.filter((o) => optionIds.includes(o.id));
-      if (g.required && picked.length < Math.max(1, g.minSelect)) throw new BadRequestException(`${item.name}: choose ${g.name}`);
-      if (picked.length < g.minSelect) throw new BadRequestException(`${item.name}: choose at least ${g.minSelect} ${g.name}`);
-      if (picked.length > g.maxSelect) throw new BadRequestException(`${item.name}: choose at most ${g.maxSelect} ${g.name}`);
-      for (const o of picked) {
-        if (o.soldOut) throw new BadRequestException(`${o.name} is sold out`);
-        chosen.push({ id: o.id, name: o.name, priceCents: o.priceCents });
-      }
+    const r = evaluateCustomization(item.name, item.modifierGroups, optionIds, { allergens: item.allergens, dietaryTags: item.dietaryTags || [] });
+    if (!r.ok) {
+      const e = r.errors[0];
+      throw new BadRequestException(/^Unknown option/.test(e) ? { message: `Unknown modifier option for ${item.name}`, code: 'OPTION_UNKNOWN' } : /sold out/.test(e) ? e : { message: e, code: 'CUSTOMIZATION_INVALID', errors: r.errors });
     }
-    const known = new Set(item.modifierGroups.flatMap((g) => g.options.map((o) => o.id)));
-    const unknown = optionIds.filter((id) => !known.has(id));
-    if (unknown.length) throw new BadRequestException(`Unknown modifier option for ${item.name}`);
-    return chosen;
+    const customized = item.modifierGroups.some((g) => g.selectionType && g.selectionType !== 'CHOICE');
+    const mods = r.chosen.map((c) => ({ id: c.id, name: modifierLabel(c), priceCents: c.priceCents, ...(c.qty > 1 ? { qty: c.qty } : {}) }));
+    return { mods, customized, allergens: r.allergens, dietaryTags: r.dietaryTags, prepMinutesDelta: r.prepMinutesDelta };
   }
 
   private async openAt(loc: typeof locations.$inferSelect, at: Date, tx: DbOrTx): Promise<boolean> {

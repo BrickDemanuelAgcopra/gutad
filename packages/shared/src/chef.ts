@@ -1,3 +1,5 @@
+import { validateOptionsConfig, type ModGroup, type OptionsConfigGroup } from './customization';
+
 /**
  * Gutad Chef Network — contracts shared by the API, web and mobile.
  * Independent chefs apply, are approved with an eligible kitchen, and sell dishes branded
@@ -185,7 +187,7 @@ export const CHEF_DISH_STATUS_LABELS: Record<ChefDishStatus, string> = { DRAFT: 
 export const DIETARY_TAGS = ['vegetarian', 'vegan', 'gluten_free', 'dairy_free', 'nut_free', 'halal', 'kosher', 'keto', 'spicy'] as const;
 
 /** Fields that change what the customer eats or is told; on a live dish they wait for Gutad review. */
-export const CHEF_DISH_MATERIAL_FIELDS = ['dishName', 'description', 'ingredients', 'allergens', 'dietaryTags', 'portionDesc', 'mode', 'acceptsSpecialRequests', 'fulfillmentFormat', 'photos'] as const;
+export const CHEF_DISH_MATERIAL_FIELDS = ['dishName', 'description', 'ingredients', 'allergens', 'dietaryTags', 'portionDesc', 'mode', 'acceptsSpecialRequests', 'fulfillmentFormat', 'photos', 'optionsConfig'] as const;
 
 export interface ChefDishInput {
   dishName?: string;
@@ -207,6 +209,8 @@ export interface ChefDishInput {
   maxAdvanceDays?: number | null;
   photos?: string[];
   sectionId?: string;
+  /** customer options of a customizable dish */
+  optionsConfig?: OptionsConfigGroup[];
 }
 
 /** What a dish still needs before it can be submitted for review. */
@@ -220,6 +224,11 @@ export function chefDishMissing(d: ChefDishInput & { photos?: string[] }): strin
   if (!d.photos?.length) m.push('At least one photo');
   if (!d.fulfillmentFormat) m.push('Fulfillment format');
   if (d.mode === 'FIXED' && d.acceptsSpecialRequests) m.push('Special requests are only for customizable dishes');
+  if (d.mode === 'CUSTOMIZABLE') {
+    const cfg = d.optionsConfig || [];
+    if (!cfg.some((g) => g.selectionType !== 'INCLUDED')) m.push('At least one customer option (or make it a fixed dish)');
+    m.push(...validateOptionsConfig(cfg));
+  }
   return m;
 }
 
@@ -244,6 +253,8 @@ export interface PublicChefDish {
   maxAdvanceDays: number;
   cutoffHour: number;
   section: string | null;
+  /** customer options (materialized modifier groups), dish page only */
+  groups?: ModGroup[];
   chef: { id: string; slug: string; displayName: string; portraitUrl: string | null };
   location: { id: string; slug: string; name: string };
 }

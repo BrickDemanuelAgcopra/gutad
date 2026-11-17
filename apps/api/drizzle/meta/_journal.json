@@ -141,6 +141,13 @@
       "when": 1794886258592,
       "tag": "0019_chef_dishes",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794888229208,
+      "tag": "0020_chef_customization",
+      "breakpoints": true
     }
   ]
 }

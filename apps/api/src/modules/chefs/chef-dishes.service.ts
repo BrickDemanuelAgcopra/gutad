@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
-import { CHEF_DISH_MATERIAL_FIELDS, chefDishMissing, chefDishTitle, type ChefDishInput, type ChefStarterDish, type PublicChefDish } from '@gutad/shared';
+import { CHEF_DISH_MATERIAL_FIELDS, chefDishMissing, chefDishTitle, newOptionId, validateOptionsConfig, type ChefDishInput, type ChefStarterDish, type OptionsConfigGroup, type PublicChefDish } from '@gutad/shared';
+import { ChefOptionsService } from './chef-options.service';
 import { DB, Db } from '../../db/db.module';
 import { chefDishes, chefProfiles, locations, menuCategories, menuItems, menus } from '../../db/schema';
 import { assertCan, isPlatformStaff, JwtPayload } from '../../common/auth';
@@ -17,7 +18,25 @@ const PHOTO_PATH = /\/public\/chef-photos\/([0-9a-f-]{36})$/;
 /** Chef dish builder, menu sections, Gutad dish review, and the public storefront listing. */
 @Injectable()
 export class ChefDishesService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly chefs: ChefsService, private readonly files: ChefFilesService, private readonly audit: AuditService, private readonly redis: RedisService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly chefs: ChefsService, private readonly files: ChefFilesService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly options: ChefOptionsService) {}
+
+  /** Every group and option gets a stable uuid (kept across edits so saved carts stay valid). */
+  private normalizeConfig(cfg: OptionsConfigGroup[] | undefined) {
+    if (!cfg) return undefined;
+    const isId = (x: unknown) => typeof x === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
+    const remap = new Map<string, string>();
+    const out = cfg.slice(0, 12).map((g) => ({
+      ...g,
+      id: isId(g.id) ? g.id : newOptionId(),
+      name: String(g.name || '').slice(0, 60),
+      options: (g.options || []).slice(0, 30).map((o) => { const id = isId(o.id) ? o.id : newOptionId(); if (o.id && o.id !== id) remap.set(o.id, id); return { ...o, id, name: String(o.name || '').slice(0, 60), priceCents: Math.max(0, Math.round(Number(o.priceCents) || 0)) }; }),
+    }));
+    for (const g of out) {
+      if (g.parentOptionId && remap.has(g.parentOptionId)) g.parentOptionId = remap.get(g.parentOptionId)!;
+      for (const o of g.options) if (o.rules) o.rules = Object.fromEntries(Object.entries(o.rules).map(([k, v]) => [remap.get(k) || k, v]));
+    }
+    return out;
+  }
 
   // ───── helpers ─────
 
@@ -68,7 +87,7 @@ export class ChefDishesService {
   }
 
   private view(d: Dish, i: typeof menuItems.$inferSelect, chefName: string) {
-    const merged = { dishName: d.dishName, description: d.description, ingredients: d.ingredients, allergens: i.allergens, dietaryTags: i.dietaryTags, portionDesc: d.portionDesc, mode: d.mode, acceptsSpecialRequests: d.acceptsSpecialRequests, fulfillmentFormat: d.fulfillmentFormat, photos: d.photos, priceCents: i.priceCents, allergensConfirmed: d.allergensConfirmed };
+    const merged = { dishName: d.dishName, description: d.description, ingredients: d.ingredients, allergens: i.allergens, dietaryTags: i.dietaryTags, portionDesc: d.portionDesc, mode: d.mode, acceptsSpecialRequests: d.acceptsSpecialRequests, fulfillmentFormat: d.fulfillmentFormat, photos: d.photos, priceCents: i.priceCents, allergensConfirmed: d.allergensConfirmed, optionsConfig: d.optionsConfig as OptionsConfigGroup[] };
     return {
       ...d,
       title: chefDishTitle(d.dishName, chefName),
@@ -215,6 +234,11 @@ export class ChefDishesService {
     const photos = await this.normalizePhotos(user, input.photos, d.photos);
     const mode = input.mode ?? (d.mode as 'FIXED' | 'CUSTOMIZABLE');
     const patch: Record<string, unknown> = { ...input, ...(photos ? { photos } : {}) };
+    if (input.optionsConfig) patch.optionsConfig = this.normalizeConfig(input.optionsConfig);
+    if (d.reviewStatus === 'PUBLISHED' && patch.optionsConfig) {
+      const errs = validateOptionsConfig(patch.optionsConfig as OptionsConfigGroup[]);
+      if (errs.length) throw new BadRequestException({ message: `Fix the options first: ${errs.join('; ')}`, code: 'OPTIONS_INVALID', errors: errs });
+    }
     if (mode === 'FIXED') patch.acceptsSpecialRequests = false;
     if (input.dishName !== undefined) patch.dishName = input.dishName.trim();
     const operational = { priceCents: input.priceCents, prepMinutes: input.prepMinutes, dailyCapacity: input.dailyCapacity, minLeadDays: input.minLeadDays, cutoffHour: input.cutoffHour, maxAdvanceDays: input.maxAdvanceDays };
@@ -342,6 +366,10 @@ export class ChefDishesService {
     }
     await this.db.update(chefDishes).set(dishSet).where(eq(chefDishes.id, id));
     if (Object.keys(itemSet).length) await this.db.update(menuItems).set(itemSet).where(eq(menuItems.id, i.id));
+    // approved options become the dish's real modifier groups; extras follow the dish's live status
+    const [fresh] = await this.db.select().from(chefDishes).where(eq(chefDishes.id, id)).limit(1);
+    if (input.decision === 'APPROVE') await this.options.materialize(fresh, fresh.optionsConfig as OptionsConfigGroup[]);
+    else await this.options.syncExtrasForDish(fresh);
     await this.invalidate(d.locationId);
     await this.audit.log({ organizationId: p.organizationId, actorId: user.sub, action: `chef.dish.review.${input.decision.toLowerCase()}`, entityType: 'chef_dish', entityId: id, before: { status: d.reviewStatus, pending: !!pending }, after: dishSet, reason: note || null });
     const after = await this.load(id);
@@ -402,7 +430,8 @@ export class ChefDishesService {
       .limit(1);
     if (!r || r.d.reviewStatus !== 'PUBLISHED' || !r.i.isActive || r.p.status !== 'ACTIVE') throw new NotFoundException('Dish not available');
     const [loc] = await this.db.select({ id: locations.id, slug: locations.slug, name: locations.name, isPaused: locations.isPaused }).from(locations).where(eq(locations.id, r.d.locationId)).limit(1);
-    return { ...this.publicDish(r.d, r.i, r.p, { id: loc.id, slug: loc.slug, name: loc.name }, r.section), acceptingOrders: r.p.acceptingOrders && !loc.isPaused };
+    const groups = r.d.mode === 'CUSTOMIZABLE' ? await this.options.groupsForDish(r.d) : [];
+    return { ...this.publicDish(r.d, r.i, r.p, { id: loc.id, slug: loc.slug, name: loc.name }, r.section), groups, acceptingOrders: r.p.acceptingOrders && !loc.isPaused };
   }
 
   /** Chef display name for a chef kitchen (quote lines, tickets, receipts use the branded title). */

@@ -8,6 +8,7 @@ import { Alert, Spinner } from '@/components/ui';
 const NAV: [string, string][] = [
   ['/chef', 'Dashboard'],
   ['/chef/dishes', 'Dishes'],
+  ['/chef/extras', 'Extras'],
   ['/chef/profile', 'Public profile'],
   ['/merchant/orders', 'Orders'],
   ['/merchant/kitchen', 'Kitchen tickets'],

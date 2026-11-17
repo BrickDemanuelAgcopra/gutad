@@ -10,6 +10,8 @@ import * as s from './schema';
 import { loadConfig } from '../config/config';
 import { seedPlanCatalog } from '../modules/contracts/plans.service';
 import { CHEF_AGREEMENT_VERSION } from '@gutad/shared';
+import { randomUUID } from 'node:crypto';
+import { ChefOptionsService } from '../modules/chefs/chef-options.service';
 
 async function main() {
   const cfg = loadConfig();
@@ -63,6 +65,7 @@ async function main() {
 
   await seedDemoChef(db, log);
   await seedDemoChefDishes(db, log);
+  await seedDemoChefOptions(db, log);
 
   // demo merchant
   const [existingOrg] = await db.select().from(s.organizations).where(eq(s.organizations.slug, 'demo-bistro')).limit(1);
@@ -192,6 +195,50 @@ async function main() {
 
   log(`demo ready: location ${loc.id} (${loc.slug}), kitchen location ${kloc.id}, owner owner@demo.gutad.io / merchant12345, customer customer@demo.gutad.io / customer12345, admin ${adminEmail}`);
   await pool.end();
+}
+
+/** Customer options and approved extras for Chef Carlos's customizable dishes (added once). */
+async function seedDemoChefOptions(db: ReturnType<typeof createDb>, log: (m: string) => void) {
+  const [p] = await db.select().from(s.chefProfiles).where(eq(s.chefProfiles.slug, 'chef-carlos')).limit(1);
+  if (!p) return;
+  const dishes = await db.select().from(s.chefDishes).where(eq(s.chefDishes.chefProfileId, p.id));
+  const spaghetti = dishes.find((d) => d.dishName === 'Spaghetti');
+  const cake = dishes.find((d) => d.dishName === 'Celebration layer cake');
+  if (!spaghetti || (spaghetti.optionsConfig as unknown[]).length) return;
+  const u = () => randomUUID();
+  const o = (name: string, priceCents = 0, extra: Record<string, unknown> = {}) => ({ id: u(), name, priceCents, ...extra });
+  const large = o('Large', 500, { portionDesc: '650 g' });
+  const shrimp = o('Shrimp', 500, { addsAllergens: ['shellfish'], portionDesc: '6 shrimp', prepMinutesDelta: 5 });
+  const spaghettiCfg = [
+    { id: u(), name: 'Pasta portion', selectionType: 'SINGLE', required: true, minSelect: 1, maxSelect: 1, templateKey: 'portion', options: [o('Regular', 0, { isDefault: true, portionDesc: '450 g' }), large] },
+    { id: u(), name: 'Sauce', selectionType: 'LEVEL', required: true, minSelect: 1, maxSelect: 1, templateKey: 'sauce', options: [o('Light'), o('Standard', 0, { isDefault: true }), o('Extra', 150)] },
+    { id: u(), name: 'Cheese', selectionType: 'LEVEL', required: true, minSelect: 1, maxSelect: 1, templateKey: 'cheese', description: 'Removing cheese does not make the dish milk-free; the sauce is finished with butter.', options: [o('None'), o('Standard', 0, { isDefault: true }), o('Extra', 200)] },
+    { id: u(), name: 'Add a protein', selectionType: 'SINGLE', required: false, minSelect: 0, maxSelect: 1, templateKey: 'protein', options: [o('Beef meatballs', 400, { removesDietaryTags: ['vegetarian', 'vegan'], portionDesc: '4 meatballs', addsAllergens: ['egg'] }), o('Grilled chicken', 350, { removesDietaryTags: ['vegetarian', 'vegan'], portionDesc: '120 g' }), shrimp] },
+    { id: u(), name: 'Shrimp style', selectionType: 'LEVEL', required: true, minSelect: 1, maxSelect: 1, parentOptionId: shrimp.id, options: [o('Garlic butter', 0, { isDefault: true, addsAllergens: ['milk'] }), o('Spicy arrabbiata', 0)] },
+    { id: u(), name: 'Extra toppings', selectionType: 'QUANTITY', required: false, minSelect: 0, maxSelect: 4, templateKey: 'toppings', options: [o('Mushrooms', 150, { maxQty: 2, portionDesc: '30 g', rules: { [large.id]: { maxQty: 3 } } }), o('Fresh basil', 50, { maxQty: 2 })] },
+    { id: u(), name: 'Included', selectionType: 'INCLUDED', required: false, minSelect: 0, maxSelect: 0, templateKey: 'included', description: 'Cooked into the sauce; cannot be removed individually.', options: [o('Garlic, onion and olive oil', 0, { locked: true })] },
+  ];
+  const cakeCfg = [
+    { id: u(), name: 'Size', selectionType: 'SINGLE', required: true, minSelect: 1, maxSelect: 1, templateKey: 'portion', options: [o('8-inch (serves 12)', 0, { isDefault: true }), o('10-inch (serves 20)', 2500, { prepMinutesDelta: 60 })] },
+    { id: u(), name: 'Flavor', selectionType: 'SINGLE', required: true, minSelect: 1, maxSelect: 1, options: [o('Vanilla', 0, { isDefault: true }), o('Chocolate', 0), o('Lemon', 0)] },
+    { id: u(), name: 'Fruit', selectionType: 'LEVEL', required: true, minSelect: 1, maxSelect: 1, options: [o('No fruit'), o('Seasonal fruit', 0, { isDefault: true }), o('Extra fruit', 800)] },
+  ];
+  const svc = new ChefOptionsService(db as never, {} as never, {} as never, {} as never);
+  await db.update(s.chefDishes).set({ optionsConfig: spaghettiCfg }).where(eq(s.chefDishes.id, spaghetti.id));
+  await svc.materialize({ ...spaghetti, optionsConfig: spaghettiCfg }, spaghettiCfg as never, db);
+  if (cake) {
+    await db.update(s.chefDishes).set({ optionsConfig: cakeCfg }).where(eq(s.chefDishes.id, cake.id));
+    await svc.materialize({ ...cake, optionsConfig: cakeCfg }, cakeCfg as never, db);
+  }
+  await db.insert(s.chefExtras).values([
+    { chefProfileId: p.id, name: 'Burrata', synonyms: ['mozzarella', 'cheese'], portionDesc: '1 ball (100 g)', priceCents: 600, maxQty: 1, allergens: ['milk'], removesDietaryTags: ['vegan'], allDishes: false, dishIds: [spaghetti.id], status: 'APPROVED' },
+    { chefProfileId: p.id, name: 'Chili flakes', synonyms: ['chilli', 'pepper', 'spicy'], portionDesc: 'pinch', priceCents: 0, maxQty: 2, allDishes: true, status: 'APPROVED' },
+    { chefProfileId: p.id, name: 'Truffle oil', synonyms: ['truffle'], portionDesc: '5 ml drizzle', priceCents: 300, maxQty: 1, allDishes: false, dishIds: [spaghetti.id], status: 'APPROVED' },
+  ]);
+  const [fresh] = await db.select().from(s.chefDishes).where(eq(s.chefDishes.id, spaghetti.id)).limit(1);
+  await svc.syncExtrasForDish(fresh, db);
+  if (cake) { const [fc] = await db.select().from(s.chefDishes).where(eq(s.chefDishes.id, cake.id)).limit(1); await svc.syncExtrasForDish(fc, db); }
+  log('demo chef options ready (Spaghetti and celebration cake customizable; 3 approved extras)');
 }
 
 /** Chef Carlos's live demo dishes (added once, also on databases seeded before dishes existed). */

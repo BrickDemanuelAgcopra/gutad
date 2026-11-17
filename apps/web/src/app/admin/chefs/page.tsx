@@ -199,7 +199,8 @@ function Chefs() {
   );
 }
 
-interface ReviewDish { id: string; title: string; chefName: string; chefSlug: string; kind: 'NEW_LISTING' | 'CHANGE'; reviewStatus: string; priceCents: number; portionDesc: string; ingredients: string[]; allergens: string[]; dietaryTags: string[]; allergensConfirmed: boolean; photos: string[]; mode: string; acceptsSpecialRequests: boolean; fulfillmentFormat: string; description: string | null; pendingChanges: Record<string, unknown> | null; missing: string[]; submittedAt: string | null }
+type OptionsCfg = { id: string; name: string; selectionType: string; parentOptionId?: string | null; options: { name: string; priceCents: number; addsAllergens?: string[] }[] }[];
+interface ReviewDish { optionsConfig?: OptionsCfg; id: string; title: string; chefName: string; chefSlug: string; kind: 'NEW_LISTING' | 'CHANGE'; reviewStatus: string; priceCents: number; portionDesc: string; ingredients: string[]; allergens: string[]; dietaryTags: string[]; allergensConfirmed: boolean; photos: string[]; mode: string; acceptsSpecialRequests: boolean; fulfillmentFormat: string; description: string | null; pendingChanges: Record<string, unknown> | null; missing: string[]; submittedAt: string | null }
 
 /** New listings and material changes to live dishes: ingredients, allergens, portion, photos, price, recipe mode. */
 function DishReview() {
@@ -209,11 +210,12 @@ function DishReview() {
   const [note, setNote] = useState<Record<string, string>>({});
   const decide = (id: string, decision: string) => run(async () => { await api.post(`/admin/chef-dishes/${id}/review`, { decision, note: note[id] }); await reload(); });
   if (!data) return <p className="text-sm text-ink-500">Loading…</p>;
-  if (!data.length) return <Card><p className="text-sm text-ink-500">No dishes waiting for review.</p></Card>;
+  if (!data.length) return <><ExtrasReview /><Card><p className="text-sm text-ink-500">No dishes waiting for review.</p></Card></>;
   const fmt = (v: unknown) => (Array.isArray(v) ? v.join(', ') || '—' : v === null || v === undefined ? '—' : String(v));
   return (
     <div className="space-y-3">
       {error && <Alert>{error}</Alert>}
+      <ExtrasReview />
       {data.map((d) => (
         <Card key={d.id}>
           <div className="flex flex-col gap-4 sm:flex-row">
@@ -237,6 +239,7 @@ function DishReview() {
                   {Array.isArray(d.pendingChanges.ingredients) && !d.pendingChanges.allergens && <p className="mt-1 text-amber-800">⚠ Ingredients changed without an allergen update; check the allergen list.</p>}
                 </div>
               )}
+              {(() => { const cfg = ((d.pendingChanges?.optionsConfig as OptionsCfg | undefined) || d.optionsConfig || []); return cfg.length > 0 && d.mode !== 'FIXED' ? <div className="rounded-lg border border-ink-100 p-2 text-xs"><strong>{d.pendingChanges?.optionsConfig ? 'Proposed customer options' : 'Customer options'}</strong><ul className="mt-1 space-y-0.5">{cfg.map((g) => <li key={g.id}><span className="font-medium">{g.name}</span> <span className="text-ink-500">({g.selectionType.toLowerCase()}{g.parentOptionId ? ', conditional' : ''})</span>: {g.options.map((o) => `${o.name}${o.priceCents ? ` +${money(o.priceCents)}` : ''}${o.addsAllergens?.length ? ` [${o.addsAllergens.join(', ')}]` : ''}`).join(' · ')}</li>)}</ul></div> : null; })()}
               {!!d.missing.length && <p className="text-xs text-red-600">Missing: {d.missing.join(', ')}</p>}
               {can('chefs.manage') && (
                 <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -250,5 +253,32 @@ function DishReview() {
         </Card>
       ))}
     </div>
+  );
+}
+
+interface PendingExtra { id: string; name: string; chefName: string; priceCents: number; portionDesc: string | null; allergens: string[]; removesDietaryTags: string[]; synonyms: string[]; allDishes: boolean; dishIds: string[] }
+
+/** Chef extras waiting for approval (new ingredients and allergen changes). */
+function ExtrasReview() {
+  const { can } = useSession();
+  const { data, reload } = useApi<PendingExtra[]>('/admin/chef-extras/review');
+  const { run, busy } = useAction();
+  const [note, setNote] = useState<Record<string, string>>({});
+  if (!data?.length) return null;
+  return (
+    <Card title={`Extras waiting for approval · ${data.length}`}>
+      <ul className="divide-y divide-ink-100">
+        {data.map((e) => (
+          <li key={e.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
+            <div className="min-w-0 flex-1"><strong>{e.name}</strong> <span className="text-ink-500">by {e.chefName} · {money(e.priceCents)}{e.portionDesc ? ` per ${e.portionDesc}` : ''}</span><div className="text-xs">Allergens: {e.allergens.join(', ') || 'none declared'}{e.removesDietaryTags.length ? ` · removes ${e.removesDietaryTags.join(', ')}` : ''}{e.synonyms.length ? ` · search: ${e.synonyms.join(', ')}` : ''} · {e.allDishes ? 'all customizable dishes' : `${e.dishIds.length} dish(es)`}</div></div>
+            {can('chefs.manage') && <>
+              <input className="w-48 rounded border border-ink-100 px-2 py-1 text-xs" placeholder="Note (to reject)" value={note[e.id] || ''} onChange={(x) => setNote({ ...note, [e.id]: x.target.value })} />
+              <Button size="sm" disabled={busy} onClick={() => run(async () => { await api.post(`/admin/chef-extras/${e.id}/review`, { approve: true }); await reload(); })}>Approve</Button>
+              <Button size="sm" variant="secondary" disabled={busy || (note[e.id] || '').trim().length < 5} onClick={() => run(async () => { await api.post(`/admin/chef-extras/${e.id}/review`, { approve: false, note: note[e.id] }); await reload(); })}>Reject</Button>
+            </>}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }

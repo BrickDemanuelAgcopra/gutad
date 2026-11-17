@@ -111,6 +111,9 @@ export const orderLines = pgTable('order_lines', {
   readyAt: ts('ready_at'),
   participantId: uuid('participant_id'),
   label: text('label'),
+  /** purchase snapshot of a customized dish's effective allergens and dietary labels (null = the item's own) */
+  allergens: text('allergens').array(),
+  dietaryTags: text('dietary_tags').array(),
 });
 
 export const orderEvents = pgTable(

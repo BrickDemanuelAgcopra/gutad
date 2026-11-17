@@ -100,7 +100,7 @@ export class KitchenService implements OnModuleInit {
     const stationRows = kitchen ? await tx.select().from(stations).where(eq(stations.kitchenId, kitchen.id)) : [];
     const routes = kitchen ? await tx.select().from(stationRoutes).where(eq(stationRoutes.kitchenId, kitchen.id)) : [];
     const itemIds = lines.map((l) => l.menuItemId).filter((x): x is string => !!x);
-    const items = itemIds.length ? await tx.select({ id: menuItems.id, categoryId: menuItems.categoryId, cookMinutes: menuItems.cookMinutes, handling: menuItems.handling, recipeId: menuItems.recipeId, kind: menuItems.kind }).from(menuItems).where(inArray(menuItems.id, itemIds)) : [];
+    const items = itemIds.length ? await tx.select({ id: menuItems.id, categoryId: menuItems.categoryId, cookMinutes: menuItems.cookMinutes, handling: menuItems.handling, recipeId: menuItems.recipeId, kind: menuItems.kind, allergens: menuItems.allergens }).from(menuItems).where(inArray(menuItems.id, itemIds)) : [];
     const recipeIds = items.map((i) => i.recipeId).filter((x): x is string => !!x);
     const recipeRows = recipeIds.length ? await tx.select({ id: recipes.id, prep: recipes.prepMinutes, batch: recipes.batchMaxPortions }).from(recipes).where(inArray(recipes.id, recipeIds)) : [];
     const recipePrep = new Map(recipeRows.map((r) => [r.id, r.prep]));
@@ -133,7 +133,9 @@ export class KitchenService implements OnModuleInit {
     for (const [code, ls] of groups) {
       for (const l of ls) {
         const it = items.find((i) => i.id === l.menuItemId);
-        const flags = Array.from(new Set([...(it?.handling || []), ...(mentionsAllergy(l.specialInstructions) ? ['ALLERGEN'] : [])]));
+        // a customization that adds an allergen the dish does not normally contain (e.g. shrimp) is flagged for the cook and packer
+        const addedAllergen = !!l.allergens?.some((a) => !(it?.allergens || []).includes(a));
+        const flags = Array.from(new Set([...(it?.handling || []), ...(mentionsAllergy(l.specialInstructions) || addedAllergen ? ['ALLERGEN'] : [])]));
         lineFlags.push(flags);
         await tx.update(orderLines).set({ status: 'PREPARING', stationCode: code, handling: flags }).where(eq(orderLines.id, l.id));
       }

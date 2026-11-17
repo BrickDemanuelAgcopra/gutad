@@ -1,3 +1,4 @@
+import type { ModGroup, ModOption, ModSelectionType } from '@gutad/shared';
 import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { and, eq, inArray } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
@@ -29,7 +30,8 @@ export interface ResolvedItem {
   taxCategory: string;
   maxPerOrder: number | null;
   kind: string;
-  modifierGroups: { id: string; name: string; minSelect: number; maxSelect: number; required: boolean; options: { id: string; name: string; priceCents: number; soldOut: boolean }[] }[];
+  dietaryTags: string[];
+  modifierGroups: (ModGroup & { options: (ModOption & { soldOut: boolean })[] })[];
 }
 
 @Injectable()
@@ -139,12 +141,16 @@ export class CatalogService implements OnModuleInit {
     const gIds = Array.from(new Set(links.map((l) => l.groupId)));
     if (!gIds.length) return map;
     const groups = await this.db.select().from(modifierGroups).where(inArray(modifierGroups.id, gIds));
-    const options = await this.db.select().from(modifierOptions).where(inArray(modifierOptions.groupId, gIds));
+    const options = (await this.db.select().from(modifierOptions).where(inArray(modifierOptions.groupId, gIds))).sort((a, b) => a.sortOrder - b.sortOrder);
     for (const l of links) {
       const g = groups.find((x) => x.id === l.groupId);
       if (!g) continue;
       const arr = map.get(l.itemId) || [];
-      arr.push({ id: g.id, name: g.name, minSelect: g.minSelect, maxSelect: g.maxSelect, required: g.required, options: options.filter((o) => o.groupId === g.id).map((o) => ({ id: o.id, name: o.name, priceCents: o.priceCents, soldOut: o.soldOut })) });
+      arr.push({
+        id: g.id, name: g.name, minSelect: g.minSelect, maxSelect: g.maxSelect, required: g.required,
+        selectionType: g.selectionType as ModSelectionType, parentOptionId: g.parentOptionId, description: g.description, templateKey: g.templateKey, isExtras: g.isExtras,
+        options: options.filter((o) => o.groupId === g.id).map((o) => ({ id: o.id, name: o.name, priceCents: o.priceCents, soldOut: o.soldOut, isDefault: o.isDefault, maxQty: o.maxQty, portionDesc: o.portionDesc, prepMinutesDelta: o.prepMinutesDelta, addsAllergens: o.addsAllergens, removesDietaryTags: o.removesDietaryTags, locked: o.locked, rules: o.rules as ModOption['rules'], description: o.description, searchTerms: o.searchTerms })),
+      });
       map.set(l.itemId, arr);
     }
     return map;
@@ -182,6 +188,7 @@ export class CatalogService implements OnModuleInit {
         brandId: menu.brandId,
         stationCode: item.stationCode,
         allergens: item.allergens,
+        dietaryTags: item.dietaryTags,
         recipeId: item.recipeId,
         modifierGroups: groups.get(item.id) || [],
       });

@@ -235,6 +235,14 @@ export const modifierGroups = pgTable('modifier_groups', {
   minSelect: integer('min_select').notNull().default(0),
   maxSelect: integer('max_select').notNull().default(1),
   required: boolean('required').notNull().default(false),
+  /** CHOICE (legacy) | SINGLE | LEVEL | MULTI | QUANTITY | INCLUDED — see @gutad/shared customization */
+  selectionType: text('selection_type').notNull().default('CHOICE'),
+  /** conditional group: applies only when this option is chosen */
+  parentOptionId: uuid('parent_option_id'),
+  description: text('description'),
+  templateKey: text('template_key'),
+  /** a chef dish's approved extras, found through ingredient search */
+  isExtras: boolean('is_extras').notNull().default(false),
 });
 
 export const modifierOptions = pgTable('modifier_options', {
@@ -246,6 +254,20 @@ export const modifierOptions = pgTable('modifier_options', {
   priceCents: integer('price_cents').notNull().default(0),
   soldOut: boolean('sold_out').notNull().default(false),
   ingredientId: uuid('ingredient_id'),
+  isDefault: boolean('is_default').notNull().default(false),
+  maxQty: integer('max_qty').notNull().default(1),
+  /** e.g. "one mushroom portion = 30 g" */
+  portionDesc: text('portion_desc'),
+  prepMinutesDelta: integer('prep_minutes_delta').notNull().default(0),
+  addsAllergens: text('adds_allergens').array().notNull().default([]),
+  removesDietaryTags: text('removes_dietary_tags').array().notNull().default([]),
+  /** shown but not removable (mixed into a batch) */
+  locked: boolean('locked').notNull().default(false),
+  /** { [otherOptionId]: { maxQty?, priceCents?, hidden? } } while that option is chosen */
+  rules: jsonb('rules').notNull().default({}),
+  description: text('description'),
+  searchTerms: text('search_terms').array().notNull().default([]),
+  sortOrder: integer('sort_order').notNull().default(0),
 });
 
 export const itemModifierGroups = pgTable(

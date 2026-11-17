@@ -164,6 +164,10 @@ export const chefDishes = pgTable(
     reviewNote: text('review_note'),
     /** material edits to a live dish waiting for review */
     pendingChanges: jsonb('pending_changes'),
+    /** customer options as the chef configured them (OptionsConfigGroup[]); materialized into modifier groups when approved */
+    optionsConfig: jsonb('options_config').notNull().default([]),
+    /** modifier groups generated from the approved configuration (and the extras group) */
+    modifierGroupIds: uuid('modifier_group_ids').array().notNull().default([]),
     submittedAt: ts('submitted_at'),
     publishedAt: ts('published_at'),
     reviewedById: uuid('reviewed_by_id'),
@@ -171,4 +175,54 @@ export const chefDishes = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('chef_dishes_item_uq').on(t.menuItemId), index('chef_dishes_chef_idx').on(t.chefProfileId), index('chef_dishes_status_idx').on(t.reviewStatus)],
+);
+
+/**
+ * A chef's approved extras catalog: ingredients the chef will add on request at a set price per portion.
+ * New extras (and allergen changes) are reviewed by Gutad; approved extras are offered instantly only on the
+ * dishes the chef allows (all customizable dishes, or selected ones). Anything else becomes a special request.
+ */
+export const chefExtras = pgTable(
+  'chef_extras',
+  {
+    id: id(),
+    chefProfileId: uuid('chef_profile_id')
+      .notNull()
+      .references(() => chefProfiles.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** search synonyms, e.g. "prawn" for shrimp */
+    synonyms: text('synonyms').array().notNull().default([]),
+    portionDesc: text('portion_desc'),
+    priceCents: integer('price_cents').notNull().default(0),
+    maxQty: integer('max_qty').notNull().default(2),
+    prepMinutesDelta: integer('prep_minutes_delta').notNull().default(0),
+    allergens: text('allergens').array().notNull().default([]),
+    removesDietaryTags: text('removes_dietary_tags').array().notNull().default([]),
+    /** true = every customizable dish of the chef; otherwise only dishIds */
+    allDishes: boolean('all_dishes').notNull().default(false),
+    dishIds: uuid('dish_ids').array().notNull().default([]),
+    /** PENDING | APPROVED | REJECTED */
+    status: text('status').notNull().default('PENDING'),
+    reviewNote: text('review_note'),
+    soldOut: boolean('sold_out').notNull().default(false),
+    active: boolean('active').notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('chef_extras_chef_idx').on(t.chefProfileId)],
+);
+
+/** Modifier option generated for an extra on one dish (keeps option ids stable across syncs). */
+export const chefDishExtras = pgTable(
+  'chef_dish_extras',
+  {
+    dishId: uuid('dish_id')
+      .notNull()
+      .references(() => chefDishes.id, { onDelete: 'cascade' }),
+    extraId: uuid('extra_id')
+      .notNull()
+      .references(() => chefExtras.id, { onDelete: 'cascade' }),
+    optionId: uuid('option_id').notNull(),
+  },
+  (t) => [uniqueIndex('chef_dish_extras_uq').on(t.dishId, t.extraId)],
 );
