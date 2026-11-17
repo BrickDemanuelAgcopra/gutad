@@ -55,12 +55,24 @@ Goal: an Uber-style managed marketplace of independent chefs. Dishes sell as **�
 - [x] Web: `DateSlotPicker` (month grid with arrow-key navigation, “N left”, reasons for unavailable dates, order-by time, time chips) on the dish page (next available date; the chosen day carries to checkout) and at checkout (cart calendar, holdKey, capacity errors refresh the calendar). `/chef/calendar` (weekly settings, per-date changes, booked/held per day and dish, time away). Admin chef calendar view.
 - [x] Mobile: `DateSlotPicker`, checkout, dish screen availability, `chef/calendar`, dashboard link.
 - [x] Smoke `scripts/smoke-chef-d.mjs` (50 checks). Full suite 709/709.
-## Phase 5 — Checkout, payments & multi-chef [ ] (next)
-## Phase 6 — Special requests & quotes [ ]
+## Phase 5 — Checkout, payments & multi-chef [x]
+- [x] Migration 0022: `checkout_groups`, `order_payment_allocations` (one payment split across orders, refunds tracked per order), and order columns `checkout_group_id`, `prepaid`, `accept_by`, `free_cancel_until`, `late_refund_pct`, `recognized_at`.
+- [x] Charge now: chef orders are captured in full at checkout (platform charge, never a destination charge). The ledger holds the money in `DEFERRED_REVENUE` per order. Completion (pickup, delivery or no-show, plus a 1-minute catch-up job) moves it to `MERCHANT_PAYABLE` (food + tax − commission), Gutad commission and fees, so weekly settlement only pays completed orders.
+- [x] Acceptance: `accept_by` = min(now + `chefs.policy.acceptHours`, order time − 2 h), at least 30 minutes. A chef decline or a missed deadline declines the order and refunds it in full automatically (job every minute), restoring credits and points.
+- [x] Cancellation by cutoff: full refund before the date’s order cutoff (or while the chef hasn’t accepted); afterwards the chef’s `lateRefundPct` (chef setting within Gutad’s range). The kept part is credited to the chef. `GET orders/:id/cancellation` previews the refund. Staff cancels refund from the right allocation.
+- [x] Fee scope `fees.chef_network` (approval-gated): commission 15% and Chef Network customer fees (service 8%, $1.99–$7.99, small order under $15 = $2.99). Policy `chefs.policy` (accept hours, late-refund min/max/default). Admin “Fees & policy” tab.
+- [x] Multi-chef: `POST /checkout-groups` (1–6 chef quotes, each with its own day, time and capacity hold) places one child order per kitchen and charges once, all in one transaction. `GET /checkout-groups/:id` (owner, staff, or guest by email).
+- [x] Branding: line titles already read “Gutad’s X — by Chef Y”. Order pages, emails and receipts now say who prepared it, that Gutad sold it, the confirmation deadline and the cancellation terms. Order emails for chef orders cover charged-now, declined-and-refunded and cancellation refunds.
+- [x] Web: `/checkout/chefs` (a calendar, quote and hold per chef; one payment), a “check out all chefs together” banner, chef terms at checkout, `/orders/group/[id]`, cancellation preview with confirmation, late-refund setting in `/chef/calendar`.
+- [x] Mobile: `checkout-chefs`, `checkout-group/[id]`, checkout banner and terms, order screen cancellation preview.
+- [x] Second demo chef: Chef Amara (amara@demo.gutad.io), 2 dishes, Wed–Sun, 50% late refund.
+- [x] Smoke `scripts/smoke-chef-e.mjs` (27 checks). Full suite 736/736.
+## Phase 6 — Special requests & quotes [ ] (next)
 ## Phase 7 — Admin operations & analytics [ ]
 ## Phase 8 — Hardening & docs [ ]
 
 ## Log
+- 2026-11-17 Phase 5 built and verified locally (736/736 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 4 built and verified locally (709/709 smoke, web build, typecheck of shared, API, web and mobile).
 - 2026-11-17 Phase 3 built and verified locally (web build, API/web/mobile typecheck, smoke incl. 27 new checks).
 - 2026-11-16 Phase 2 built and verified locally (631/631 smoke, web build, API/web/mobile typecheck).

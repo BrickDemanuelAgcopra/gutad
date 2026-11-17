@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { and, asc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { chefCalendarDays, chefDishes, chefPauses, chefProfiles, kitchenCapacityLedger, locations, menuItems, openingHours, orgMemberships, orders } from '../../db/schema';
-import { addDaysYmd, chefNoticeText, weekdayYmd, type ChefAvailability, type ChefAvailabilityDay, type ChefCalendarDay, type ChefDayStatus, type ChefOperatingSettings, type ChefPause } from '@gutad/shared';
+import { addDaysYmd, chefNoticeText, DEFAULT_CHEF_POLICY, type ChefPolicy, weekdayYmd, type ChefAvailability, type ChefAvailabilityDay, type ChefCalendarDay, type ChefDayStatus, type ChefOperatingSettings, type ChefPause } from '@gutad/shared';
 import { assertCan, JwtPayload } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
 import { SettingsService } from '../../core/settings.service';
@@ -47,6 +47,7 @@ export function chefOperating(p: Profile | null, hours: (typeof openingHours.$in
     maxAdvanceDays: op.maxAdvanceDays ?? 30,
     opens: op.opens || first?.opens || '09:00',
     closes: op.closes || first?.closes || '20:00',
+    lateRefundPct: op.lateRefundPct,
   };
 }
 
@@ -237,6 +238,12 @@ export class ChefCalendarService {
     return a.days.map((d) => ({ date: d.date, slots: d.slots }));
   }
 
+  /** The chef's public name for a kitchen location (order pages and receipts). */
+  async chefNameFor(locationId: string) {
+    const [p] = await this.db.select({ n: chefProfiles.displayName }).from(chefProfiles).where(eq(chefProfiles.locationId, locationId)).limit(1);
+    return p?.n ?? null;
+  }
+
   // ───── quote holds and checkout ─────
 
   private lock(tx: DbOrTx, locationId: string, date: string) {
@@ -307,7 +314,7 @@ export class ChefCalendarService {
       const r = await this.evaluate(input.locationId, input.scheduledFor, input.lines, null, tx);
       this.explain(r.ctx, r.day, r.rules, r.qty, r.usage);
       await tx.insert(kitchenCapacityLedger).values([...r.qty.entries()].map(([menuItemId, units]) => ({ locationId: input.locationId, menuItemId, serviceDate: r.date, units, status: 'HELD', holdKey: input.holdKey ?? null, quoteId: input.quoteId, expiresAt: input.expiresAt })));
-      return { serviceDate: r.date, remaining: r.day.remaining === null ? null : r.day.remaining - [...r.qty.values()].reduce((a, n) => a + n, 0) };
+      return { serviceDate: r.date, orderBy: r.day.orderBy, remaining: r.day.remaining === null ? null : r.day.remaining - [...r.qty.values()].reduce((a, n) => a + n, 0) };
     });
   }
 
@@ -406,6 +413,7 @@ export class ChefCalendarService {
       timezone: ctx.loc.timezone,
       today,
       maxAdvanceCap: ctx.cap,
+      policy: await this.settings.getObject<ChefPolicy>('chefs.policy', DEFAULT_CHEF_POLICY),
       settings: ctx.op,
       pauses: pauses.map((x): ChefPause => ({ id: x.id, startDate: x.startDate, endDate: x.endDate, reason: x.reason })),
       dishLimits: dishes.filter((d) => d.status !== 'ARCHIVED').map((d) => ({ menuItemId: d.menuItemId, name: d.name, limit: d.limit })),
@@ -423,6 +431,10 @@ export class ChefCalendarService {
     if (!next.cookingDays.length) throw new BadRequestException({ message: 'Choose at least one cooking day (use a pause for time away)', code: 'NO_COOKING_DAYS' });
     if (toMin(next.closes) - toMin(next.opens) < SLOT_MINUTES) throw new BadRequestException({ message: 'The pickup window must be at least 30 minutes', code: 'WINDOW_TOO_SHORT' });
     if (next.maxAdvanceDays > cap) throw new BadRequestException({ message: `Orders can open at most ${cap} days ahead`, code: 'ADVANCE_TOO_FAR', max: cap });
+    if (input.lateRefundPct !== undefined) {
+      const pol = await this.settings.getObject<ChefPolicy>('chefs.policy', DEFAULT_CHEF_POLICY);
+      if (input.lateRefundPct < pol.lateRefundMinPct || input.lateRefundPct > pol.lateRefundMaxPct) throw new BadRequestException({ message: `Late-cancellation refunds must be between ${pol.lateRefundMinPct}% and ${pol.lateRefundMaxPct}%`, code: 'LATE_REFUND_OUT_OF_RANGE', min: pol.lateRefundMinPct, max: pol.lateRefundMaxPct });
+    }
     if (next.maxAdvanceDays <= next.minLeadDays) throw new BadRequestException({ message: 'How far ahead customers can order must be longer than your notice period', code: 'ADVANCE_TOO_SHORT' });
     next.cookingDays = [...new Set(next.cookingDays)].sort();
     const operating = { ...((p.operating as object) || {}), ...next };

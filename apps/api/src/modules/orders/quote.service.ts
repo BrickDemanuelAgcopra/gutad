@@ -6,7 +6,7 @@ import { brandSellable } from '../../common/brand-rules';
 import { DEFAULT_PAYMENT_METHODS, enabledMethods, type AppliedPromotion, type PaymentMethodsConfig } from '@gutad/shared';
 import { giftBalance } from '../growth/gift-tender';
 import { assertCashLimit, creditAllowance } from '../customers/limits';
-import { cartCompatibility, chefDishTitle, evaluateCustomization, modifierLabel, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
+import { cartCompatibility, chefDishTitle, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, type ChefNetworkFees, type ChefPolicy, evaluateCustomization, modifierLabel, computeCustomerFees, DEFAULT_CUSTOMER_FEES, type CustomerFeeRules } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { CatalogService, ResolvedItem } from '../catalog/catalog.service';
 import { ContractsService } from '../contracts/contracts.service';
@@ -232,10 +232,13 @@ export class QuoteService {
     }
 
     // fees, tax, tip
-    const terms = await this.contracts.termsFor(loc.id, input.channel, now, tx, input.fulfillmentType === 'DELIVERY' || input.fulfillmentType === 'PICKUP' || input.fulfillmentType === 'DINE_IN' ? input.fulfillmentType : undefined);
+    const terms = { ...(await this.contracts.termsFor(loc.id, input.channel, now, tx, input.fulfillmentType === 'DELIVERY' || input.fulfillmentType === 'PICKUP' || input.fulfillmentType === 'DINE_IN' ? input.fulfillmentType : undefined)) };
     // service fee applies to marketplace delivery orders only (pickup never carries it); members have it waived
     // 9.2 — configurable customer fees (setting `fees.customer`); members can have the service fee waived
-    const feeRules = sim?.feeRules || (await this.settings.getObject('fees.customer', DEFAULT_CUSTOMER_FEES));
+    // Gutad Chef Network orders use their own fee scope and commission (setting fees.chef_network)
+    const chefFees = loc.chefKitchen ? await this.settings.getObject<ChefNetworkFees>('fees.chef_network', DEFAULT_CHEF_NETWORK_FEES) : null;
+    if (chefFees) terms.commissionBps = chefFees.commissionBps;
+    const feeRules = sim?.feeRules || chefFees?.customer || (await this.settings.getObject('fees.customer', DEFAULT_CUSTOMER_FEES));
     const fees = computeCustomerFees(feeRules, { channel: input.channel, fulfillmentType: input.fulfillmentType, subtotalCents, itemCount: snapLines.reduce((a, l) => a + l.quantity, 0), locationPackagingCents: loc.packagingFeeCents, serviceFeeWaived: !!membership?.benefits.serviceFeeWaived });
     const serviceFeeCents = fees.serviceFeeCents;
     const smallOrderFeeCents = fees.smallOrderFeeCents;
@@ -302,6 +305,12 @@ export class QuoteService {
     // Chef Network: hold the date's capacity while the customer checks out (released when the quote lapses)
     if (loc.chefKitchen && scheduledFor && !sim) {
       const h = await this.chefCalendar.hold({ locationId: loc.id, scheduledFor, lines: capacityLines, quoteId, holdKey: input.holdKey, expiresAt });
+      // the cancellation terms the customer accepts: full refund until the date's cutoff, then the chef's late refund
+      const policy = await this.settings.getObject<ChefPolicy>('chefs.policy', DEFAULT_CHEF_POLICY);
+      const [cp] = await tx.select({ operating: chefProfiles.operating }).from(chefProfiles).where(eq(chefProfiles.locationId, loc.id)).limit(1);
+      const chosen = (cp?.operating as { lateRefundPct?: number } | undefined)?.lateRefundPct;
+      const lateRefundPct = Math.max(policy.lateRefundMinPct, Math.min(policy.lateRefundMaxPct, chosen ?? policy.lateRefundDefaultPct));
+      Object.assign(snapshot, { chef: { freeCancelUntil: h.orderBy, lateRefundPct, acceptHours: policy.acceptHours } });
       if (h.remaining !== null && h.remaining <= 3) warnings.push(h.remaining ? `Only ${h.remaining} more portion${h.remaining === 1 ? '' : 's'} left for that day` : 'You’re getting the last portions for that day');
     }
     if (sim) return { promotions: promo.applied, giftCents, subtotalCents, discountCents, taxCents, serviceFeeCents, smallOrderFeeCents, packagingFeeCents, deliveryFeeCents, tipCents, creditsCents, loyaltyCents, totalCents, commissionCents, promotionFunder, promotionPlatformShareCents, taxLines: tax.lines, lines: snapLines, warnings };
@@ -313,7 +322,7 @@ export class QuoteService {
   }
 
   present(q: typeof quotes.$inferSelect, warnings: string[] = []) {
-    const s = q.snapshot as { lines: QuoteSnapshotLine[]; creditsCents: number; loyaltyCents: number; giftCents?: number; commissionCents: number; promotions?: AppliedPromotion[] };
+    const s = q.snapshot as { chef?: { freeCancelUntil: string | null; lateRefundPct: number }; lines: QuoteSnapshotLine[]; creditsCents: number; loyaltyCents: number; giftCents?: number; commissionCents: number; promotions?: AppliedPromotion[] };
     return {
       id: q.id,
       locationId: q.locationId,
@@ -340,6 +349,8 @@ export class QuoteService {
       scheduledFor: q.scheduledFor?.toISOString() ?? null,
       expiresAt: q.expiresAt.toISOString(),
       deliveryQuoteId: q.deliveryQuoteId,
+      // Gutad Chef Network: charged now; full refund until freeCancelUntil, then lateRefundPct
+      chefTerms: s.chef ? { chargedNow: true, freeCancelUntil: s.chef.freeCancelUntil, lateRefundPct: s.chef.lateRefundPct } : null,
       warnings,
     };
   }

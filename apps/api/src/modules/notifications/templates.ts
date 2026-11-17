@@ -58,6 +58,13 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
 
     // ── Orders ──────────────────────────────────────────────────────────────
     case 'order.submitted':
+      // Gutad Chef Network: charged now, cooked to order on the chosen day
+      if (p.chefName) return sub(`Order ${num} placed with ${p.chefName}`, `Gutad charged ${money(p.totalCents as number)} for order ${num}. ${p.chefName} will confirm by ${when(p.acceptBy)}; if not, you get a full refund automatically.`, {
+        eyebrow: 'Order placed', heading: `${p.chefName} is cooking for you`,
+        paragraphs: [`Your order is booked for ${when(p.scheduledFor)}. ${p.chefName} confirms by ${when(p.acceptBy)}; if they can't, we refund you in full automatically.`, p.freeCancelUntil ? `You can cancel for a full refund until ${when(p.freeCancelUntil)}.` : ''].filter(Boolean),
+        details: [['Order', num], ['Chef', p.chefName as string], ['For', when(p.scheduledFor)], ['Charged', money(p.totalCents as number)], ['Sold by', 'Gutad']],
+        cta: orderCta('View your order'),
+      });
       return sub(`Order ${num} received`, `We've sent your order ${num} to the restaurant. You'll hear from us when it's confirmed.`, {
         eyebrow: 'Order received', heading: 'We’ve got your order',
         paragraphs: ["Your order is with the restaurant now. We'll let you know as soon as they confirm it."],
@@ -72,6 +79,12 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
         cta: orderCta('Track your order'),
       });
     case 'order.rejected':
+      if (p.prepaid) return sub(`Order ${num} refunded`, `Sorry — order ${num} couldn't go ahead (${p.reason}). We refunded ${money(p.refundCents as number)} to your card.`, {
+        eyebrow: 'Refunded', tone: 'danger', heading: 'Your order couldn’t go ahead',
+        paragraphs: [`We're sorry. ${p.reason}. We refunded the full ${money(p.refundCents as number)} to your original payment method; it usually appears within 5–10 business days.`],
+        details: [['Order', num], ['Refund', money(p.refundCents as number)]],
+        cta: { label: 'Find another chef', url: `${web}/chefs` },
+      });
       return sub(`Order ${num} could not be accepted`, `Sorry — order ${num} was not accepted (${p.reason}). Your payment hold has been released.`, {
         eyebrow: 'Not accepted', tone: 'danger', heading: 'Your order couldn’t be accepted',
         paragraphs: ["We're sorry. The restaurant couldn't take this order, so you have not been charged. The hold on your payment method has been released; your bank may take a few days to show it."],
@@ -115,6 +128,12 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
         cta: orderCta('Rate your meal'),
       });
     case 'order.canceled':
+      if (p.prepaid) return sub(`Order ${num} canceled`, `Order ${num} was canceled. Refund: ${money((p.refundCents as number) || 0)}.`, {
+        eyebrow: 'Canceled', tone: 'danger', heading: 'Your order was canceled',
+        paragraphs: [(p.refundCents as number) > 0 ? `We refunded ${money(p.refundCents as number)} to your original payment method; it usually appears within 5–10 business days.` : 'This cancellation came after the order cutoff, so under the terms you accepted at checkout no refund applies.'],
+        details: [['Order', num], ['Refund', money((p.refundCents as number) || 0)]],
+        cta: orderCta(),
+      });
       return sub(`Order ${num} canceled`, `Order ${num} was canceled (${p.reason}). Any captured payment is being refunded.`, {
         eyebrow: 'Canceled', tone: 'danger', heading: 'Your order was canceled',
         paragraphs: ['Any payment we captured is being refunded to your original payment method. Refunds usually appear within 5–10 business days.'],

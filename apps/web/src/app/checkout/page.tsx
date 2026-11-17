@@ -9,7 +9,7 @@ import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input, Select, Textarea } from '@/components/ui';
 import { SmsNotice } from '@/components/legal';
 import { CardField, type CardToken } from '@/components/card-field';
-import { DateSlotPicker, preferredDate } from '@/components/date-slot-picker';
+import { DateSlotPicker, orderByLabel, preferredDate } from '@/components/date-slot-picker';
 
 type Fulfillment = 'PICKUP' | 'DELIVERY' | 'DINE_IN';
 
@@ -32,7 +32,7 @@ export default function CheckoutPage() {
   const [useGift, setUseGift] = useState(false);
   const [utensils, setUtensils] = useState(false);
   const [table, setTable] = useState(() => (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('table') || '' : ''));
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const [quote, setQuote] = useState<(Quote & { chefTerms?: { chargedNow: boolean; freeCancelUntil: string | null; lateRefundPct: number } | null }) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idem = useRef(newIdempotencyKey());
@@ -50,6 +50,14 @@ export default function CheckoutPage() {
   const [avail, setAvail] = useState<ChefAvailability | null>(null);
   const [availLoading, setAvailLoading] = useState(false);
   const [availNonce, setAvailNonce] = useState(0);
+  // other chef carts waiting (dish pages park carts per chef): offer one checkout for all of them
+  const [parkedChefs, setParkedChefs] = useState(0);
+  useEffect(() => {
+    if (!chef || !parked.length) { setParkedChefs(0); return; }
+    let cancelled = false;
+    Promise.all(parked.map((p) => api.get<{ chefKitchen?: boolean }>(`/public/locations/${p.locationId}`).then((l) => !!l.chefKitchen).catch(() => false))).then((r) => { if (!cancelled) setParkedChefs(r.filter(Boolean).length); });
+    return () => { cancelled = true; };
+  }, [chef, parked]);
   const cartKey = cart.lines.map((l) => `${l.menuItemId}:${l.quantity}`).join(',');
   useEffect(() => {
     if (!chef || !cart.locationId || !cart.lines.length) return;
@@ -137,6 +145,13 @@ export default function CheckoutPage() {
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
       <div className="space-y-4">
+        {chef && parkedChefs > 0 && (
+          <div className="rounded-2xl border border-brand-200 bg-brand-50 p-4">
+            <div className="font-semibold">Ordering from {parkedChefs + 1} chefs?</div>
+            <p className="text-sm text-ink-700">Pick a day for each and pay once for all {parkedChefs + 1} deliveries.</p>
+            <Link href="/checkout/chefs"><Button className="mt-2" size="sm">Check out all chefs together</Button></Link>
+          </div>
+        )}
         {parked.length > 0 && (
           <Card title="Your other saved orders">
             <p className="text-xs text-ink-500">These are separate orders. After you place this one, the next starts automatically.</p>
@@ -214,7 +229,8 @@ export default function CheckoutPage() {
           {(!user || !cards?.length || savedCardId === 'new') && <CardField value={card} onChange={(t) => { setCard(t); setDeclined(false); }} />}
           {user && (!cards?.length || savedCardId === 'new') && <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={saveCard} onChange={(e) => setSaveCard(e.target.checked)} /> Save this card for next time</label>}
           {declined && <div className="mt-2"><Alert>That card was declined. Your order is still held at the same price; choose another card and try again.</Alert></div>}
-          <p className="mt-1 text-xs text-ink-300">Card is authorized now and captured only when the restaurant accepts. Test mode: numbers ending in 0002 are declined.</p>
+          {chef && <p className="mt-1 text-xs text-ink-500">Chef orders are charged now, sold by Gutad. Full refund if the chef declines or doesn’t confirm in time, or if you cancel before the order cutoff{quote?.chefTerms?.freeCancelUntil && loc ? ` (${orderByLabel(quote.chefTerms.freeCancelUntil, loc.timezone)})` : ''}{quote?.chefTerms ? (quote.chefTerms.lateRefundPct ? `; ${quote.chefTerms.lateRefundPct}% refund after that` : '; no refund after that') : ''}.</p>}
+          <p className="mt-1 text-xs text-ink-300">{chef ? '' : 'Card is authorized now and captured only when the restaurant accepts. '} Test mode: numbers ending in 0002 are declined.</p>
         </Card>
       </div>
       <aside className="lg:sticky lg:top-20 lg:self-start">

@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { DB, Db, DbOrTx } from '../../db/db.module';
-import { journalEntries, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
-import { DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
+import { DB, Db, DbOrTx, Tx } from '../../db/db.module';
+import { checkoutGroups, journalEntries, orderPaymentAllocations, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
+import { chefCancellationRefund, DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
@@ -77,21 +77,98 @@ export class OrdersService {
     const [q] = await this.db.select().from(quotes).where(eq(quotes.id, input.quoteId)).limit(1);
     if (!q) throw new NotFoundException('Quote not found');
     if (q.consumedByOrderId) return this.present(q.consumedByOrderId);
-    if (q.expiresAt < new Date()) throw new ConflictException('Quote expired; request a new quote');
-    if (q.userId && user && q.userId !== user.sub) throw new ForbiddenException('Quote belongs to another user');
+    input = await this.precheck(user, input, [q]);
+    const loc = await this.placeAllowed(q.locationId);
+    const orderId = await this.db.transaction(async (tx) => {
+      const o = await this.placeInTx(tx, user, input, q, loc, null);
+      if (loc.chefKitchen) await this.chargeChef(tx, user, input, [o], q.id, null);
+      else await this.payForOrder(tx, user, input, q, loc, o);
+      return o.id;
+    });
+    // merchants can switch on auto-accept for immediate (not scheduled) orders
+    if (loc.autoAccept && !q.scheduledFor) {
+      await this.accept(SYSTEM_ACTOR, orderId).catch((e) => this.log.warn(`auto-accept ${orderId} failed: ${(e as Error).message}`));
+    }
+    return this.present(orderId);
+  }
+
+  /**
+   * Gutad Chef Network: one checkout across several chefs. Each quote (one per kitchen, each with its own day and
+   * time) becomes a child order; the customer is charged once for all of them, and allocations split the payment so
+   * a decline or cancellation refunds the right order. Everything happens in one transaction: a failed card or a
+   * date that filled up places nothing.
+   */
+  async checkoutGroup(user: JwtPayload | null, input: Omit<CheckoutInput, 'quoteId'> & { quoteIds: string[] }) {
+    if (input.idempotencyKey) {
+      const [g] = await this.db.select().from(checkoutGroups).where(eq(checkoutGroups.idempotencyKey, input.idempotencyKey)).limit(1);
+      if (g) return this.presentGroup(g.id);
+    }
+    const ids = [...new Set(input.quoteIds)];
+    if (ids.length < 1 || ids.length > 6) throw new BadRequestException('Check out 1 to 6 chefs at a time');
+    const qs = await this.db.select().from(quotes).where(inArray(quotes.id, ids));
+    if (qs.length !== ids.length) throw new NotFoundException('Quote not found');
+    if (qs.some((q) => q.consumedByOrderId)) throw new ConflictException({ message: 'Part of this checkout was already placed. Refresh your cart.', code: 'QUOTE_CONSUMED' });
+    if (new Set(qs.map((q) => q.locationId)).size !== qs.length) throw new BadRequestException('One quote per chef kitchen');
+    if (new Set(qs.map((q) => q.currency)).size > 1) throw new BadRequestException('All orders must be in one currency');
+    const locs: (typeof locations.$inferSelect)[] = [];
+    for (const q of qs) {
+      const loc = await this.placeAllowed(q.locationId);
+      if (!loc.chefKitchen) throw new BadRequestException({ message: 'Only Gutad Chef Network orders can be checked out together', code: 'NOT_CHEF_ORDER' });
+      if (!q.scheduledFor) throw new BadRequestException({ message: 'Each chef order needs a day and time', code: 'SCHEDULE_REQUIRED' });
+      locs.push(loc);
+    }
+    const checked = await this.precheck(user, { ...input, quoteId: qs[0].id }, qs);
+    const total = qs.reduce((a, q) => a + q.totalCents, 0);
+    const groupId = await this.db.transaction(async (tx) => {
+      const [g] = await tx.insert(checkoutGroups).values({ userId: user?.sub ?? null, guestEmail: user ? null : input.guest?.email ?? null, currency: qs[0].currency, totalCents: total, orderCount: qs.length, idempotencyKey: input.idempotencyKey ?? null }).returning();
+      const placed: (typeof orders.$inferSelect)[] = [];
+      for (let i = 0; i < qs.length; i++) placed.push(await this.placeInTx(tx, user, { ...checked, quoteId: qs[i].id, idempotencyKey: input.idempotencyKey ? `${input.idempotencyKey}:${i}` : undefined }, qs[i], locs[i], g.id));
+      const p = await this.chargeChef(tx, user, checked, placed, qs[0].id, g.id);
+      await tx.update(checkoutGroups).set({ paymentId: p.id }).where(eq(checkoutGroups.id, g.id));
+      return g.id;
+    });
+    return this.presentGroup(groupId);
+  }
+
+  /** The checkout's orders. Internal callers pass no viewer; customers must own it (guests: the checkout email). */
+  async presentGroup(groupId: string, viewer?: { user: JwtPayload | null; email?: string }) {
+    const [g] = await this.db.select().from(checkoutGroups).where(eq(checkoutGroups.id, groupId)).limit(1);
+    if (!g) throw new NotFoundException();
+    if (viewer) {
+      const u = viewer.user;
+      const ok = u ? g.userId === u.sub || isPlatformStaff(u) : !g.userId && !!viewer.email && g.guestEmail?.toLowerCase() === viewer.email.toLowerCase();
+      if (!ok) throw new ForbiddenException();
+    }
+    const rows = await this.db.select({ id: orders.id }).from(orders).where(eq(orders.checkoutGroupId, groupId)).orderBy(orders.scheduledFor);
+    const list = [];
+    for (const r of rows) list.push(await this.present(r.id));
+    return { id: g.id, totalCents: g.totalCents, currency: g.currency, deliveries: g.orderCount, createdAt: g.createdAt, orders: list };
+  }
+
+  /** Customer-level checks shared by single and group checkout; resolves a saved card. */
+  private async precheck(user: JwtPayload | null, input: CheckoutInput, qs: (typeof quotes.$inferSelect)[]) {
+    for (const q of qs) {
+      if (q.expiresAt < new Date()) throw new ConflictException({ message: 'Quote expired; request a new quote', code: 'QUOTE_EXPIRED', quoteId: q.id });
+      if (q.userId && user && q.userId !== user.sub) throw new ForbiddenException('Quote belongs to another user');
+    }
     if (!user && !input.guest) throw new BadRequestException('Guest details required for guest checkout');
-    const [loc] = await this.db.select().from(locations).where(eq(locations.id, q.locationId)).limit(1);
-    if (!loc) throw new NotFoundException();
     if (user) {
       const [blocked] = await this.db.select({ id: customerRestrictions.id }).from(customerRestrictions).where(and(eq(customerRestrictions.userId, user.sub), eq(customerRestrictions.kind, 'ORDERING_BLOCKED'), isNull(customerRestrictions.liftedAt), or(isNull(customerRestrictions.expiresAt), sql`${customerRestrictions.expiresAt} > now()`))).limit(1);
       if (blocked) throw new ForbiddenException({ message: 'Ordering is paused on this account. See Account → Help to appeal.', code: 'ACCOUNT_RESTRICTED' });
-      await assertCashLimit(this.db, user.sub, q.totalCents); // 10.8-L limit set after the quote was priced
+      await assertCashLimit(this.db, user.sub, qs.reduce((a, q) => a + q.totalCents, 0)); // 10.8-L limit set after the quote was priced
       if (input.savedPaymentMethodId) {
         const [pm] = await this.db.select().from(paymentMethods).where(and(eq(paymentMethods.id, input.savedPaymentMethodId), eq(paymentMethods.userId, user.sub))).limit(1);
         if (!pm) throw new BadRequestException('Saved card not found');
         input = { ...input, paymentMethodId: pm.providerRef };
       }
     }
+    return input;
+  }
+
+  /** The place can take this order right now (pause and the merchant's 15-minute throttle). */
+  private async placeAllowed(locationId: string) {
+    const [loc] = await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
+    if (!loc) throw new NotFoundException();
     if (loc.isPaused && (!loc.pausedUntil || loc.pausedUntil > new Date())) throw new ConflictException(loc.pausedReason || 'Restaurant paused');
     // merchant throttle: max orders per 15 minutes
     const ramp = loc.rampUntil && loc.rampUntil > new Date() && loc.rampThrottlePer15m ? loc.rampThrottlePer15m : null;
@@ -100,98 +177,126 @@ export class OrdersService {
       const n = await this.redis.incrWindow(`throttle:${loc.id}:${Math.floor(Date.now() / 900_000)}`, 900);
       if (n > throttle) throw new ConflictException(ramp ? 'Restaurant is reopening gradually; try scheduling for later' : 'Restaurant is at capacity; try scheduling for later');
     }
-    const snap = q.snapshot as { lines: QuoteSnapshotLine[]; commissionCents: number; terms: { contractId: string | null; commissionBps: number }; couponId: string | null; creditsCents: number; loyaltyCents: number; giftCents?: number; deliveryFleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM'; deliveryProviderCostCents: number; platformDeliverySubsidyCents: number; deliveryAddress: Address | null };
+    return loc;
+  }
+
+  /**
+   * Creates the order, its lines, capacity confirmation, credits/points/gift redemption, the delivery job and the
+   * SUBMITTED event. Payment is handled by the caller (authorization, or the chef charge for one or more orders).
+   */
+  private async placeInTx(tx: Tx, user: JwtPayload | null, input: CheckoutInput, q: typeof quotes.$inferSelect, loc: typeof locations.$inferSelect, groupId: string | null) {
+    const snap = q.snapshot as { lines: QuoteSnapshotLine[]; commissionCents: number; terms: { contractId: string | null; commissionBps: number }; couponId: string | null; creditsCents: number; loyaltyCents: number; giftCents?: number; deliveryFleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM'; deliveryProviderCostCents: number; platformDeliverySubsidyCents: number; deliveryAddress: Address | null; chef?: { freeCancelUntil: string | null; lateRefundPct: number; acceptHours: number } };
     const userId = user?.sub ?? null;
+    const number = orderNumber(q.fulfillmentType === 'DELIVERY' ? 'D' : 'P');
+    // Gutad Chef Network: prepaid, with an acceptance deadline and the cancellation terms shown at checkout
+    const chef = loc.chefKitchen && q.scheduledFor ? snap.chef : undefined;
+    const now = new Date();
+    const acceptBy = chef && q.scheduledFor ? new Date(Math.max(now.getTime() + 30 * 60_000, Math.min(now.getTime() + chef.acceptHours * 3_600_000, q.scheduledFor.getTime() - 2 * 3_600_000))) : null;
+    const [o] = await tx
+      .insert(orders)
+      .values({
+        number,
+        organizationId: loc.organizationId,
+        locationId: loc.id,
+        userId,
+        guestName: input.guest?.name ?? null,
+        guestEmail: input.guest?.email ?? null,
+        guestPhone: input.guest?.phone ?? null,
+        channel: q.channel,
+        fulfillmentType: q.fulfillmentType,
+        status: 'SUBMITTED',
+        currency: q.currency,
+        subtotalCents: q.subtotalCents,
+        discountCents: q.discountCents,
+        taxCents: q.taxCents,
+        serviceFeeCents: q.serviceFeeCents,
+        smallOrderFeeCents: q.smallOrderFeeCents,
+        packagingFeeCents: q.packagingFeeCents,
+        deliveryFeeCents: q.deliveryFeeCents,
+        tipCents: q.tipCents,
+        totalCents: q.totalCents,
+        commissionCents: snap.commissionCents,
+        commissionBps: snap.terms.commissionBps,
+        contractId: snap.terms.contractId,
+        promoCode: q.promoCode,
+        promotionFunder: q.promotionFunder,
+        priceSnapshot: snap,
+        scheduledFor: q.scheduledFor,
+        promiseAt: q.promiseAt,
+        pickupCode: q.fulfillmentType === 'PICKUP' ? shortCode(4) : null,
+        specialInstructions: input.specialInstructions ?? null,
+        // 14.8-K a kiosk order keeps its pager number for take-away too
+        tableNumber: q.fulfillmentType === 'DINE_IN' || q.channel === 'KIOSK' ? input.tableNumber ?? null : null,
+        utensils: !!input.utensils,
+        deliveryAddress: snap.deliveryAddress,
+        groupOrderId: input.groupOrderId ?? null,
+        campusAccountId: input.campusAccountId ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
+        checkoutGroupId: groupId,
+        prepaid: !!chef,
+        acceptBy,
+        freeCancelUntil: chef?.freeCancelUntil ? new Date(chef.freeCancelUntil) : null,
+        lateRefundPct: chef ? chef.lateRefundPct : null,
+      })
+      .returning();
+    await tx.insert(orderLines).values(
+      snap.lines.map((l) => ({ orderId: o.id, menuItemId: l.menuItemId, brandId: l.brandId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions ?? null, stationCode: l.stationCode, allergens: l.allergens ?? null, dietaryTags: l.dietaryTags ?? null })),
+    );
+    await tx.update(quotes).set({ consumedByOrderId: o.id }).where(eq(quotes.id, q.id));
+    // Gutad Chef Network: the quote's capacity hold becomes the order's confirmed portions for its cooking day
+    if (loc.chefKitchen && q.scheduledFor) await this.chefCalendar.confirm(tx, { locationId: loc.id, scheduledFor: q.scheduledFor, lines: snap.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })), quoteId: q.id, orderId: o.id });
 
-    const orderId = await this.db.transaction(async (tx) => {
-      const number = orderNumber(q.fulfillmentType === 'DELIVERY' ? 'D' : 'P');
-      const [o] = await tx
-        .insert(orders)
-        .values({
-          number,
-          organizationId: loc.organizationId,
-          locationId: loc.id,
-          userId,
-          guestName: input.guest?.name ?? null,
-          guestEmail: input.guest?.email ?? null,
-          guestPhone: input.guest?.phone ?? null,
-          channel: q.channel,
-          fulfillmentType: q.fulfillmentType,
-          status: 'SUBMITTED',
-          currency: q.currency,
-          subtotalCents: q.subtotalCents,
-          discountCents: q.discountCents,
-          taxCents: q.taxCents,
-          serviceFeeCents: q.serviceFeeCents,
-          smallOrderFeeCents: q.smallOrderFeeCents,
-          packagingFeeCents: q.packagingFeeCents,
-          deliveryFeeCents: q.deliveryFeeCents,
-          tipCents: q.tipCents,
-          totalCents: q.totalCents,
-          commissionCents: snap.commissionCents,
-          commissionBps: snap.terms.commissionBps,
-          contractId: snap.terms.contractId,
-          promoCode: q.promoCode,
-          promotionFunder: q.promotionFunder,
-          priceSnapshot: snap,
-          scheduledFor: q.scheduledFor,
-          promiseAt: q.promiseAt,
-          pickupCode: q.fulfillmentType === 'PICKUP' ? shortCode(4) : null,
-          specialInstructions: input.specialInstructions ?? null,
-          // 14.8-K a kiosk order keeps its pager number for take-away too
-          tableNumber: q.fulfillmentType === 'DINE_IN' || q.channel === 'KIOSK' ? input.tableNumber ?? null : null,
-          utensils: !!input.utensils,
-          deliveryAddress: snap.deliveryAddress,
-          groupOrderId: input.groupOrderId ?? null,
-          campusAccountId: input.campusAccountId ?? null,
-          idempotencyKey: input.idempotencyKey ?? null,
-        })
-        .returning();
-      await tx.insert(orderLines).values(
-        snap.lines.map((l) => ({ orderId: o.id, menuItemId: l.menuItemId, brandId: l.brandId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions ?? null, stationCode: l.stationCode, allergens: l.allergens ?? null, dietaryTags: l.dietaryTags ?? null })),
-      );
-      await tx.update(quotes).set({ consumedByOrderId: o.id }).where(eq(quotes.id, q.id));
-      // Gutad Chef Network: the quote's capacity hold becomes the order's confirmed portions for its cooking day
-      if (loc.chefKitchen && q.scheduledFor) await this.chefCalendar.confirm(tx, { locationId: loc.id, scheduledFor: q.scheduledFor, lines: snap.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })), quoteId: q.id, orderId: o.id });
-
-      // credits / loyalty applied before the card
-      if (userId && snap.creditsCents) await this.payments.redeemCredit(userId, snap.creditsCents, o.id, tx);
-      if (userId && snap.loyaltyCents) await this.growth.redeemPoints(userId, snap.loyaltyCents, o.id, tx);
-      // 25.9 gift balance (re-checked under a row lock: a card spent elsewhere since the quote is caught here)
-      if (userId && snap.giftCents) {
-        const used = await redeemGift(tx, userId, snap.giftCents, o.id);
-        if (used < snap.giftCents) throw new BadRequestException({ message: 'Your gift card balance changed since this price was calculated. Review the total and try again.', code: 'GIFT_BALANCE_CHANGED', quoteId: q.id });
-      }
-      const split = { cardCents: o.totalCents, creditsCents: snap.creditsCents || 0, loyaltyCents: snap.loyaltyCents || 0, giftCents: snap.giftCents || 0 };
-
-      // card authorization (manual capture)
-      if (o.totalCents > 0) {
-        // 11.7 — a declined card rolls the order back but keeps the quote, so the customer retries with another card (no duplicate order)
-        try {
-          await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
-          // 18.3 record how the order was paid
-          await tx.update(payments).set({ split }).where(eq(payments.orderId, o.id));
-        } catch (e) {
-          // 18.1 the failed attempt is kept even though the order rolls back
-          await this.db.insert(paymentFailures).values({ purpose: 'ORDER', quoteId: q.id, userId, locationId: loc.id, amountCents: o.totalCents, currency: o.currency, provider: this.payments.providerName, reason: (e as Error).message }).catch(() => undefined);
-          throw new BadRequestException({ message: `Payment failed: ${(e as Error).message}. Try another card.`, code: 'PAYMENT_DECLINED', quoteId: q.id });
-        }
-      } else {
-        await tx.insert(payments).values({ orderId: o.id, userId, purpose: 'ORDER', provider: 'none', status: 'CAPTURED', currency: o.currency, amountCents: 0, split, idempotencyKey: `pay:${o.id}` });
-      }
-
-      if (q.fulfillmentType === 'DELIVERY' && snap.deliveryAddress) {
-        await this.delivery.createJobForOrder({ orderId: o.id, locationId: loc.id, dropoff: { ...snap.deliveryAddress, contactName: user ? undefined : input.guest?.name, contactPhone: input.guest?.phone }, retailFeeCents: o.deliveryFeeCents, providerCostCents: snap.deliveryProviderCostCents, providerQuoteId: q.deliveryQuoteId, tipCents: o.tipCents, subsidyCents: snap.platformDeliverySubsidyCents, expiresAt: q.expiresAt, fleet: snap.deliveryFleet }, tx);
-      }
-      await this.event(o.id, 'SUBMITTED', userId, 'CUSTOMER', { number }, tx);
-      await this.outbox.publish('order.submitted', o.id, { number, locationId: loc.id, userId, totalCents: o.totalCents }, tx);
-      return o.id;
-    });
-    // merchants can switch on auto-accept for immediate (not scheduled) orders
-    if (loc.autoAccept && !q.scheduledFor) {
-      await this.accept(SYSTEM_ACTOR, orderId).catch((e) => this.log.warn(`auto-accept ${orderId} failed: ${(e as Error).message}`));
+    // credits / loyalty applied before the card
+    if (userId && snap.creditsCents) await this.payments.redeemCredit(userId, snap.creditsCents, o.id, tx);
+    if (userId && snap.loyaltyCents) await this.growth.redeemPoints(userId, snap.loyaltyCents, o.id, tx);
+    // 25.9 gift balance (re-checked under a row lock: a card spent elsewhere since the quote is caught here)
+    if (userId && snap.giftCents) {
+      const used = await redeemGift(tx, userId, snap.giftCents, o.id);
+      if (used < snap.giftCents) throw new BadRequestException({ message: 'Your gift card balance changed since this price was calculated. Review the total and try again.', code: 'GIFT_BALANCE_CHANGED', quoteId: q.id });
     }
-    return this.present(orderId);
+    if (q.fulfillmentType === 'DELIVERY' && snap.deliveryAddress) {
+      await this.delivery.createJobForOrder({ orderId: o.id, locationId: loc.id, dropoff: { ...snap.deliveryAddress, contactName: user ? undefined : input.guest?.name, contactPhone: input.guest?.phone }, retailFeeCents: o.deliveryFeeCents, providerCostCents: snap.deliveryProviderCostCents, providerQuoteId: q.deliveryQuoteId, tipCents: o.tipCents, subsidyCents: snap.platformDeliverySubsidyCents, expiresAt: q.expiresAt, fleet: snap.deliveryFleet }, tx);
+    }
+    await this.event(o.id, 'SUBMITTED', userId, 'CUSTOMER', { number, ...(groupId ? { checkoutGroupId: groupId } : {}) }, tx);
+    const chefName = chef ? await this.chefCalendar.chefNameFor(loc.id) : null;
+    await this.outbox.publish('order.submitted', o.id, { number, locationId: loc.id, userId, totalCents: o.totalCents, ...(chefName ? { chefName, scheduledFor: o.scheduledFor, acceptBy: o.acceptBy, freeCancelUntil: o.freeCancelUntil } : {}) }, tx);
+    return o;
+  }
+
+  /** Card authorization (manual capture) for a regular order; captured when the merchant accepts. */
+  private async payForOrder(tx: Tx, user: JwtPayload | null, input: CheckoutInput, q: typeof quotes.$inferSelect, loc: typeof locations.$inferSelect, o: typeof orders.$inferSelect) {
+    const snap = q.snapshot as { creditsCents: number; loyaltyCents: number; giftCents?: number };
+    const userId = user?.sub ?? null;
+    const split = { cardCents: o.totalCents, creditsCents: snap.creditsCents || 0, loyaltyCents: snap.loyaltyCents || 0, giftCents: snap.giftCents || 0 };
+    if (o.totalCents > 0) {
+      // 11.7 — a declined card rolls the order back but keeps the quote, so the customer retries with another card (no duplicate order)
+      try {
+        await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
+        // 18.3 record how the order was paid
+        await tx.update(payments).set({ split }).where(eq(payments.orderId, o.id));
+      } catch (e) {
+        // 18.1 the failed attempt is kept even though the order rolls back
+        await this.db.insert(paymentFailures).values({ purpose: 'ORDER', quoteId: q.id, userId, locationId: loc.id, amountCents: o.totalCents, currency: o.currency, provider: this.payments.providerName, reason: (e as Error).message }).catch(() => undefined);
+        throw new BadRequestException({ message: `Payment failed: ${(e as Error).message}. Try another card.`, code: 'PAYMENT_DECLINED', quoteId: q.id });
+      }
+    } else {
+      await tx.insert(payments).values({ orderId: o.id, userId, purpose: 'ORDER', provider: 'none', status: 'CAPTURED', currency: o.currency, amountCents: 0, split, idempotencyKey: `pay:${o.id}` });
+    }
+  }
+
+  /** Gutad Chef Network: one charge now for one or more chef orders (decline and cutoff refunds come out of it). */
+  private async chargeChef(tx: Tx, user: JwtPayload | null, input: CheckoutInput, placed: (typeof orders.$inferSelect)[], quoteId: string, groupId: string | null) {
+    const userId = user?.sub ?? null;
+    const total = placed.reduce((a, o) => a + o.totalCents, 0);
+    try {
+      const p = await this.payments.chargeChefOrders({ orders: placed.map((o) => ({ id: o.id, number: o.number, totalCents: o.totalCents, organizationId: o.organizationId })), userId, currency: placed[0].currency, customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${groupId || placed[0].id}`, groupId }, tx);
+      const snaps = placed.map((o) => o.priceSnapshot as { creditsCents?: number; loyaltyCents?: number; giftCents?: number });
+      await tx.update(payments).set({ split: { cardCents: total, creditsCents: snaps.reduce((a, s) => a + (s.creditsCents || 0), 0), loyaltyCents: snaps.reduce((a, s) => a + (s.loyaltyCents || 0), 0), giftCents: snaps.reduce((a, s) => a + (s.giftCents || 0), 0) } }).where(eq(payments.id, p.id));
+      return p;
+    } catch (e) {
+      await this.db.insert(paymentFailures).values({ purpose: groupId ? 'ORDER_GROUP' : 'ORDER', quoteId, userId, locationId: placed[0].locationId, amountCents: total, currency: placed[0].currency, provider: this.payments.providerName, reason: (e as Error).message }).catch(() => undefined);
+      throw new BadRequestException({ message: `Payment failed: ${(e as Error).message}. Try another card.`, code: 'PAYMENT_DECLINED', quoteId });
+    }
   }
 
   // ───── 08 merchant intake ─────
@@ -218,7 +323,8 @@ export class OrdersService {
     await this.db.transaction(async (tx) => {
       const promiseAt = prepMinutes ? addMinutes(new Date(), prepMinutes) : o.promiseAt;
       await tx.update(orders).set({ status: 'ACCEPTED', acceptedAt: new Date(), promiseAt }).where(eq(orders.id, orderId));
-      await this.payments.captureForOrder(orderId, null, tx);
+      // Gutad Chef Network orders were charged at checkout; regular orders capture their authorization now
+      if (!o.prepaid) await this.payments.captureForOrder(orderId, null, tx);
       await this.growth.consumePromotions(o, tx);
       await this.kitchen.fanOut(orderId, tx);
       if (o.fulfillmentType === 'DELIVERY') {
@@ -237,11 +343,13 @@ export class OrdersService {
     if (o.status !== 'SUBMITTED') throw new ConflictException(`Cannot reject a ${o.status} order`);
     await this.db.transaction(async (tx) => {
       await tx.update(orders).set({ status: 'REJECTED', rejectReason: reason, canceledAt: new Date() }).where(eq(orders.id, orderId));
-      await this.payments.voidForOrder(orderId, tx);
+      // a chef decline refunds the full charge automatically
+      if (o.prepaid) await this.payments.refundPrepaidOrder(orderId, o.totalCents, `Chef declined: ${reason}`, tx);
+      else await this.payments.voidForOrder(orderId, tx);
       if (o.userId) await this.payments.reverseOrderCredits(orderId, tx);
       await this.restoreCreditsAndPoints(o, tx);
       await this.event(orderId, 'REJECTED', user.sub, 'MERCHANT', { reason }, tx);
-      await this.outbox.publish('order.rejected', orderId, { number: o.number, reason, userId: o.userId }, tx);
+      await this.outbox.publish('order.rejected', orderId, { number: o.number, reason, userId: o.userId, ...(o.prepaid ? { prepaid: true, refundCents: o.totalCents } : {}) }, tx);
     });
     return this.present(orderId);
   }
@@ -313,6 +421,7 @@ export class OrdersService {
   }
 
   async onCompleted(o: typeof orders.$inferSelect, tx: DbOrTx) {
+    if (o.prepaid) await this.payments.recognizePrepaidOrder(o.id, tx);
     await this.crm.recordOrder(o.organizationId, { locationId: o.locationId, userId: o.userId, name: o.guestName || 'Customer', email: o.guestEmail, phone: o.guestPhone, spendCents: o.subtotalCents - o.discountCents }, tx);
     await this.growth.onOrderCompleted(o, tx);
     await this.outbox.publish('order.completed', o.id, { number: o.number, userId: o.userId, locationId: o.locationId }, tx);
@@ -339,6 +448,7 @@ export class OrdersService {
   async cancelByCustomer(user: JwtPayload, orderId: string, reason: string) {
     const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!o || o.userId !== user.sub) throw new NotFoundException();
+    if (o.prepaid) return this.cancelPrepaid(user, o, reason);
     if (o.status !== 'SUBMITTED') throw new ConflictException('Order already accepted; contact support for changes');
     await this.db.transaction(async (tx) => {
       await tx.update(orders).set({ status: 'CANCELED', cancelReason: reason, canceledAt: new Date() }).where(eq(orders.id, orderId));
@@ -350,14 +460,86 @@ export class OrdersService {
     return this.present(orderId);
   }
 
+  /** What cancelling a prepaid chef order would refund right now (shown before the customer confirms). */
+  async cancellationPreview(user: JwtPayload | null, orderId: string, guestEmail?: string) {
+    await this.getForCustomer(user, orderId, guestEmail);
+    const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o.prepaid) return { allowed: o.status === 'SUBMITTED', refundCents: o.status === 'SUBMITTED' ? o.totalCents : 0, full: o.status === 'SUBMITTED', reason: o.status === 'SUBMITTED' ? 'Nothing is charged until the restaurant accepts' : 'Contact support for changes', freeCancelUntil: null };
+    const alloc = await this.payments.allocationFor(orderId);
+    const charged = alloc ? alloc.a.amountCents - alloc.a.refundedCents : 0;
+    return { ...chefCancellationRefund({ chargedCents: charged, freeCancelUntil: o.freeCancelUntil, lateRefundPct: o.lateRefundPct, status: o.status }), chargedCents: charged, freeCancelUntil: o.freeCancelUntil?.toISOString() ?? null };
+  }
+
+  /**
+   * Customer cancels a prepaid chef order: full refund before the date's cutoff (or while the chef hasn't accepted),
+   * then the chef's late-refund percentage. Whatever is kept goes to the chef (net of commission) like a completed
+   * order. The portions return to the calendar and any tickets and courier booking are voided.
+   */
+  private async cancelPrepaid(user: JwtPayload, o: typeof orders.$inferSelect, reason: string) {
+    await this.db.transaction(async (tx) => {
+      const [cur] = await tx.select().from(orders).where(eq(orders.id, o.id)).for('update');
+      const alloc = await this.payments.allocationFor(o.id, tx);
+      const charged = alloc ? alloc.a.amountCents - alloc.a.refundedCents : 0;
+      const r = chefCancellationRefund({ chargedCents: charged, freeCancelUntil: cur.freeCancelUntil, lateRefundPct: cur.lateRefundPct, status: cur.status });
+      if (!r.allowed) throw new ConflictException({ message: `${r.reason}; contact support for changes`, code: 'CANCEL_NOT_ALLOWED' });
+      await tx.update(orders).set({ status: 'CANCELED', cancelReason: reason, canceledAt: new Date() }).where(eq(orders.id, o.id));
+      if (r.refundCents > 0) await this.payments.refundPrepaidOrder(o.id, r.refundCents, `Customer canceled: ${reason}`, tx);
+      if (r.full) await this.restoreCreditsAndPoints(cur, tx);
+      else await this.payments.recognizePrepaidOrder(o.id, tx); // the kept part pays the chef
+      await this.voidFulfillment(tx, o.id, reason);
+      await this.event(o.id, 'CANCELED', user.sub, 'CUSTOMER', { reason, refundCents: r.refundCents, policy: r.reason }, tx);
+      await this.outbox.publish('order.canceled', o.id, { number: o.number, reason, userId: o.userId, prepaid: true, refundCents: r.refundCents }, tx);
+    });
+    return this.present(o.id);
+  }
+
+  /** Voids kitchen tickets and the courier booking of a canceled order. */
+  private async voidFulfillment(tx: DbOrTx, orderId: string, reason: string, costOwner: 'MERCHANT' | 'PLATFORM' | 'PROVIDER' | 'DRIVER' = 'PLATFORM') {
+    const [job] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+    if (job && !['DELIVERED', 'CANCELED', 'FAILED'].includes(job.status)) await this.delivery.transition(job.id, 'CANCELED', { reason, costOwner }, tx);
+    await tx.execute(sql`update kitchen_tickets set status='VOID' where order_id=${orderId} and status in ('QUEUED','IN_PROGRESS')`);
+  }
+
+  /** Gutad Chef Network: a chef who doesn't accept by the deadline has the order declined and fully refunded. */
+  async expireUnacceptedChefOrders(now = new Date()) {
+    const due = await this.db.select().from(orders).where(and(eq(orders.status, 'SUBMITTED'), eq(orders.prepaid, true), lt(orders.acceptBy, now)));
+    for (const o of due) {
+      const reason = 'The chef didn’t confirm in time';
+      await this.db.transaction(async (tx) => {
+        const [cur] = await tx.select({ status: orders.status }).from(orders).where(eq(orders.id, o.id)).for('update');
+        if (cur.status !== 'SUBMITTED') return;
+        await tx.update(orders).set({ status: 'REJECTED', rejectReason: reason, canceledAt: now }).where(eq(orders.id, o.id));
+        await this.payments.refundPrepaidOrder(o.id, o.totalCents, reason, tx);
+        if (o.userId) await this.payments.reverseOrderCredits(o.id, tx);
+        await this.restoreCreditsAndPoints(o, tx);
+        await this.voidFulfillment(tx, o.id, reason);
+        await this.event(o.id, 'REJECTED', null, 'SYSTEM', { reason: 'accept_deadline' }, tx);
+        await this.outbox.publish('order.rejected', o.id, { number: o.number, reason, userId: o.userId, prepaid: true, refundCents: o.totalCents }, tx);
+      });
+    }
+    return { declined: due.length };
+  }
+
+  /** Completed prepaid chef orders (pickup, delivery or no-show) credit the chef; settlement pays it out weekly. */
+  async recognizeCompletedChefOrders() {
+    const due = await this.db.select({ id: orders.id }).from(orders).where(and(eq(orders.prepaid, true), eq(orders.status, 'COMPLETED'), isNull(orders.recognizedAt))).limit(200);
+    let n = 0;
+    for (const o of due) if (await this.db.transaction((tx) => this.payments.recognizePrepaidOrder(o.id, tx))) n++;
+    return { recognized: n };
+  }
+
   /** Support/merchant cancel after acceptance: refund captured money with an explicit cost owner. */
   async cancelByStaff(user: JwtPayload, orderId: string, reason: string, funder: 'MERCHANT' | 'PLATFORM' | 'PROVIDER' | 'DRIVER') {
     const o = await this.requireStaffOrder(user, orderId);
     if (['COMPLETED', 'CANCELED', 'REJECTED'].includes(o.status)) throw new ConflictException(`Order is ${o.status}`);
     await this.db.transaction(async (tx) => {
       await tx.update(orders).set({ status: 'CANCELED', cancelReason: reason, canceledAt: new Date() }).where(eq(orders.id, orderId));
-      const [p] = await tx.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
-      if (p && (p.status === 'AUTHORIZED' || p.status === 'REQUIRES_ACTION')) await this.payments.voidForOrder(orderId, tx);
+      const alloc = o.prepaid ? await this.payments.allocationFor(orderId, tx) : null;
+      const [p] = alloc ? [alloc.p] : await tx.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
+      // prepaid chef orders not yet recognized: the money is still Gutad's to return (no funder involved)
+      if (alloc && !o.recognizedAt) await this.payments.refundPrepaidOrder(orderId, alloc.a.amountCents - alloc.a.refundedCents, reason, tx, user.sub);
+      else if (alloc) { const amt = Math.min(alloc.a.amountCents - alloc.a.refundedCents, p.capturedCents - p.refundedCents); if (amt > 0) { await this.payments.refund({ paymentId: p.id, amountCents: amt, reason, funder, approvedById: user.sub, idempotencyKey: `cancel:${orderId}` }, tx); await tx.update(orderPaymentAllocations).set({ refundedCents: alloc.a.refundedCents + amt }).where(eq(orderPaymentAllocations.id, alloc.a.id)); } }
+      else if (p && (p.status === 'AUTHORIZED' || p.status === 'REQUIRES_ACTION')) await this.payments.voidForOrder(orderId, tx);
       else if (p && p.capturedCents - p.refundedCents > 0) await this.payments.refund({ paymentId: p.id, amountCents: p.capturedCents - p.refundedCents, reason, funder, approvedById: user.sub, idempotencyKey: `cancel:${orderId}` }, tx);
       await this.restoreCreditsAndPoints(o, tx, funder);
       await this.growth.reverseRedemptions(orderId, tx);
@@ -432,7 +614,8 @@ export class OrdersService {
     const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!o) throw new NotFoundException('Order not found');
     const lines = await this.db.select().from(orderLines).where(eq(orderLines.orderId, orderId));
-    const [p] = await this.db.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
+    const alloc = o.prepaid ? await this.payments.allocationFor(orderId) : null;
+    const [p] = alloc ? [alloc.p] : await this.db.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
     const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
     const [loc] = await this.db.select({ name: locations.name, slug: locations.slug, phone: locations.phone }).from(locations).where(eq(locations.id, o.locationId)).limit(1);
     const { priceSnapshot: _ps, ...rest } = o;
@@ -442,9 +625,11 @@ export class OrdersService {
       locationSlug: loc?.slug,
       locationPhone: loc?.phone,
       lines: lines.map((l) => ({ id: l.id, menuItemId: l.menuItemId, handling: l.handling, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions, status: l.status, replacementNote: l.replacementNote, brandId: l.brandId, allergens: l.allergens, dietaryTags: l.dietaryTags })),
-      payment: p ? { status: p.status, amountCents: p.amountCents, capturedCents: p.capturedCents, refundedCents: p.refundedCents, clientSecret: p.status === 'REQUIRES_ACTION' ? p.clientSecret : undefined } : null,
+      payment: alloc ? { status: alloc.a.refundedCents >= alloc.a.amountCents && alloc.a.amountCents > 0 ? 'REFUNDED' : alloc.a.refundedCents ? 'PARTIALLY_REFUNDED' : 'CAPTURED', amountCents: alloc.a.amountCents, capturedCents: alloc.a.amountCents, refundedCents: alloc.a.refundedCents, chargedAt: alloc.p.createdAt, sharedWithOrders: alloc.p.amountCents !== alloc.a.amountCents } : p ? { status: p.status, amountCents: p.amountCents, capturedCents: p.capturedCents, refundedCents: p.refundedCents, clientSecret: p.status === 'REQUIRES_ACTION' ? p.clientSecret : undefined } : null,
       delivery: job ? { id: job.id, status: job.status, etaAt: job.etaAt, trackingUrl: job.trackingUrl, hasProof: !!(job.proofPhotoUrl || job.proofSignature), fleet: job.fleet, arrivedAt: job.arrivedDropoffAt, exception: job.exception ? { kind: (job.exception as { kind: string }).kind, waitUntil: (job.exception as { waitUntil?: string }).waitUntil, resolution: (job.exception as { resolution?: string }).resolution ?? null } : null } : null,
-      canCancel: o.status === 'SUBMITTED',
+      canCancel: o.prepaid ? ['SUBMITTED', 'ACCEPTED'].includes(o.status) : o.status === 'SUBMITTED',
+      // Gutad Chef Network: sold by Gutad, prepared by the chef; the cancellation terms accepted at checkout
+      chefNetwork: o.prepaid ? { chefName: await this.chefCalendar.chefNameFor(o.locationId), freeCancelUntil: o.freeCancelUntil, lateRefundPct: o.lateRefundPct, acceptBy: o.acceptBy, checkoutGroupId: o.checkoutGroupId } : null,
     };
   }
 

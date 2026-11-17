@@ -10,7 +10,7 @@ import { useApi } from '@/hooks';
 import { useSession } from '@/hooks';
 import { Button, C, Card, ErrorText, Input, Muted, s } from '@/ui';
 import { SmsNotice } from '@/legal';
-import { DateSlotPicker } from '@/date-slot-picker';
+import { DateSlotPicker, chefTermsText, type ChefTerms } from '@/date-slot-picker';
 
 const BLOCKED: Record<string, string> = { KITCHEN_BUSY: 'The kitchen is at capacity right now. Try again shortly or order for later.', PAUSED: 'This restaurant has paused new orders for a moment.', CLOSED: 'This restaurant is closed right now.', SCHEDULE_TOO_SOON: 'That time is too soon for the kitchen.', SLOT_FULL: 'That time slot is full.', DELIVERY_UNAVAILABLE: 'Delivery is not available to this address right now. Try pickup.', ITEM_UNAVAILABLE: 'Something in your cart is no longer available.', SEPARATE_ORDER_REQUIRED: 'Items from different places need separate orders.', ACCOUNT_RESTRICTED: 'Ordering is paused on your account. See Account for details.', SCHEDULE_REQUIRED: 'Chef dishes are cooked to order. Pick a cooking day and time.', CHEF_CUTOFF_PASSED: 'Ordering for that day has closed. Pick another date.', CHEF_NOT_COOKING: 'The chef isn’t cooking that day. Pick another date.', CHEF_PAUSED: 'The chef is away that day. Pick another date.', CHEF_TOO_FAR: 'That date isn’t open for orders yet. Pick an earlier date.', CHEF_TIME_UNAVAILABLE: 'That time isn’t available. Pick another time.', DISH_CAPACITY_FULL: 'A dish in your cart just sold out for that day. Pick another date or lower the quantity.', KITCHEN_CAPACITY_FULL: 'The chef is fully booked that day. Pick another date.' };
 const CAPACITY = ['DISH_CAPACITY_FULL', 'KITCHEN_CAPACITY_FULL', 'CHEF_CUTOFF_PASSED', 'CHEF_NOT_COOKING', 'CHEF_PAUSED', 'CHEF_TOO_FAR', 'CHEF_TIME_UNAVAILABLE'];
@@ -34,13 +34,13 @@ export default function Checkout() {
   const [saveCard, setSaveCard] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [utensils, setUtensils] = useState(false);
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const [quote, setQuote] = useState<(Quote & { chefTerms?: ChefTerms | null }) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idem = useRef(newIdempotencyKey());
   const tipCents = Math.round((subtotal * tip) / 100);
   // scheduled orders (required for Gutad Chef Network dishes, which need notice)
-  const { data: loc } = useApi<{ id: string; chefKitchen?: boolean; pickupTimes: { date: string; slots: string[] }[] }>(cart.locationId ? `/public/locations/${cart.locationId}` : null, { deps: [cart.locationId] });
+  const { data: loc } = useApi<{ id: string; chefKitchen?: boolean; timezone?: string; pickupTimes: { date: string; slots: string[] }[] }>(cart.locationId ? `/public/locations/${cart.locationId}` : null, { deps: [cart.locationId] });
   const [schedule, setSchedule] = useState<{ date: string; time: string } | null>(null);
   const [scheduledFor, setScheduledFor] = useState<string | undefined>(undefined);
   const days = (loc?.pickupTimes || []).filter((d) => d.slots.length);
@@ -68,6 +68,15 @@ export default function Checkout() {
     api.get<{ iso: string }>(`/public/locations/${cart.locationId}/local-time?date=${schedule.date}&time=${schedule.time}`).then((r) => setScheduledFor(r.iso)).catch(() => setScheduledFor(undefined));
   }, [schedule, cart.locationId]);
   const needsTime = !!loc?.chefKitchen && !scheduledFor;
+  // Phase 5: several chef carts (active + parked) can be paid together in one multi-chef checkout
+  const parkedIds = parked.map((p) => p.locationId).filter(Boolean).join(',');
+  const [chefParked, setChefParked] = useState(0);
+  useEffect(() => {
+    if (!loc?.chefKitchen || !parkedIds) { setChefParked(0); return; }
+    let live = true;
+    Promise.all(parkedIds.split(',').map((lid) => api.get<{ chefKitchen?: boolean }>(`/public/locations/${lid}`).then((l) => !!l.chefKitchen).catch(() => false))).then((r) => { if (live) setChefParked(r.filter(Boolean).length); });
+    return () => { live = false; };
+  }, [loc?.chefKitchen, parkedIds]);
   useEffect(() => {
     if (!cart.locationId || !cart.lines.length) return;
     if (needsTime || (schedule?.time && !scheduledFor)) { setQuote(null); return; }
@@ -100,6 +109,7 @@ export default function Checkout() {
   if (!cart.lines.length) return <View style={[s.screen, s.pad]}><Muted>Your cart is empty.</Muted></View>;
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
+      {chefParked > 0 && <Card style={{ borderColor: C.brand, backgroundColor: '#fff4ec' }}><Text style={{ fontSize: 16, fontWeight: '700', color: C.ink }}>Checking out from {chefParked + 1} chefs?</Text><Muted>Pay once for all {chefParked + 1} deliveries. Each chef cooks on the day you pick.</Muted><Button title={`Check out all ${chefParked + 1} chefs together`} onPress={() => router.push('/checkout-chefs')} /></Card>}
       {parked.length > 0 && <Card title="Your other saved orders"><Muted>Separate orders. The next one opens after you place this one.</Muted>{parked.map((p) => <View key={p.locationId} style={[s.row, { marginTop: 6 }]}><Text style={{ flex: 1 }}>{p.locationName} · {money(cartSubtotal(p))}</Text><Button title="Do first" variant="secondary" onPress={() => switchTo(p.locationId!)} /><Button title="Remove" variant="ghost" onPress={() => discardParked(p.locationId!)} /></View>)}</Card>}
       <Card title={`Order from ${cart.locationName}`}>
         {cart.lines.map((l) => <View key={l.key} style={[s.row, { marginBottom: 6 }]}><View style={{ flex: 1 }}><Text>{l.name}</Text>{l.modifierNames.length > 0 && <Muted>{l.modifierNames.join(', ')}</Muted>}</View><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Button title="−" variant="secondary" onPress={() => setQty(l.key, l.quantity - 1)} /><Text>{l.quantity}</Text><Button title="+" variant="secondary" onPress={() => setQty(l.key, l.quantity + 1)} /><Text style={{ width: 60, textAlign: 'right' }}>{money((l.unitPriceCents + l.modifiersCents) * l.quantity)}</Text></View></View>)}
@@ -135,7 +145,7 @@ export default function Checkout() {
         {(!user || !cards?.length || savedId === 'new') && <CardField value={card} onChange={(t) => { setCard(t); setDeclined(false); }} />}
         {user && (!cards?.length || savedId === 'new') && <Button title={saveCard ? 'Will save this card ✓' : 'Save this card for next time'} variant="ghost" onPress={() => setSaveCard(!saveCard)} />}
         {declined && <Text style={{ color: C.bad, marginBottom: 6 }}>That card was declined. Your order is held at the same price; choose another card and try again.</Text>}
-        <Muted>Authorized now, captured when the restaurant accepts.</Muted>
+        <Muted>{quote?.chefTerms ? chefTermsText(quote.chefTerms, loc?.timezone || avail?.timezone) : loc?.chefKitchen ? 'Charged now. Full refund if the chef declines or doesn’t confirm.' : 'Authorized now, captured when the restaurant accepts.'}</Muted>
       </Card>
       <Card title="Summary">
         <ErrorText msg={error} />

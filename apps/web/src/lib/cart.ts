@@ -69,7 +69,18 @@ export function useCart() {
     setCart(target);
   }, [cart, parked, setCart, setParked]);
   const discardParked = useCallback((locationId: string) => setParked((p) => p.filter((x) => x.locationId !== locationId)), [setParked]);
+  /** Remove several carts at once (multi-chef checkout placed them together); the next parked cart becomes active. */
+  const removeCarts = useCallback((locationIds: string[]) => {
+    const rest = parked.filter((p) => !locationIds.includes(p.locationId!));
+    if (cart.locationId && locationIds.includes(cart.locationId)) { const [next, ...more] = rest; setCart(next ? next : { ...EMPTY }); setParked(more); }
+    else setParked(rest);
+  }, [cart.locationId, parked, setCart, setParked]);
+  /** Replace the lines of a cart, active or parked (quantity changes on the multi-chef checkout). */
+  const setCartQty = useCallback((locationId: string, key: string, quantity: number) => {
+    const upd = (c: Cart) => ({ ...c, lines: c.lines.map((l) => (l.key === key ? { ...l, quantity } : l)).filter((l) => l.quantity > 0) });
+    if (cart.locationId === locationId) setCart(upd); else setParked((ps) => ps.map((p) => (p.locationId === locationId ? upd(p) : p)));
+  }, [cart.locationId, setCart, setParked]);
   const subtotal = cartSubtotal(cart);
   const count = cart.lines.reduce((a, l) => a + l.quantity, 0);
-  return { cart, parked, add, setQty, clear, switchTo, discardParked, subtotal, count };
+  return { cart, parked, add, setQty, clear, switchTo, discardParked, removeCarts, setCartQty, subtotal, count };
 }

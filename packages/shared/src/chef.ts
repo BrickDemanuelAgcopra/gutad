@@ -1,4 +1,5 @@
 import { validateOptionsConfig, type ModGroup, type OptionsConfigGroup } from './customization';
+import type { CustomerFeeRules } from './pricing';
 
 /**
  * Gutad Chef Network — contracts shared by the API, web and mobile.
@@ -309,6 +310,8 @@ export interface ChefOperatingSettings {
   /** pickup/delivery window on cooking days (local HH:MM) */
   opens: string;
   closes: string;
+  /** refund (%) when a customer cancels after the date's cutoff; within Gutad's range (chefs.policy) */
+  lateRefundPct?: number;
 }
 
 /** One date in the chef's own calendar view. */
@@ -356,4 +359,47 @@ export function addDaysYmd(ymd: string, days: number): string {
 export function weekdayYmd(ymd: string): number {
   const [y, m, d] = ymd.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+// ───── Phase 5: checkout, payments and multi-chef ─────
+
+/** Platform setting `fees.chef_network` (changes go through approvals): commission and customer fees for chef orders. */
+export interface ChefNetworkFees {
+  /** Gutad's commission on the food subtotal (after discounts) */
+  commissionBps: number;
+  /** customer fees on chef orders (replaces `fees.customer` at chef kitchens) */
+  customer: CustomerFeeRules;
+}
+
+export const DEFAULT_CHEF_NETWORK_FEES: ChefNetworkFees = {
+  commissionBps: 1500,
+  customer: {
+    service: { bps: 800, minCents: 199, capCents: 799, channels: [], fulfillments: ['DELIVERY', 'PICKUP'] },
+    smallOrder: { thresholdCents: 1500, feeCents: 299, channels: [], fulfillments: ['DELIVERY', 'PICKUP'] },
+    packaging: { perOrderCents: 0, perItemCents: 0, fulfillments: ['DELIVERY', 'PICKUP'] },
+  },
+};
+
+/** Platform setting `chefs.policy`: acceptance window and the range chefs may choose for late-cancellation refunds. */
+export interface ChefPolicy {
+  /** hours a chef has to accept a new order (never later than 2 hours before the order's time) */
+  acceptHours: number;
+  lateRefundMinPct: number;
+  lateRefundMaxPct: number;
+  /** used when the chef hasn't chosen */
+  lateRefundDefaultPct: number;
+}
+
+export const DEFAULT_CHEF_POLICY: ChefPolicy = { acceptHours: 12, lateRefundMinPct: 0, lateRefundMaxPct: 100, lateRefundDefaultPct: 0 };
+
+/**
+ * Refund for a customer cancellation of a prepaid chef order: in full before the date's cutoff, then the chef's
+ * late-refund percentage of what was charged. Nothing once the chef has started cooking.
+ */
+export function chefCancellationRefund(o: { chargedCents: number; freeCancelUntil: string | Date | null; lateRefundPct: number | null; status: string }, now: Date = new Date()) {
+  if (!['SUBMITTED', 'ACCEPTED'].includes(o.status)) return { allowed: false, refundCents: 0, full: false, reason: 'The chef has started on this order' };
+  const until = o.freeCancelUntil ? new Date(o.freeCancelUntil) : null;
+  if (o.status === 'SUBMITTED' || !until || now < until) return { allowed: true, refundCents: o.chargedCents, full: true, reason: 'Full refund' };
+  const pct = Math.max(0, Math.min(100, o.lateRefundPct ?? 0));
+  return { allowed: true, refundCents: Math.round((o.chargedCents * pct) / 100), full: pct === 100, reason: pct ? `${pct}% refund after the cutoff` : 'No refund after the cutoff' };
 }

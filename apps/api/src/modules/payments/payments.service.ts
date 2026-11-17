@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { customerCredits, disputes, journalEntries, inboxEvents, legalSellers, locations, orders, payments, payouts, refunds } from '../../db/schema';
+import { customerCredits, disputes, journalEntries, inboxEvents, legalSellers, locations, orderPaymentAllocations, orders, payments, payouts, refunds } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
 import { LedgerService } from '../../core/ledger.service';
 import { OutboxService } from '../../core/outbox.service';
@@ -169,8 +169,18 @@ export class PaymentsService {
   private async postOrderCapture(p: typeof payments.$inferSelect, tx: DbOrTx) {
     const [o] = await tx.select().from(orders).where(eq(orders.id, p.orderId!)).limit(1);
     if (!o) return;
+    await this.postOrderSplit(o, p, p.capturedCents, 'PROCESSOR_CLEARING', tx);
+  }
+
+  /**
+   * Splits money received for an order into merchant payable, commission, fees, courier tip, promotion funding and
+   * the processor fee. `source` is where the money sits: PROCESSOR_CLEARING at a card capture, or DEFERRED_REVENUE
+   * when a prepaid chef order is recognized at completion (the processor fee was booked when it was charged).
+   */
+  private async postOrderSplit(o: typeof orders.$inferSelect, p: typeof payments.$inferSelect, amountCents: number, source: 'PROCESSOR_CLEARING' | 'DEFERRED_REVENUE', tx: DbOrTx) {
     const snap = o.priceSnapshot as { deliveryProviderCostCents?: number; platformDeliverySubsidyCents?: number; promotionFunder?: string | null; promotionPlatformShareCents?: number; taxRemitter?: string; giftCents?: number };
-    const captured = p.capturedCents;
+    const captured = amountCents;
+    const prepaid = source === 'DEFERRED_REVENUE';
     // scale all components proportionally if a partial capture happened
     const ratio = o.totalCents > 0 ? captured / o.totalCents : 1;
     const r = (c: number) => Math.round(c * ratio);
@@ -190,7 +200,7 @@ export class PaymentsService {
     const merchantPayable = food + tax + merchantTip + packagingFee - commission + merchantDiscountFunded;
     const platformDeliveryRevenue = isDelivery ? deliveryFee : 0;
     const lines: Parameters<LedgerService['post']>[1] = [
-      { account: 'PROCESSOR_CLEARING', debitCents: captured, memo: `Capture ${o.number}` },
+      prepaid ? { account: 'DEFERRED_REVENUE' as const, partyId: `order:${o.id}`, organizationId: o.organizationId, debitCents: captured, memo: `Completed ${o.number}` } : { account: 'PROCESSOR_CLEARING' as const, debitCents: captured, memo: `Capture ${o.number}` },
       // 25.9 the gift-card share of the order leaves the gift liability when the order is captured
       { account: 'GIFT_CARD_LIABILITY', partyId: 'gift-cards', debitCents: snap.giftCents || 0, memo: `Gift card used on ${o.number}` },
       { account: 'MERCHANT_PAYABLE', partyId: o.organizationId, organizationId: o.organizationId, locationId: o.locationId, creditCents: merchantPayable, memo: 'Food + tax − commission' },
@@ -200,8 +210,10 @@ export class PaymentsService {
       { account: 'PLATFORM_REVENUE_DELIVERY', creditCents: platformDeliveryRevenue, organizationId: o.organizationId },
       { account: 'DRIVER_PAYABLE', partyId: `order:${o.id}`, creditCents: driverPayable, memo: 'Courier tip' },
       { account: 'PLATFORM_EXPENSE_PROMOTION', debitCents: merchantDiscountFunded, organizationId: o.organizationId, memo: 'Platform-funded promotion' },
-      { account: 'PLATFORM_EXPENSE_PROCESSING', debitCents: p.processingFeeCents, memo: 'Processor fee' },
-      { account: 'PROCESSOR_CLEARING', creditCents: p.processingFeeCents, memo: 'Processor fee withheld' },
+      ...(prepaid ? [] : [
+        { account: 'PLATFORM_EXPENSE_PROCESSING' as const, debitCents: p.processingFeeCents, memo: 'Processor fee' },
+        { account: 'PROCESSOR_CLEARING' as const, creditCents: p.processingFeeCents, memo: 'Processor fee withheld' },
+      ]),
     ];
     // tips for pickup orders sit inside merchantPayable; make the sum balance explicitly
     const credits = lines.reduce((a, l) => a + (l.creditCents || 0), 0);
@@ -210,6 +222,87 @@ export class PaymentsService {
     if (diff !== 0) lines.push({ account: 'PLATFORM_REVENUE_SERVICE_FEE', creditCents: diff > 0 ? diff : 0, debitCents: diff < 0 ? -diff : 0, memo: 'Rounding' });
     await this.ledger.post({ orderId: o.id, paymentId: p.id, currency: p.currency }, lines, tx);
   }
+
+  // ───── Gutad Chef Network: charged in full at checkout ─────
+
+  /**
+   * Charges chef orders in full at checkout (automatic capture, platform charge, never a destination charge). One
+   * payment can cover several orders (multi-chef checkout); allocations record each order's share. The money is
+   * held in DEFERRED_REVENUE per order until the order completes (then the chef is credited) or is refunded.
+   */
+  async chargeChefOrders(input: { orders: { id: string; number: string; totalCents: number; organizationId: string }[]; userId?: string | null; currency: string; customerEmail?: string | null; paymentMethodId?: string | null; idempotencyKey: string; groupId?: string | null }, tx: DbOrTx = this.db) {
+    const [existing] = await tx.select().from(payments).where(eq(payments.idempotencyKey, input.idempotencyKey)).limit(1);
+    if (existing) return existing;
+    const total = input.orders.reduce((a, o) => a + o.totalCents, 0);
+    const single = input.orders.length === 1 ? input.orders[0].id : null;
+    const base = { orderId: single, referenceId: input.groupId ?? null, userId: input.userId ?? null, purpose: input.groupId ? 'ORDER_GROUP' : 'ORDER', currency: input.currency, amountCents: total, idempotencyKey: input.idempotencyKey };
+    let p: typeof payments.$inferSelect;
+    if (total <= 0) {
+      [p] = await tx.insert(payments).values({ ...base, provider: 'none', status: 'CAPTURED', capturedCents: 0 }).returning();
+    } else {
+      const res = await this.provider.createIntent({ amountCents: total, currency: input.currency, captureMethod: 'automatic', destinationAccountId: null, applicationFeeCents: 0, customerEmail: input.customerEmail, paymentMethodId: input.paymentMethodId, metadata: { orderIds: input.orders.map((o) => o.id).join(','), ...(input.groupId ? { checkoutGroupId: input.groupId } : {}) }, idempotencyKey: input.idempotencyKey });
+      if (res.status !== 'captured') {
+        if (res.providerIntentId) await this.provider.cancel(res.providerIntentId).catch(() => undefined);
+        throw new BadRequestException(res.status === 'requires_action' ? 'This card needs extra verification, which chef orders don’t support yet' : 'The card was not charged');
+      }
+      [p] = await tx.insert(payments).values({ ...base, provider: this.provider.name, providerIntentId: res.providerIntentId, providerChargeId: res.chargeId ?? null, paymentMethodId: input.paymentMethodId ?? null, status: 'CAPTURED', authorizedCents: res.authorizedCents, capturedCents: res.capturedCents, processingFeeCents: res.processingFeeCents, applicationFeeCents: 0, destinationAccountId: null }).returning();
+      await this.ledger.post({ paymentId: p.id, currency: p.currency }, [
+        { account: 'PROCESSOR_CLEARING', debitCents: p.capturedCents, memo: input.groupId ? `Chef checkout ${input.orders.map((o) => o.number).join(', ')}` : `Charge ${input.orders[0].number}` },
+        ...input.orders.map((o) => ({ account: 'DEFERRED_REVENUE' as const, partyId: `order:${o.id}`, organizationId: o.organizationId, creditCents: o.totalCents, memo: `Prepaid ${o.number}` })),
+        { account: 'PLATFORM_EXPENSE_PROCESSING', debitCents: p.processingFeeCents, memo: 'Processor fee' },
+        { account: 'PROCESSOR_CLEARING', creditCents: p.processingFeeCents, memo: 'Processor fee withheld' },
+      ], tx);
+    }
+    await tx.insert(orderPaymentAllocations).values(input.orders.map((o) => ({ paymentId: p.id, orderId: o.id, amountCents: o.totalCents })));
+    await this.outbox.publish('payment.captured', single || input.groupId || p.id, { paymentId: p.id, amountCents: total, orderIds: input.orders.map((o) => o.id) }, tx);
+    return p;
+  }
+
+  /** A prepaid order's payment and its share of it. */
+  async allocationFor(orderId: string, tx: DbOrTx = this.db) {
+    const [r] = await tx.select({ a: orderPaymentAllocations, p: payments }).from(orderPaymentAllocations).innerJoin(payments, eq(payments.id, orderPaymentAllocations.paymentId)).where(eq(orderPaymentAllocations.orderId, orderId)).limit(1);
+    return r ?? null;
+  }
+
+  /** Refunds part or all of a prepaid order's share back to the customer's card, out of DEFERRED_REVENUE. */
+  async refundPrepaidOrder(orderId: string, amountCents: number, reason: string, tx: DbOrTx = this.db, approvedById?: string | null) {
+    const r = await this.allocationFor(orderId, tx);
+    if (!r) throw new NotFoundException('Payment not found');
+    const remaining = r.a.amountCents - r.a.refundedCents;
+    const amount = Math.min(Math.max(0, amountCents), remaining);
+    if (amount <= 0) return null;
+    const [o] = await tx.select({ number: orders.number, organizationId: orders.organizationId }).from(orders).where(eq(orders.id, orderId)).limit(1);
+    const res = r.p.provider === 'none' || !r.p.providerIntentId ? { providerRefundId: null, status: 'succeeded' as const } : await this.provider.refund(r.p.providerIntentId, amount, reason, `refund:${orderId}:${r.a.refundedCents}:${amount}`);
+    const [rf] = await tx.insert(refunds).values({ paymentId: r.p.id, orderId, amountCents: amount, reason, funder: 'PLATFORM', providerRefundId: res.providerRefundId, status: res.status === 'succeeded' ? 'SUCCEEDED' : res.status === 'failed' ? 'FAILED' : 'PENDING', approvedById: approvedById ?? null }).returning();
+    if (res.status === 'failed') throw new BadRequestException('The refund failed at the payment provider; support has been alerted');
+    // re-read: several orders of one group can refund from the same payment in one transaction
+    const [fresh] = await tx.select({ refundedCents: payments.refundedCents, capturedCents: payments.capturedCents }).from(payments).where(eq(payments.id, r.p.id)).limit(1);
+    const refunded = fresh.refundedCents + amount;
+    await tx.update(payments).set({ refundedCents: refunded, status: refunded >= fresh.capturedCents ? 'REFUNDED' : 'PARTIALLY_REFUNDED' }).where(eq(payments.id, r.p.id));
+    await tx.update(orderPaymentAllocations).set({ refundedCents: r.a.refundedCents + amount }).where(eq(orderPaymentAllocations.id, r.a.id));
+    await this.ledger.post({ orderId, paymentId: r.p.id, refundId: rf.id, currency: r.p.currency }, [
+      { account: 'DEFERRED_REVENUE', partyId: `order:${orderId}`, organizationId: o?.organizationId ?? null, debitCents: amount, memo: `Refund ${o?.number}: ${reason}` },
+      { account: 'PROCESSOR_CLEARING', creditCents: amount, memo: 'Refund to customer' },
+    ], tx);
+    await this.outbox.publish('payment.refunded', orderId, { paymentId: r.p.id, refundId: rf.id, amountCents: amount }, tx);
+    return rf;
+  }
+
+  /**
+   * Completion (or a late cancellation that keeps part of the money): what is left of the order's share moves from
+   * DEFERRED_REVENUE to the chef's payable, Gutad's commission and fees. Weekly settlement pays the chef from there.
+   */
+  async recognizePrepaidOrder(orderId: string, tx: DbOrTx = this.db) {
+    const [o] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o?.prepaid || o.recognizedAt) return false;
+    const r = await this.allocationFor(orderId, tx);
+    if (!r) return false;
+    const kept = r.a.amountCents - r.a.refundedCents;
+    await tx.update(orders).set({ recognizedAt: new Date() }).where(eq(orders.id, orderId));
+    if (kept > 0 || o.totalCents === 0) await this.postOrderSplit(o, r.p, kept, 'DEFERRED_REVENUE', tx);
+    return true;
+  }
+
 
   /** Release an authorization (rejected order / cancellation before capture). */
   async voidForOrder(orderId: string, tx: DbOrTx = this.db) {

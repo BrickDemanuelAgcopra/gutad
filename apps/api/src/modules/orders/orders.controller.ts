@@ -22,6 +22,7 @@ const QuoteDto = z.object({
   holdKey: z.string().max(80).optional(),
 });
 const CheckoutDto = z.object({ tableNumber: z.string().max(10).optional(), utensils: z.boolean().optional(), quoteId: z.string().uuid(), paymentMethodId: z.string().optional(), savedPaymentMethodId: z.string().uuid().optional(), guest: z.object({ name: z.string(), email: z.string().email(), phone: z.string().optional() }).optional(), specialInstructions: z.string().max(500).optional(), groupOrderId: z.string().uuid().optional(), campusAccountId: z.string().uuid().optional() });
+const GroupCheckoutDto = CheckoutDto.omit({ quoteId: true, tableNumber: true, groupOrderId: true, campusAccountId: true }).extend({ quoteIds: z.array(z.string().uuid()).min(1).max(6) });
 const CounterDto = z.object({ lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1), modifierOptionIds: z.array(z.string().uuid()).optional() })).min(1), guestName: z.string(), guestPhone: z.string().optional(), fulfillmentType: z.enum(['PICKUP', 'DINE_IN']).optional(), channel: z.enum(['PHONE', 'WALK_IN']).optional() });
 const ReasonDto = z.object({ reason: z.string().min(2) });
 const StaffCancelDto = z.object({ reason: z.string().min(2), funder: z.enum(['MERCHANT', 'PLATFORM', 'PROVIDER', 'DRIVER']) });
@@ -38,6 +39,9 @@ export class OrdersController {
   @Public() @Get('public/locations/:id/local-time') localTime(@Param('id') id: string, @Query('date') date: string, @Query('time') time: string) { return this.quotes.localToIso(id, date, time); }
 
   @Public() @Post('orders') checkout(@CurrentUser() u: JwtPayload | undefined, @Body(zod(CheckoutDto)) b: z.infer<typeof CheckoutDto>, @Headers('idempotency-key') key?: string) { return this.svc.checkout(u ?? null, { ...b, idempotencyKey: key }); }
+  @Public() @Post('checkout-groups') checkoutGroup(@CurrentUser() u: JwtPayload | undefined, @Body(zod(GroupCheckoutDto)) b: z.infer<typeof GroupCheckoutDto>, @Headers('idempotency-key') key?: string) { return this.svc.checkoutGroup(u ?? null, { ...b, idempotencyKey: key }); }
+  @Public() @Get('checkout-groups/:id') group(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Query('email') email?: string) { return this.svc.presentGroup(id, { user: u ?? null, email }); }
+  @Public() @Get('orders/:id/cancellation') cancellation(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Query('email') email?: string) { return this.svc.cancellationPreview(u ?? null, id, email); }
   @Public() @Get('orders/:id') get(@CurrentUser() u: JwtPayload | undefined, @Param('id') id: string, @Query('email') email?: string) { return this.svc.getForCustomer(u ?? null, id, email); }
   @ApiBearerAuth() @Get('me/orders') mine(@CurrentUser() u: JwtPayload) { return this.svc.myOrders(u); }
   @ApiBearerAuth() @Get('orders/:id/timeline') timeline(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.timeline(u, id); }

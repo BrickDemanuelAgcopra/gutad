@@ -66,6 +66,7 @@ async function main() {
   await seedDemoChef(db, log);
   await seedDemoChefDishes(db, log);
   await seedDemoChefOptions(db, log);
+  await seedDemoChefAmara(db, log);
 
   // demo merchant
   const [existingOrg] = await db.select().from(s.organizations).where(eq(s.organizations.slug, 'demo-bistro')).limit(1);
@@ -289,6 +290,35 @@ async function seedDemoChef(db: ReturnType<typeof createDb>, log: (m: string) =>
   await db.insert(s.openingHours).values([2, 3, 4, 5, 6].map((d) => ({ locationId: loc.id, dayOfWeek: d, opens: '09:00', closes: '20:00', service: 'ALL' })));
   await db.insert(s.chefProfiles).values({ organizationId: org.id, userId: u.id, applicationId: app.id, locationId: loc.id, displayName: 'Chef Carlos', slug: 'chef-carlos', legalName: 'Carlos Mendes', bio: data.profile.bio, cuisines: data.profile.cuisines, languages: data.profile.languages, experienceYears: 12, serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12, kitchenType: 'SHARED_COMMISSARY', operating: { cookingDays: [2, 3, 4, 5, 6], cutoffHour: 12, minLeadDays: 1, dailyCapacity: 30, instantOrders: false, scheduledOrders: true, maxAdvanceDays: 45 }, verifiedCredentials: ['GOV_ID', 'FOOD_HANDLER', 'KITCHEN_PERMIT', 'KITCHEN_USE_AGREEMENT', 'LIABILITY_INSURANCE'], brandAgreementAcceptedAt: new Date(), status: 'ACTIVE', acceptingOrders: true });
   log(`demo chef ready: ${email} / chef12345 (Chef Carlos, location ${loc.id})`);
+}
+
+/** Second demo chef (multi-chef checkout): Chef Amara, West African, approved and accepting orders (idempotent). */
+async function seedDemoChefAmara(db: ReturnType<typeof createDb>, log: (m: string) => void) {
+  const email = 'amara@demo.gutad.io';
+  const [exists] = await db.select().from(s.users).where(eq(s.users.email, email)).limit(1);
+  if (exists) return;
+  const op = { cookingDays: [3, 4, 5, 6, 0], cutoffHour: 15, minLeadDays: 1, dailyCapacity: 25, instantOrders: false, scheduledOrders: true, pickup: true, delivery: true, maxAdvanceDays: 30, opens: '11:00', closes: '19:00', lateRefundPct: 50 };
+  const bio = 'Nigerian and Ghanaian home cooking: smoky party jollof, egusi and suya, cooked in a licensed Bed-Stuy kitchen.';
+  const [u] = await db.insert(s.users).values({ email, passwordHash: await argon2.hash('chef12345'), name: 'Amara Okafor', phone: '+12125550199', roles: ['CUSTOMER', 'CHEF'], emailVerifiedAt: new Date() }).returning();
+  const [app] = await db.insert(s.chefApplications).values({ userId: u.id, status: 'APPROVED', data: { identity: { legalName: 'Amara Okafor', displayName: 'Chef Amara', businessType: 'INDIVIDUAL' }, operating: op }, displayName: 'Chef Amara', region: 'NY', city: 'Brooklyn', kitchenType: 'COTTAGE_HOME', percentComplete: 100, submittedAt: new Date(), decidedAt: new Date(), decisionReason: 'Demo chef', history: [{ at: new Date().toISOString(), action: 'APPROVED', note: 'Demo chef' }] }).returning();
+  const [org] = await db.insert(s.organizations).values({ name: 'Chef Amara', slug: 'chef-amara-demo', kind: 'CHEF', status: 'LIVE', featureFlags: {} }).returning();
+  await db.insert(s.orgMemberships).values({ userId: u.id, organizationId: org.id, role: 'MERCHANT_OWNER', acceptedAt: new Date() });
+  await db.update(s.chefApplications).set({ organizationId: org.id }).where(eq(s.chefApplications.id, app.id));
+  const [seller] = await db.insert(s.legalSellers).values({ organizationId: org.id, legalName: 'Amara Okafor', country: 'US', payoutProvider: 'mock', payoutAccountId: 'mock_acct_chef_amara', payoutOnboardingState: 'COMPLETE', bankLast4: '4321', beneficiaryName: 'Amara Okafor' }).returning();
+  const [loc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Chef Amara’s kitchen', slug: 'chef-amara-kitchen', description: bio, cuisine: ['west african', 'nigerian'], phone: '+12125550199', addressLine1: '410 Tompkins Ave', city: 'Brooklyn', region: 'NY', postalCode: '11216', lat: 40.6845, lng: -73.9440, timezone: 'America/New_York', pickupInstructions: 'Side door, ring Kitchen', courierInstructions: 'Side door, ring Kitchen', status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, chefKitchen: true, defaultPrepMinutes: 45, scheduleLeadMinutes: 24 * 60, deliveryRadiusKm: 12, taxRateBps: 888 }).returning();
+  await db.insert(s.openingHours).values(op.cookingDays.map((d) => ({ locationId: loc.id, dayOfWeek: d, opens: op.opens, closes: op.closes, service: 'ALL' })));
+  const [p] = await db.insert(s.chefProfiles).values({ organizationId: org.id, userId: u.id, applicationId: app.id, locationId: loc.id, displayName: 'Chef Amara', slug: 'chef-amara', legalName: 'Amara Okafor', bio, cuisines: ['West African'], languages: ['English', 'Igbo', 'Twi'], experienceYears: 9, serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12, kitchenType: 'COTTAGE_HOME', operating: op, verifiedCredentials: ['GOV_ID', 'FOOD_HANDLER', 'KITCHEN_PERMIT', 'LIABILITY_INSURANCE'], brandAgreementAcceptedAt: new Date(), status: 'ACTIVE', acceptingOrders: true }).returning();
+  const [menu] = await db.insert(s.menus).values({ organizationId: org.id, locationId: loc.id, name: 'Chef Amara menu', channels: ['MARKETPLACE', 'DIRECT'] }).returning();
+  const [mains] = await db.insert(s.menuCategories).values({ menuId: menu.id, name: 'Mains', sortOrder: 0 }).returning();
+  const dishes = [
+    { dishName: 'Party jollof rice', description: 'Smoky long-grain jollof with fried plantain. Serves 2.', priceCents: 2200, portionDesc: 'Tray for 2 (800 g)', ingredients: ['rice', 'tomato', 'red pepper', 'scotch bonnet', 'onion', 'thyme', 'plantain'], allergens: [], dietaryTags: ['vegan'], fulfillmentFormat: 'HOT', prepMinutes: 60, dailyCapacity: 15, photo: 'https://images.unsplash.com/photo-1604329760661-e71dc83f8f26?w=1200' },
+    { dishName: 'Beef suya platter', description: 'Grilled spiced beef skewers with onion, tomato and yaji.', priceCents: 1900, portionDesc: '6 skewers', ingredients: ['beef', 'peanut', 'ginger', 'chili', 'onion', 'tomato'], allergens: ['peanuts'], dietaryTags: [], fulfillmentFormat: 'HOT', prepMinutes: 40, dailyCapacity: null, photo: 'https://images.unsplash.com/photo-1529692236671-f1f6cf9683ba?w=1200' },
+  ];
+  for (const [i, d] of dishes.entries()) {
+    const [item] = await db.insert(s.menuItems).values({ categoryId: mains.id, name: d.dishName, description: d.description, priceCents: d.priceCents, imageUrl: d.photo, photos: [d.photo], allergens: d.allergens, dietaryTags: d.dietaryTags, servingSize: d.portionDesc, cookMinutes: d.prepMinutes, handling: ['HOT'], isActive: true, sortOrder: i }).returning();
+    await db.insert(s.chefDishes).values({ menuItemId: item.id, chefProfileId: p.id, locationId: loc.id, dishName: d.dishName, description: d.description, portionDesc: d.portionDesc, ingredients: d.ingredients, allergensConfirmed: true, mode: 'FIXED', fulfillmentFormat: d.fulfillmentFormat, prepMinutes: d.prepMinutes, dailyCapacity: d.dailyCapacity, photos: [d.photo], reviewStatus: 'PUBLISHED', publishedAt: new Date(), submittedAt: new Date() });
+  }
+  log(`demo chef ready: ${email} / chef12345 (Chef Amara, 2 live dishes)`);
 }
 
 main().catch((e) => {

@@ -112,6 +112,7 @@ export class JobsService {
   @Interval(3_600_000) iamHourly() { return this.locked('iam-hourly', 600_000, () => this.iam.hourly()); }
   @Interval(300_000) approvalExpiry() { return this.locked('approval-expiry', 60_000, () => this.approvals.expireStale()); }
   @Interval(300_000) chefCapacityHolds() { return this.locked('chef-capacity-holds', 60_000, () => this.chefCalendar.releaseExpired()); }
+  @Interval(60_000) chefOrderDeadlines() { return this.locked('chef-order-deadlines', 60_000, async () => ({ ...(await this.orders.expireUnacceptedChefOrders()), ...(await this.orders.recognizeCompletedChefOrders()) })); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {
     return this.locked('delivery', 60_000, async () => ({ expiredQuotes: await this.delivery.expireQuotes(), expiredOffers: await this.delivery.expireOffers(), late: await this.delivery.flagLate(), simulated: await this.delivery.simulateMock() }));

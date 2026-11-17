@@ -66,6 +66,17 @@ export const orders = pgTable(
     externalOrderId: text('external_order_id'),
     parentOrderId: uuid('parent_order_id').references((): AnyPgColumn => orders.id),
     groupOrderId: uuid('group_order_id'),
+    /** Gutad Chef Network: one checkout across several chefs (one payment, one child order per kitchen) */
+    checkoutGroupId: uuid('checkout_group_id'),
+    /** charged in full at checkout (no authorization); money sits in DEFERRED_REVENUE until completion */
+    prepaid: boolean('prepaid').notNull().default(false),
+    /** the chef must accept by then or the order is declined and refunded automatically */
+    acceptBy: ts('accept_by'),
+    /** full refund on cancellation until then (the date's order cutoff); afterwards lateRefundPct */
+    freeCancelUntil: ts('free_cancel_until'),
+    lateRefundPct: integer('late_refund_pct'),
+    /** when the prepaid money was recognized (chef payable, commission, fees) */
+    recognizedAt: ts('recognized_at'),
     campusAccountId: uuid('campus_account_id'),
     idempotencyKey: text('idempotency_key').unique(),
     /** 14.8 dine-in table or kiosk pager number */
@@ -238,3 +249,34 @@ export const packingTasks = pgTable('packing_tasks', {
   verifiedById: uuid('verified_by_id'),
   createdAt: createdAt(),
 });
+
+/** Gutad Chef Network checkout across several chefs: one customer payment split into child orders per kitchen. */
+export const checkoutGroups = pgTable('checkout_groups', {
+  id: id(),
+  userId: uuid('user_id').references(() => users.id),
+  guestEmail: text('guest_email'),
+  /** PAID | FAILED */
+  status: text('status').notNull().default('PAID'),
+  currency: text('currency').notNull().default('USD'),
+  totalCents: integer('total_cents').notNull(),
+  orderCount: integer('order_count').notNull(),
+  paymentId: uuid('payment_id'),
+  idempotencyKey: text('idempotency_key').unique(),
+  createdAt: createdAt(),
+});
+
+/** How one payment is split across orders (multi-chef checkout); refunds are tracked per order. */
+export const orderPaymentAllocations = pgTable(
+  'order_payment_allocations',
+  {
+    id: id(),
+    paymentId: uuid('payment_id').notNull(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    amountCents: integer('amount_cents').notNull(),
+    refundedCents: integer('refunded_cents').notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index('order_payment_allocations_payment_idx').on(t.paymentId), index('order_payment_allocations_order_idx').on(t.orderId)],
+);

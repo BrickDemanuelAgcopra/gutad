@@ -33,7 +33,12 @@ export function useCart() {
     setCart(target);
   }, [cart, parked, setCart, setParked]);
   const discardParked = useCallback((locationId: string) => setParked((p) => p.filter((x) => x.locationId !== locationId)), [setParked]);
+  /** Drops the carts for these places (active and parked), e.g. after a multi-chef checkout; the next parked cart becomes active. */
+  const removeCarts = useCallback((locationIds: string[]) => {
+    const rest = parked.filter((p) => !locationIds.includes(p.locationId!));
+    if (cart.locationId && locationIds.includes(cart.locationId)) { const [next, ...others] = rest; setCart(next || EMPTY); setParked(others); } else setParked(rest);
+  }, [cart, parked, setCart, setParked]);
   const subtotal = cartSubtotal(cart);
   const count = cart.lines.reduce((a, l) => a + l.quantity, 0);
-  return { cart, parked, add, setQty, clear, switchTo, discardParked, subtotal, count };
+  return { cart, parked, add, setQty, clear, switchTo, discardParked, removeCarts, subtotal, count };
 }

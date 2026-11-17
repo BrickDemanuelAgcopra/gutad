@@ -11,7 +11,9 @@ import { Alert, Badge, Button, Card, Select, Spinner, statusTone, Textarea } fro
 interface Order {
   id: string; number: string; status: string; fulfillmentType: string; locationName: string; locationSlug: string; locationPhone: string | null; totalCents: number; subtotalCents: number; taxCents: number; tipCents: number; deliveryFeeCents: number; serviceFeeCents: number; discountCents: number; promiseAt: string | null; readyAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; createdAt: string;
   lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null; modifiers: { name: string }[] }[];
-  payment: { status: string; capturedCents: number; refundedCents: number } | null;
+  payment: { status: string; capturedCents: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null;
+  prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null;
+  chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null;
   delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
 
@@ -21,6 +23,26 @@ const courierLabel = (s: string) => COURIER[s] || s.replace(/_/g, ' ').toLowerCa
 
 const catLabel = (k: string) => (SUPPORT_CATEGORIES as Record<string, { label: string }>)[k]?.label || k;
 const NEEDS_ITEM = ['MISSING_ITEM', 'WRONG_ITEM', 'QUALITY', 'DAMAGED', 'FOOD_SAFETY'];
+
+/** Gutad Chef Network cancellation: shows what cancelling refunds right now (full before the cutoff), then confirms. */
+function ChefCancel({ order, email, onDone }: { order: Order; email: string | null; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const { data: pv } = useApi<{ allowed: boolean; refundCents: number; full: boolean; reason: string; chargedCents?: number }>(open ? `/orders/${order.id}/cancellation${email ? `?email=${encodeURIComponent(email)}` : ''}` : null);
+  if (!open) return <Button variant="danger" onClick={() => setOpen(true)}>Cancel order…</Button>;
+  return (
+    <Card title="Cancel this order?" className="w-full">
+      {!pv ? <p className="text-sm text-ink-500">Checking the refund…</p> : !pv.allowed ? <Alert tone="info">{pv.reason}. Contact support for changes.</Alert> : (
+        <div className="space-y-2 text-sm">
+          <p>{pv.full ? <>You’ll get a <b>full refund of {money(pv.refundCents)}</b>.</> : pv.refundCents ? <>The order cutoff has passed: you’ll get <b>{money(pv.refundCents)}</b> back ({pv.reason.toLowerCase()}).</> : <>The order cutoff has passed, so <b>no refund</b> applies under the terms you accepted.</>}</p>
+          {err && <Alert>{err}</Alert>}
+          <div className="flex gap-2"><Button variant="danger" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await api.post(`/orders/${order.id}/cancel`, { reason: 'Changed my mind' }); onDone(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); } }}>{busy ? 'Cancelling…' : `Cancel${pv.refundCents ? ` and refund ${money(pv.refundCents)}` : ' without refund'}`}</Button><Button variant="ghost" onClick={() => setOpen(false)}>Keep my order</Button></div>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function ReportProblem({ order, onDone, onCancel }: { order: Order; onDone: (msg: string) => void; onCancel: () => void }) {
   const [category, setCategory] = useState<string>('MISSING_ITEM');
@@ -86,6 +108,16 @@ export default function OrderPage() {
       )}
       {o.status === 'READY' && o.fulfillmentType === 'PICKUP' && <Alert tone="good">Ready for pickup{o.shelfSlot ? <> on shelf <b className="text-lg">{o.shelfSlot}</b></> : ''} — show code <b className="text-lg">{o.pickupCode}</b> at the counter.</Alert>}
       {o.fulfillmentType === 'DINE_IN' && o.tableNumber && !terminalBad && o.status !== 'COMPLETED' && <Alert tone="info">Dine-in · we’ll bring it to table <b>{o.tableNumber}</b>.</Alert>}
+      {o.chefNetwork && (
+        <Card>
+          <div className="space-y-1 text-sm">
+            <p>Prepared by <b>{o.chefNetwork.chefName}</b> · sold by Gutad{o.scheduledFor ? <> · for <b>{when(o.scheduledFor)}</b></> : null}</p>
+            {o.status === 'SUBMITTED' && o.chefNetwork.acceptBy && <p className="text-ink-700">{o.chefNetwork.chefName} confirms by {when(o.chefNetwork.acceptBy)}. If they can’t, you’re refunded in full automatically.</p>}
+            {!terminalBad && o.chefNetwork.freeCancelUntil && <p className="text-xs text-ink-500">Free cancellation until {when(o.chefNetwork.freeCancelUntil)}{o.chefNetwork.lateRefundPct ? `; ${o.chefNetwork.lateRefundPct}% refund after that` : '; no refund after that'}.</p>}
+            {o.chefNetwork.checkoutGroupId && <p className="text-xs"><Link className="underline" href={`/orders/group/${o.chefNetwork.checkoutGroupId}${email ? `?email=${encodeURIComponent(email)}` : ''}`}>Part of a checkout with other chefs</Link></p>}
+          </div>
+        </Card>
+      )}
       {o.promiseAt && !terminalBad && o.status !== 'COMPLETED' && <p className="text-sm text-ink-700">Estimated {o.fulfillmentType === 'DELIVERY' ? 'delivery' : 'ready'} time: <b>{when(o.promiseAt)}</b></p>}
       {unavailable.length > 0 && (
         <Card title="One item needs your decision">
@@ -118,11 +150,13 @@ export default function OrderPage() {
           {o.deliveryFeeCents > 0 && <div className="flex justify-between"><span>Delivery</span><span>{money(o.deliveryFeeCents)}</span></div>}
           <div className="flex justify-between"><span>Tip</span><span>{money(o.tipCents)}</span></div>
           <div className="flex justify-between font-semibold text-ink-900"><span>Total</span><span>{money(o.totalCents)}</span></div>
+          {o.prepaid && o.payment && <div className="flex justify-between"><span>Charged{o.payment.chargedAt ? ` ${when(o.payment.chargedAt)}` : ''}{o.payment.sharedWithOrders ? ' (one payment with your other chef orders)' : ''}</span><span>{money(o.payment.capturedCents)}</span></div>}
           {o.payment && <div className="flex justify-between"><span>Payment</span><span><Badge tone={statusTone(o.payment.status)}>{o.payment.status}</Badge>{o.payment.refundedCents > 0 && ` refunded ${money(o.payment.refundedCents)}`}</span></div>}
         </div>
       </Card>
       <div className="flex flex-wrap gap-2">
-        {o.canCancel && user && <Button variant="danger" onClick={async () => { await api.post(`/orders/${o.id}/cancel`, { reason: 'Changed my mind' }); reload(); }}>Cancel order</Button>}
+        {o.canCancel && o.prepaid && user && <ChefCancel order={o} email={email} onDone={reload} />}
+        {o.canCancel && !o.prepaid && user && <Button variant="danger" onClick={async () => { await api.post(`/orders/${o.id}/cancel`, { reason: 'Changed my mind' }); reload(); }}>Cancel order</Button>}
         {user && <Button variant="secondary" onClick={async () => { const q = await api.post<{ id: string; warnings: string[] }>(`/orders/${o.id}/reorder`, {}); setMsg(`Rebuilt as quote ${q.id.slice(0, 8)}${q.warnings.length ? ' — ' + q.warnings.join('; ') : ''}. Open the restaurant page to add items to your cart.`); }}>Reorder</Button>}
         {user && !terminalBad && !reporting && <Button variant="secondary" onClick={() => setReporting(true)}>Report a problem</Button>}
         <Link href={`/r/${o.locationSlug}`}><Button variant="ghost">Back to {o.locationName}</Button></Link>

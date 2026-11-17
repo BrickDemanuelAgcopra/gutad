@@ -9,6 +9,10 @@ const monthAdd = (m: string, n: number) => { const [y, mo] = m.split('-').map(Nu
 export const ymdLabel = (d: string, o: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(`${d}T12:00:00`).toLocaleDateString('en-US', o);
 /** An ISO instant shown in the kitchen's time zone (falls back to device time if Intl time zones are missing). */
 export const zoneTime = (iso: string, tz: string) => { const o: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }; try { return new Date(iso).toLocaleString('en-US', { ...o, timeZone: tz }); } catch { return new Date(iso).toLocaleString('en-US', o); } };
+/** Phase 5 chef checkout terms returned on quotes at chef kitchens. */
+export interface ChefTerms { chargedNow: boolean; freeCancelUntil: string | null; lateRefundPct: number }
+/** "Charged now. Full refund if the chef declines …" for one chef order (time in the kitchen's zone when known). */
+export const chefTermsText = (t: ChefTerms, tz?: string | null) => `Charged now. Full refund if the chef declines or doesn’t confirm${t.freeCancelUntil ? `, or if you cancel before ${tz ? zoneTime(t.freeCancelUntil, tz) : new Date(t.freeCancelUntil).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}; after that ${t.lateRefundPct}% refund` : ''}.`;
 /** "13:30" → "1:30 PM" */
 export const hhmmLabel = (t: string) => { const [h, m] = t.split(':').map(Number); return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
 

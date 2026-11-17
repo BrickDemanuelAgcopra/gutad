@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useState } from 'react';
-import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, chefNoticeText, WEEKDAYS, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
+import { CHEF_APPLICATION_STATUS_LABELS, CHEF_APPLICATION_STEPS, CHEF_KITCHEN_TYPES, chefNoticeText, DEFAULT_CHEF_NETWORK_FEES, DEFAULT_CHEF_POLICY, WEEKDAYS, type ChefNetworkFees, type ChefPolicy, type ChefApplicationData, type ChefApplicationStatus } from '@gutad/shared';
 import { api, API_URL, downloadFile, money, when } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, Table, Tabs, Textarea } from '@/components/ui';
@@ -33,8 +33,8 @@ export default function AdminChefs() {
   return (
     <div className="space-y-4">
       <SectionTitle title="Chef Network" hint="Independent chefs: applications, kitchens and documents, approvals and chef accounts." action={<Link href="/admin/chefs/requirements" className="text-sm underline">Document rules →</Link>} />
-      <Tabs tabs={[{ id: 'applications', label: 'Applications' }, { id: 'dishes', label: 'Dish review' }, { id: 'chefs', label: 'Chefs' }]} active={tab} onChange={setTab} />
-      {tab === 'applications' ? <Applications /> : tab === 'dishes' ? <DishReview /> : <Chefs />}
+      <Tabs tabs={[{ id: 'applications', label: 'Applications' }, { id: 'dishes', label: 'Dish review' }, { id: 'chefs', label: 'Chefs' }, { id: 'fees', label: 'Fees & policy' }]} active={tab} onChange={setTab} />
+      {tab === 'applications' ? <Applications /> : tab === 'dishes' ? <DishReview /> : tab === 'fees' ? <FeesPolicy /> : <Chefs />}
     </div>
   );
 }
@@ -198,6 +198,66 @@ function Chefs() {
         </Modal>
       )}
     </>
+  );
+}
+
+/**
+ * Chef Network money and terms: commission, customer fees (setting fees.chef_network, which goes through approvals)
+ * and the acceptance window and late-cancellation refund range chefs choose from (chefs.policy).
+ */
+function FeesPolicy() {
+  const { data, reload } = useApi<{ settings: Record<string, unknown> }>('/admin/settings');
+  const { run, busy, error } = useAction();
+  const [msg, setMsg] = useState<string | null>(null);
+  const curFees = { ...DEFAULT_CHEF_NETWORK_FEES, ...((data?.settings['fees.chef_network'] as Partial<ChefNetworkFees>) || {}) };
+  const curPol = { ...DEFAULT_CHEF_POLICY, ...((data?.settings['chefs.policy'] as Partial<ChefPolicy>) || {}) };
+  const [f, setF] = useState<null | { commissionPct: string; servicePct: string; serviceMin: string; serviceCap: string; smallThreshold: string; smallFee: string }>(null);
+  const [p, setP] = useState<ChefPolicy | null>(null);
+  const [advance, setAdvance] = useState<string | null>(null);
+  if (!data) return <p className="text-sm text-ink-500">Loading…</p>;
+  const fv = f || { commissionPct: String(curFees.commissionBps / 100), servicePct: String(curFees.customer.service.bps / 100), serviceMin: (curFees.customer.service.minCents / 100).toFixed(2), serviceCap: ((curFees.customer.service.capCents || 0) / 100).toFixed(2), smallThreshold: (curFees.customer.smallOrder.thresholdCents / 100).toFixed(2), smallFee: (curFees.customer.smallOrder.feeCents / 100).toFixed(2) };
+  const pv = p || curPol;
+  const cents = (v: string) => Math.round(Number(v || 0) * 100);
+  const saveFees = () => run(async () => {
+    const value: ChefNetworkFees = { commissionBps: Math.round(Number(fv.commissionPct) * 100), customer: { ...curFees.customer, service: { ...curFees.customer.service, bps: Math.round(Number(fv.servicePct) * 100), minCents: cents(fv.serviceMin), capCents: cents(fv.serviceCap) }, smallOrder: { ...curFees.customer.smallOrder, thresholdCents: cents(fv.smallThreshold), feeCents: cents(fv.smallFee) } } };
+    const r = await api.post<{ status?: string; id?: string }>('/admin/settings', { key: 'fees.chef_network', value, reason: 'Chef Network fees' });
+    setMsg(r?.status === 'PENDING' || r?.id ? 'Fee change submitted for approval (Admin → Approvals).' : 'Fees saved.');
+    setF(null); await reload();
+  });
+  const savePolicy = () => run(async () => {
+    if (pv.lateRefundMinPct > pv.lateRefundMaxPct || pv.lateRefundDefaultPct < pv.lateRefundMinPct || pv.lateRefundDefaultPct > pv.lateRefundMaxPct) throw new Error('The default refund must sit inside the min–max range');
+    await api.post('/admin/settings', { key: 'chefs.policy', value: pv, reason: 'Chef Network policy' });
+    if (advance !== null) await api.post('/admin/settings', { key: 'chefs.max_advance_days', value: Number(advance), reason: 'Chef Network advance window' });
+    setMsg('Policy saved.'); setP(null); setAdvance(null); await reload();
+  });
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {msg && <div className="lg:col-span-2"><Alert tone="info">{msg}</Alert></div>}
+      {error && <div className="lg:col-span-2"><Alert>{error}</Alert></div>}
+      <Card title="Fees and commission">
+        <div className="grid grid-cols-2 gap-2">
+          <Input label="Commission (% of food)" type="number" step="0.5" value={fv.commissionPct} onChange={(e) => setF({ ...fv, commissionPct: e.target.value })} />
+          <Input label="Service fee (%)" type="number" step="0.5" value={fv.servicePct} onChange={(e) => setF({ ...fv, servicePct: e.target.value })} />
+          <Input label="Service fee minimum ($)" type="number" step="0.01" value={fv.serviceMin} onChange={(e) => setF({ ...fv, serviceMin: e.target.value })} />
+          <Input label="Service fee cap ($)" type="number" step="0.01" value={fv.serviceCap} onChange={(e) => setF({ ...fv, serviceCap: e.target.value })} />
+          <Input label="Small order under ($)" type="number" step="0.01" value={fv.smallThreshold} onChange={(e) => setF({ ...fv, smallThreshold: e.target.value })} />
+          <Input label="Small-order fee ($)" type="number" step="0.01" value={fv.smallFee} onChange={(e) => setF({ ...fv, smallFee: e.target.value })} />
+        </div>
+        <p className="mt-2 text-xs text-ink-500">Applies to new chef quotes (pickup and delivery). Changes go through approvals. Chefs are paid food + tax − commission after each order completes.</p>
+        <Button className="mt-3" disabled={busy || !f} onClick={saveFees}>Submit fee change</Button>
+      </Card>
+      <Card title="Orders and cancellations">
+        <div className="grid grid-cols-2 gap-2">
+          <Input label="Hours a chef has to accept" type="number" min={1} max={72} value={pv.acceptHours} onChange={(e) => setP({ ...pv, acceptHours: Number(e.target.value) })} />
+          <Input label="Orders open (max days ahead)" type="number" min={7} max={365} value={advance ?? String(data.settings['chefs.max_advance_days'] ?? 60)} onChange={(e) => setAdvance(e.target.value)} />
+          <Input label="Late refund minimum (%)" type="number" min={0} max={100} value={pv.lateRefundMinPct} onChange={(e) => setP({ ...pv, lateRefundMinPct: Number(e.target.value) })} />
+          <Input label="Late refund maximum (%)" type="number" min={0} max={100} value={pv.lateRefundMaxPct} onChange={(e) => setP({ ...pv, lateRefundMaxPct: Number(e.target.value) })} />
+          <Input label="Default late refund (%)" type="number" min={0} max={100} value={pv.lateRefundDefaultPct} onChange={(e) => setP({ ...pv, lateRefundDefaultPct: Number(e.target.value) })} />
+        </div>
+        <p className="mt-2 text-xs text-ink-500">Customers always get a full refund before the order cutoff, when a chef declines, or when a chef doesn’t accept in time (never later than 2 hours before the order). After the cutoff they get the chef’s chosen percentage, within this range.</p>
+        <Button className="mt-3" disabled={busy || (!p && advance === null)} onClick={savePolicy}>Save policy</Button>
+      </Card>
+    </div>
   );
 }
 
