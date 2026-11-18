@@ -31,7 +31,7 @@ export function Header() {
           {ready && user ? (
             <>
               {isMerchant && <Link href="/merchant" className="rounded-lg px-3 py-1.5 text-sm text-ink-700 hover:bg-ink-50">Merchant</Link>}
-              {user.roles.includes('CHEF') && <Link href="/chef" className="rounded-lg px-3 py-1.5 text-sm text-ink-700 hover:bg-ink-50">Chef</Link>}
+              {user.roles.includes('CHEF') && <Link href="/chef" className="rounded-lg px-3 py-1.5 text-sm text-ink-700 hover:bg-ink-50">Bestie dashboard</Link>}
               {isAdmin && <Link href="/admin" className="rounded-lg px-3 py-1.5 text-sm text-ink-700 hover:bg-ink-50">Admin</Link>}
               <Link href="/account" className="rounded-lg px-3 py-1.5 text-sm text-ink-700 hover:bg-ink-50">{user.name?.split(' ')[0] || 'Account'}</Link>
               <button onClick={logout} className="rounded-lg px-2 py-1.5 text-sm text-ink-500 hover:bg-ink-50">Sign out</button>

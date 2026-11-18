@@ -52,7 +52,7 @@ export default function ChefApply() {
       <Card title="Your chef application">
         <View style={s.row}><Badge text={CHEF_APPLICATION_STATUS_LABELS[app.status]} tone={app.status === 'APPROVED' ? 'good' : app.status === 'REJECTED' ? 'bad' : 'info'} /><Text style={{ fontWeight: '700' }}>{app.progress.percent}%</Text></View>
         <Progress percent={app.progress.percent} />
-        {app.status === 'APPROVED' && <Button title="Open chef dashboard" onPress={() => router.push('/chef')} />}
+        {app.status === 'APPROVED' && <Button title="Open Bestie dashboard" onPress={() => router.push('/chef')} />}
         {app.status === 'REJECTED' && <Muted>Reason: {app.decisionReason}. Appeal from the web at gutad.io/chefs/apply.</Muted>}
         {(app.status === 'SUBMITTED' || app.status === 'IN_REVIEW') && <Muted>Our team is reviewing your application. We’ll email you.</Muted>}
         {app.status === 'CHANGES_REQUESTED' && <Text style={{ color: C.warn }}>A reviewer asked for changes on the steps marked !</Text>}

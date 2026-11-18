@@ -448,33 +448,33 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
     // ── Chef Network ────────────────────────────────────────────────────────
     case 'chef.application.received':
       return sub('We received your Gutad Bestie application', 'Thanks for applying to Gutad Besties. Our team reviews your kitchen, documents and first menu, usually within 3 business days.', {
-        eyebrow: 'Chef Network', heading: 'Application received',
+        eyebrow: 'Gutad Besties', heading: 'Application received',
         paragraphs: ['Thanks for applying to Gutad Besties. Our team now reviews your kitchen, documents and first menu. This usually takes about 3 business days.', 'We will email you if we need anything else.'],
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
       });
     case 'chef.application.changes':
       return sub('Your chef application needs a few changes', `Please update: ${p.steps}. Note from our team: ${p.note}`, {
-        eyebrow: 'Chef Network', tone: 'warning', heading: 'A few changes are needed',
+        eyebrow: 'Gutad Besties', tone: 'warning', heading: 'A few changes are needed',
         paragraphs: ['Our reviewers need a few corrections before they can continue.'],
         details: [['Steps to update', p.steps as string], ['Note', p.note as string]],
         cta: { label: 'Update your application', url: `${web}/chefs/apply` },
       });
     case 'chef.application.approved':
       return sub('Welcome to Gutad Besties', `Your application is approved. Connect payouts and open your availability to start selling as ${p.displayName}.`, {
-        eyebrow: 'Chef Network', tone: 'success', heading: `Welcome, ${p.displayName || 'Chef'}`,
+        eyebrow: 'Gutad Besties', tone: 'success', heading: `Welcome, ${p.displayName || 'Bestie'}`,
         paragraphs: ['Your application is approved. Next: connect payouts securely, add your dishes and open your availability.'],
-        cta: { label: 'Open your chef dashboard', url: `${web}/chef` },
+        cta: { label: 'Open your Bestie dashboard', url: `${web}/chef` },
       });
     case 'chef.application.rejected':
       return sub('About your Gutad Bestie application', `We could not approve your application: ${p.reason}. You can appeal from your application page.`, {
-        eyebrow: 'Chef Network', tone: 'danger', heading: 'We could not approve your application',
+        eyebrow: 'Gutad Besties', tone: 'danger', heading: 'We could not approve your application',
         details: [['Reason', p.reason as string]],
         paragraphs: ['If you think this is a mistake or your situation has changed, you can appeal from your application page.'],
         cta: { label: 'View or appeal', url: `${web}/chefs/apply` },
       });
     case 'chef.application.waitlisted':
       return sub('You are on the Gutad Besties waitlist', `Gutad is not onboarding chefs in your area yet${p.reason ? ` (${p.reason})` : ''}. We saved your application and will contact you when we open.`, {
-        eyebrow: 'Chef Network', heading: 'You are on our waitlist',
+        eyebrow: 'Gutad Besties', heading: 'You are on our waitlist',
         paragraphs: ['We are not onboarding chefs in your area yet. Your application is saved and we will contact you as soon as we open.'],
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
       });
@@ -482,25 +482,25 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
     // ── Chef Network operations ─────────────────────────────────────────────
     case 'chef.document.expiring':
       return sub(`Your ${p.label} expires in ${p.days} days`, `Your ${p.label} expires ${when(p.expiresAt)}. Upload the renewed document so your dishes stay on Gutad.`, {
-        eyebrow: 'Chef Network', tone: 'warning', heading: `Renew your ${p.label}`,
+        eyebrow: 'Gutad Besties', tone: 'warning', heading: `Renew your ${p.label}`,
         paragraphs: [`Your ${p.label} expires ${when(p.expiresAt)}.`, 'Upload the renewed document now. If a required document expires, your listings pause until we approve the renewal.'],
         cta: { label: 'Upload a renewal', url: `${web}/chef/compliance` },
       });
     case 'chef.document.expired':
       return sub(`Your ${p.labels} expired`, p.paused ? `Your ${p.labels} expired, so your Gutad listings are paused. Upload a renewal to reopen.` : `Your ${p.labels} expired. Upload a renewal.`, {
-        eyebrow: 'Chef Network', tone: 'danger', heading: p.paused ? 'Your listings are paused' : 'A document expired',
+        eyebrow: 'Gutad Besties', tone: 'danger', heading: p.paused ? 'Your listings are paused' : 'A document expired',
         paragraphs: [`Your ${p.labels} expired.`, p.paused ? 'Your dishes are hidden and no new orders come in. Orders already placed are not affected. Upload the renewed document; we reopen your account as soon as it is approved.' : 'Upload the renewed document as soon as you can.'],
         cta: { label: 'Upload a renewal', url: `${web}/chef/compliance` },
       });
     case 'chef.document.renewed':
       return sub('Your documents are approved', 'Your renewed documents are approved and your chef account is active again. Turn your availability back on to take orders.', {
-        eyebrow: 'Chef Network', tone: 'success', heading: 'You’re cleared to cook again',
+        eyebrow: 'Gutad Besties', tone: 'success', heading: 'You’re cleared to cook again',
         paragraphs: ['Your renewed documents are approved and your account is active again.', 'Turn your availability back on from your dashboard to start taking orders.'],
         cta: { label: 'Open your dashboard', url: `${web}/chef` },
       });
     case 'chef.quality.action':
       return sub(`Gutad quality update: ${p.label}`, String(p.note || ''), {
-        eyebrow: 'Chef Network', tone: ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'success' : 'warning', heading: String(p.label || 'Quality update'),
+        eyebrow: 'Gutad Besties', tone: ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'success' : 'warning', heading: String(p.label || 'Quality update'),
         paragraphs: [String(p.note || ''), ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'Thanks for working with us on this.' : 'Reply to this email or contact Gutad Bestie support if you have questions or want to share your side.'],
         cta: { label: 'View your quality record', url: `${web}/chef/compliance` },
       });
@@ -529,27 +529,27 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
       const total = money(p.totalCents as number);
       switch (template) {
         case 'chef.request.new':
-          return sub(`New special request ${code}`, `A customer asked for a change to ${dish} for ${day}. Reply by ${when(p.respondBy)}.`, { eyebrow: 'Chef Network', heading: 'New special request', paragraphs: [`A customer asked for a change to ${dish} for ${day}.`, `Quote it, suggest an alternative, ask a question or decline by ${when(p.respondBy)}. Unanswered requests expire.`], details, cta });
+          return sub(`New special request ${code}`, `A customer asked for a change to ${dish} for ${day}. Reply by ${when(p.respondBy)}.`, { eyebrow: 'Gutad Besties', heading: 'New special request', paragraphs: [`A customer asked for a change to ${dish} for ${day}.`, `Quote it, suggest an alternative, ask a question or decline by ${when(p.respondBy)}. Unanswered requests expire.`], details, cta });
         case 'chef.request.reminder':
-          return sub(`Reminder: special request ${code} needs your reply`, `A customer is waiting on ${code} for ${dish}. Reply by ${when(p.respondBy)} or it expires.`, { eyebrow: 'Chef Network', tone: 'warning', heading: 'A customer is waiting on you', paragraphs: [`Special request ${code} for ${dish} (${day}) still needs an answer.`, `Quote it, suggest an alternative, ask a question or decline by ${when(p.respondBy)}. Unanswered requests expire and count against your response time.`], details, cta });
+          return sub(`Reminder: special request ${code} needs your reply`, `A customer is waiting on ${code} for ${dish}. Reply by ${when(p.respondBy)} or it expires.`, { eyebrow: 'Gutad Besties', tone: 'warning', heading: 'A customer is waiting on you', paragraphs: [`Special request ${code} for ${dish} (${day}) still needs an answer.`, `Quote it, suggest an alternative, ask a question or decline by ${when(p.respondBy)}. Unanswered requests expire and count against your response time.`], details, cta });
         case 'chef.request.quoted':
-          return sub(`${chef} quoted your request: ${total}`, `${chef} quoted ${total} for ${day}${p.kind === 'ALTERNATIVE' ? ' (a suggested alternative)' : ''}. Accept by ${when(p.quoteExpiresAt)}.`, { eyebrow: 'Chef Network', tone: 'success', heading: p.kind === 'ALTERNATIVE' ? `${chef} suggested an alternative` : `${chef} sent you a quote`, paragraphs: [`Total ${total} for ${day}. The price is confirmed by the chef and sold by Gutad.`, `Accept and pay by ${when(p.quoteExpiresAt)}, or ask for a revision.`], details: [...details, ['Quote', `v${p.version}`], ['Total', total]], cta: { label: 'Review the quote', url } });
+          return sub(`${chef} quoted your request: ${total}`, `${chef} quoted ${total} for ${day}${p.kind === 'ALTERNATIVE' ? ' (a suggested alternative)' : ''}. Accept by ${when(p.quoteExpiresAt)}.`, { eyebrow: 'Gutad Besties', tone: 'success', heading: p.kind === 'ALTERNATIVE' ? `${chef} suggested an alternative` : `${chef} sent you a quote`, paragraphs: [`Total ${total} for ${day}. The price is confirmed by the chef and sold by Gutad.`, `Accept and pay by ${when(p.quoteExpiresAt)}, or ask for a revision.`], details: [...details, ['Quote', `v${p.version}`], ['Total', total]], cta: { label: 'Review the quote', url } });
         case 'chef.request.question':
-          return sub(`${chef} has a question about ${code}`, `${chef}: ${p.body}`, { eyebrow: 'Chef Network', heading: `${chef} has a question`, paragraphs: [String(p.body || ''), `Reply by ${when(p.respondBy)} so ${chef} can quote it.`], details, cta: { label: 'Reply', url } });
+          return sub(`${chef} has a question about ${code}`, `${chef}: ${p.body}`, { eyebrow: 'Gutad Besties', heading: `${chef} has a question`, paragraphs: [String(p.body || ''), `Reply by ${when(p.respondBy)} so ${chef} can quote it.`], details, cta: { label: 'Reply', url } });
         case 'chef.request.message':
-          return sub(`New message on ${code}`, `${p.from ? `From ${p.from}: ` : ''}${p.body}`, { eyebrow: 'Chef Network', heading: 'New message on your request', paragraphs: [String(p.body || '')], details, cta });
+          return sub(`New message on ${code}`, `${p.from ? `From ${p.from}: ` : ''}${p.body}`, { eyebrow: 'Gutad Besties', heading: 'New message on your request', paragraphs: [String(p.body || '')], details, cta });
         case 'chef.request.revision':
-          return sub(`Revision requested on ${code}`, `The customer asked for a new version: ${p.body}`, { eyebrow: 'Chef Network', tone: 'warning', heading: 'The customer asked for a revision', paragraphs: [String(p.body || ''), `Send a new quote by ${when(p.respondBy)}.`], details, cta });
+          return sub(`Revision requested on ${code}`, `The customer asked for a new version: ${p.body}`, { eyebrow: 'Gutad Besties', tone: 'warning', heading: 'The customer asked for a revision', paragraphs: [String(p.body || ''), `Send a new quote by ${when(p.respondBy)}.`], details, cta });
         case 'chef.request.accepted':
-          return sub(`Quote accepted on ${code}`, `The customer accepted your quote (${total}, ${day}). You’ll get the order once they pay.`, { eyebrow: 'Chef Network', tone: 'success', heading: 'Your quote was accepted', paragraphs: [`The customer accepted ${total} for ${day}. The order arrives in your inbox once they pay.`], details, cta });
+          return sub(`Quote accepted on ${code}`, `The customer accepted your quote (${total}, ${day}). You’ll get the order once they pay.`, { eyebrow: 'Gutad Besties', tone: 'success', heading: 'Your quote was accepted', paragraphs: [`The customer accepted ${total} for ${day}. The order arrives in your inbox once they pay.`], details, cta });
         case 'chef.request.declined':
-          return sub(`${chef} can’t make your request ${code}`, `${chef} declined: ${p.reason}`, { eyebrow: 'Chef Network', tone: 'danger', heading: `${chef} can’t make this one`, paragraphs: [String(p.reason || ''), 'You can still order the dish as listed, or ask another chef.'], details, cta: { label: 'Browse chefs', url: `${web}/chefs` } });
+          return sub(`${chef} can’t make your request ${code}`, `${chef} declined: ${p.reason}`, { eyebrow: 'Gutad Besties', tone: 'danger', heading: `${chef} can’t make this one`, paragraphs: [String(p.reason || ''), 'You can still order the dish as listed, or ask another chef.'], details, cta: { label: 'Browse chefs', url: `${web}/chefs` } });
         case 'chef.request.withdrawn':
-          return sub(`Request ${code} withdrawn`, `The customer withdrew the request${p.reason ? `: ${p.reason}` : ''}.`, { eyebrow: 'Chef Network', heading: 'Request withdrawn', paragraphs: [`The customer withdrew this request${p.reason ? `: ${p.reason}` : ''}. Nothing else to do.`], details, cta });
+          return sub(`Request ${code} withdrawn`, `The customer withdrew the request${p.reason ? `: ${p.reason}` : ''}.`, { eyebrow: 'Gutad Besties', heading: 'Request withdrawn', paragraphs: [`The customer withdrew this request${p.reason ? `: ${p.reason}` : ''}. Nothing else to do.`], details, cta });
         case 'chef.request.expired':
-          return sub(`Request ${code} expired`, String(p.reason || 'The request expired.'), { eyebrow: 'Chef Network', tone: 'warning', heading: 'Request expired', paragraphs: [String(p.reason || 'The request expired.'), forChef ? 'Answering quickly keeps your response rate up.' : 'Nothing was charged. You can send a new request any time.'], details, cta });
+          return sub(`Request ${code} expired`, String(p.reason || 'The request expired.'), { eyebrow: 'Gutad Besties', tone: 'warning', heading: 'Request expired', paragraphs: [String(p.reason || 'The request expired.'), forChef ? 'Answering quickly keeps your response rate up.' : 'Nothing was charged. You can send a new request any time.'], details, cta });
         default:
-          return sub(`Request ${code} closed by Gutad`, String(p.reason || ''), { eyebrow: 'Chef Network', heading: 'Request closed by Gutad', paragraphs: [String(p.reason || ''), 'Nothing was charged.'], details, cta });
+          return sub(`Request ${code} closed by Gutad`, String(p.reason || ''), { eyebrow: 'Gutad Besties', heading: 'Request closed by Gutad', paragraphs: [String(p.reason || ''), 'Nothing was charged.'], details, cta });
       }
     }
     default:

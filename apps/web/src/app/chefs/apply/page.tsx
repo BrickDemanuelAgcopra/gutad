@@ -142,7 +142,7 @@ function StatusBanner({ app, onAppeal }: { app: Application; onAppeal: (a: Appli
   if (app.status === 'APPROVED')
     return (
       <Alert tone="good">
-        <div className="flex flex-wrap items-center justify-between gap-2"><span><strong>You’re approved!</strong> Connect payouts, add dishes and open your availability.</span><Link href="/chef" className="font-semibold underline">Open chef dashboard →</Link></div>
+        <div className="flex flex-wrap items-center justify-between gap-2"><span><strong>You’re approved!</strong> Connect payouts, add dishes and open your availability.</span><Link href="/chef" className="font-semibold underline">Open Bestie dashboard →</Link></div>
       </Alert>
     );
   return (

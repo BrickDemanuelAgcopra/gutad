@@ -19,7 +19,7 @@ export default function ChefHome() {
   const { data: comp } = useApi<{ documents: { state: string }[] }>(data ? '/chef/compliance' : null, { deps: [!!data] });
   const { run, busy, error: actErr } = useAction();
   if (loading) return <Loading />;
-  if (error || !data) return <View style={[s.screen, s.pad]}><Card title="Not a Gutad Bestie yet"><Muted>Finish your application to unlock the chef dashboard.</Muted><Link href="/chefs/apply" asChild><Button title="Open application" onPress={() => undefined} /></Link></Card></View>;
+  if (error || !data) return <View style={[s.screen, s.pad]}><Card title="Not a Gutad Bestie yet"><Muted>Finish your application to unlock the Bestie dashboard.</Muted><Link href="/chefs/apply" asChild><Button title="Open application" onPress={() => undefined} /></Link></Card></View>;
   const p = data.profile;
   const docIssues = comp ? comp.documents.filter((d) => d.state !== 'VALID' && d.state !== 'IN_REVIEW').length : 0;
   return (
