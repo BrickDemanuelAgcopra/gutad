@@ -198,7 +198,7 @@ async function main() {
   await pool.end();
 }
 
-/** Customer options and approved extras for Chef Carlos's customizable dishes (added once). */
+/** Customer options and approved extras for Bestie Carlos's customizable dishes (added once). */
 async function seedDemoChefOptions(db: ReturnType<typeof createDb>, log: (m: string) => void) {
   const [p] = await db.select().from(s.chefProfiles).where(eq(s.chefProfiles.slug, 'chef-carlos')).limit(1);
   if (!p) return;
@@ -242,14 +242,14 @@ async function seedDemoChefOptions(db: ReturnType<typeof createDb>, log: (m: str
   log('demo chef options ready (Spaghetti and celebration cake customizable; 3 approved extras)');
 }
 
-/** Chef Carlos's live demo dishes (added once, also on databases seeded before dishes existed). */
+/** Bestie Carlos's live demo dishes (added once, also on databases seeded before dishes existed). */
 async function seedDemoChefDishes(db: ReturnType<typeof createDb>, log: (m: string) => void) {
   const [p] = await db.select().from(s.chefProfiles).where(eq(s.chefProfiles.slug, 'chef-carlos')).limit(1);
   if (!p || !p.locationId) return;
   const [has] = await db.select({ id: s.chefDishes.id }).from(s.chefDishes).where(eq(s.chefDishes.chefProfileId, p.id)).limit(1);
   if (has) return;
   let [menu] = await db.select().from(s.menus).where(eq(s.menus.locationId, p.locationId)).limit(1);
-  if (!menu) [menu] = await db.insert(s.menus).values({ organizationId: p.organizationId, locationId: p.locationId, name: 'Chef Carlos menu', channels: ['MARKETPLACE', 'DIRECT'] }).returning();
+  if (!menu) [menu] = await db.insert(s.menus).values({ organizationId: p.organizationId, locationId: p.locationId, name: 'Bestie Carlos menu', channels: ['MARKETPLACE', 'DIRECT'] }).returning();
   const [pasta] = await db.insert(s.menuCategories).values({ menuId: menu.id, name: 'Pasta', sortOrder: 0 }).returning();
   const [cakes] = await db.insert(s.menuCategories).values({ menuId: menu.id, name: 'Celebration cakes & pies', sortOrder: 1 }).returning();
   const dishes = [
@@ -262,10 +262,10 @@ async function seedDemoChefDishes(db: ReturnType<typeof createDb>, log: (m: stri
     const [item] = await db.insert(s.menuItems).values({ categoryId: d.cat, name: d.dishName, description: d.description, priceCents: d.priceCents, imageUrl: d.photo, photos: [d.photo], allergens: d.allergens, dietaryTags: d.dietaryTags, servingSize: d.portionDesc, cookMinutes: d.prepMinutes, handling: d.fulfillmentFormat === 'HOT' ? ['HOT'] : d.fulfillmentFormat === 'CHILLED_REHEAT' ? ['COLD'] : [], isActive: true, sortOrder: i }).returning();
     await db.insert(s.chefDishes).values({ menuItemId: item.id, chefProfileId: p.id, locationId: p.locationId, dishName: d.dishName, description: d.description, portionDesc: d.portionDesc, ingredients: d.ingredients, allergensConfirmed: true, mode: d.mode, acceptsSpecialRequests: d.acceptsSpecialRequests, fulfillmentFormat: d.fulfillmentFormat, prepMinutes: d.prepMinutes, minLeadDays: d.minLeadDays ?? null, dailyCapacity: d.dailyCapacity ?? null, photos: [d.photo], reviewStatus: 'PUBLISHED', publishedAt: new Date(), submittedAt: new Date() });
   }
-  log('demo chef dishes ready (Chef Carlos: 4 live dishes)');
+  log('demo chef dishes ready (Bestie Carlos: 4 live dishes)');
 }
 
-/** Gutad Chef Network demo: Chef Carlos, approved, payouts connected, accepting orders (idempotent). */
+/** Gutad Chef Network demo: Bestie Carlos, approved, payouts connected, accepting orders (idempotent). */
 async function seedDemoChef(db: ReturnType<typeof createDb>, log: (m: string) => void) {
   const email = 'carlos@demo.gutad.io';
   const [exists] = await db.select().from(s.users).where(eq(s.users.email, email)).limit(1);
@@ -273,7 +273,7 @@ async function seedDemoChef(db: ReturnType<typeof createDb>, log: (m: string) =>
   const [u] = await db.insert(s.users).values({ email, passwordHash: await argon2.hash('chef12345'), name: 'Carlos Mendes', phone: '+12125550188', roles: ['CUSTOMER', 'CHEF'], emailVerifiedAt: new Date() }).returning();
   const data = {
     account: { phone: '+12125550188', agreementVersion: CHEF_AGREEMENT_VERSION, agreedAt: new Date().toISOString() },
-    identity: { legalName: 'Carlos Mendes', displayName: 'Chef Carlos', businessType: 'INDIVIDUAL' },
+    identity: { legalName: 'Carlos Mendes', displayName: 'Bestie Carlos', businessType: 'INDIVIDUAL' },
     profile: { bio: 'Italian-Brazilian home-style pasta and celebration cakes, made from scratch in a licensed Brooklyn commissary.', cuisines: ['Italian', 'Bakery & desserts'], experienceYears: 12, languages: ['English', 'Portuguese', 'Italian'], serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12 },
     kitchen: { kitchenType: 'SHARED_COMMISSARY', name: 'Brooklyn Commissary', operatorName: 'Brooklyn Commissary LLC', addressLine1: '200 Flushing Ave', city: 'Brooklyn', region: 'NY', postalCode: '11205', pickupAccess: 'Gate B, ring Kitchen 4', dailyCapacity: 40 },
     operating: { cookingDays: [2, 3, 4, 5, 6], cutoffHour: 12, minLeadDays: 1, dailyCapacity: 30, instantOrders: false, scheduledOrders: true, pickup: true, delivery: true, maxAdvanceDays: 45 },
@@ -281,18 +281,18 @@ async function seedDemoChef(db: ReturnType<typeof createDb>, log: (m: string) =>
     menu: { dishes: [{ name: 'Spaghetti', priceCents: 1600, portion: '1 bowl (450 g)', allergens: ['wheat', 'milk', 'egg'], mode: 'CUSTOMIZABLE' }] },
     readiness: { packagingAck: true, handlingTrainingAck: true, allergenTrainingAck: true },
   };
-  const [app] = await db.insert(s.chefApplications).values({ userId: u.id, status: 'APPROVED', data, displayName: 'Chef Carlos', region: 'NY', city: 'Brooklyn', kitchenType: 'SHARED_COMMISSARY', percentComplete: 100, submittedAt: new Date(), decidedAt: new Date(), decisionReason: 'Demo chef', history: [{ at: new Date().toISOString(), action: 'APPROVED', note: 'Demo chef' }] }).returning();
-  const [org] = await db.insert(s.organizations).values({ name: 'Chef Carlos', slug: 'chef-carlos-demo', kind: 'CHEF', status: 'LIVE', featureFlags: {} }).returning();
+  const [app] = await db.insert(s.chefApplications).values({ userId: u.id, status: 'APPROVED', data, displayName: 'Bestie Carlos', region: 'NY', city: 'Brooklyn', kitchenType: 'SHARED_COMMISSARY', percentComplete: 100, submittedAt: new Date(), decidedAt: new Date(), decisionReason: 'Demo chef', history: [{ at: new Date().toISOString(), action: 'APPROVED', note: 'Demo chef' }] }).returning();
+  const [org] = await db.insert(s.organizations).values({ name: 'Bestie Carlos', slug: 'chef-carlos-demo', kind: 'CHEF', status: 'LIVE', featureFlags: {} }).returning();
   await db.insert(s.orgMemberships).values({ userId: u.id, organizationId: org.id, role: 'MERCHANT_OWNER', acceptedAt: new Date() });
   await db.update(s.chefApplications).set({ organizationId: org.id }).where(eq(s.chefApplications.id, app.id));
   const [seller] = await db.insert(s.legalSellers).values({ organizationId: org.id, legalName: 'Carlos Mendes', country: 'US', payoutProvider: 'mock', payoutAccountId: 'mock_acct_chef_carlos', payoutOnboardingState: 'COMPLETE', bankLast4: '6789', beneficiaryName: 'Carlos Mendes' }).returning();
-  const [loc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Chef Carlos’s kitchen', slug: 'chef-carlos-kitchen', description: data.profile.bio, cuisine: ['italian', 'bakery'], phone: '+12125550188', addressLine1: '200 Flushing Ave', city: 'Brooklyn', region: 'NY', postalCode: '11205', lat: 40.6981, lng: -73.9712, timezone: 'America/New_York', pickupInstructions: 'Gate B, ring Kitchen 4', courierInstructions: 'Gate B, ring Kitchen 4', status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, chefKitchen: true, defaultPrepMinutes: 45, scheduleLeadMinutes: 24 * 60, deliveryRadiusKm: 12, taxRateBps: 888 }).returning();
+  const [loc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Bestie Carlos’s kitchen', slug: 'chef-carlos-kitchen', description: data.profile.bio, cuisine: ['italian', 'bakery'], phone: '+12125550188', addressLine1: '200 Flushing Ave', city: 'Brooklyn', region: 'NY', postalCode: '11205', lat: 40.6981, lng: -73.9712, timezone: 'America/New_York', pickupInstructions: 'Gate B, ring Kitchen 4', courierInstructions: 'Gate B, ring Kitchen 4', status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, chefKitchen: true, defaultPrepMinutes: 45, scheduleLeadMinutes: 24 * 60, deliveryRadiusKm: 12, taxRateBps: 888 }).returning();
   await db.insert(s.openingHours).values([2, 3, 4, 5, 6].map((d) => ({ locationId: loc.id, dayOfWeek: d, opens: '09:00', closes: '20:00', service: 'ALL' })));
-  await db.insert(s.chefProfiles).values({ organizationId: org.id, userId: u.id, applicationId: app.id, locationId: loc.id, displayName: 'Chef Carlos', slug: 'chef-carlos', legalName: 'Carlos Mendes', bio: data.profile.bio, cuisines: data.profile.cuisines, languages: data.profile.languages, experienceYears: 12, serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12, kitchenType: 'SHARED_COMMISSARY', operating: { cookingDays: [2, 3, 4, 5, 6], cutoffHour: 12, minLeadDays: 1, dailyCapacity: 30, instantOrders: false, scheduledOrders: true, maxAdvanceDays: 45 }, verifiedCredentials: ['GOV_ID', 'FOOD_HANDLER', 'KITCHEN_PERMIT', 'KITCHEN_USE_AGREEMENT', 'LIABILITY_INSURANCE'], brandAgreementAcceptedAt: new Date(), status: 'ACTIVE', acceptingOrders: true });
-  log(`demo chef ready: ${email} / chef12345 (Chef Carlos, location ${loc.id})`);
+  await db.insert(s.chefProfiles).values({ organizationId: org.id, userId: u.id, applicationId: app.id, locationId: loc.id, displayName: 'Bestie Carlos', slug: 'chef-carlos', legalName: 'Carlos Mendes', bio: data.profile.bio, cuisines: data.profile.cuisines, languages: data.profile.languages, experienceYears: 12, serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12, kitchenType: 'SHARED_COMMISSARY', operating: { cookingDays: [2, 3, 4, 5, 6], cutoffHour: 12, minLeadDays: 1, dailyCapacity: 30, instantOrders: false, scheduledOrders: true, maxAdvanceDays: 45 }, verifiedCredentials: ['GOV_ID', 'FOOD_HANDLER', 'KITCHEN_PERMIT', 'KITCHEN_USE_AGREEMENT', 'LIABILITY_INSURANCE'], brandAgreementAcceptedAt: new Date(), status: 'ACTIVE', acceptingOrders: true });
+  log(`demo chef ready: ${email} / chef12345 (Bestie Carlos, location ${loc.id})`);
 }
 
-/** Second demo chef (multi-chef checkout): Chef Amara, West African, approved and accepting orders (idempotent). */
+/** Second demo chef (multi-chef checkout): Bestie Amara, West African, approved and accepting orders (idempotent). */
 async function seedDemoChefAmara(db: ReturnType<typeof createDb>, log: (m: string) => void) {
   const email = 'amara@demo.gutad.io';
   const [exists] = await db.select().from(s.users).where(eq(s.users.email, email)).limit(1);
@@ -300,15 +300,15 @@ async function seedDemoChefAmara(db: ReturnType<typeof createDb>, log: (m: strin
   const op = { cookingDays: [3, 4, 5, 6, 0], cutoffHour: 15, minLeadDays: 1, dailyCapacity: 25, instantOrders: false, scheduledOrders: true, pickup: true, delivery: true, maxAdvanceDays: 30, opens: '11:00', closes: '19:00', lateRefundPct: 50 };
   const bio = 'Nigerian and Ghanaian home cooking: smoky party jollof, egusi and suya, cooked in a licensed Bed-Stuy kitchen.';
   const [u] = await db.insert(s.users).values({ email, passwordHash: await argon2.hash('chef12345'), name: 'Amara Okafor', phone: '+12125550199', roles: ['CUSTOMER', 'CHEF'], emailVerifiedAt: new Date() }).returning();
-  const [app] = await db.insert(s.chefApplications).values({ userId: u.id, status: 'APPROVED', data: { identity: { legalName: 'Amara Okafor', displayName: 'Chef Amara', businessType: 'INDIVIDUAL' }, operating: op }, displayName: 'Chef Amara', region: 'NY', city: 'Brooklyn', kitchenType: 'COTTAGE_HOME', percentComplete: 100, submittedAt: new Date(), decidedAt: new Date(), decisionReason: 'Demo chef', history: [{ at: new Date().toISOString(), action: 'APPROVED', note: 'Demo chef' }] }).returning();
-  const [org] = await db.insert(s.organizations).values({ name: 'Chef Amara', slug: 'chef-amara-demo', kind: 'CHEF', status: 'LIVE', featureFlags: {} }).returning();
+  const [app] = await db.insert(s.chefApplications).values({ userId: u.id, status: 'APPROVED', data: { identity: { legalName: 'Amara Okafor', displayName: 'Bestie Amara', businessType: 'INDIVIDUAL' }, operating: op }, displayName: 'Bestie Amara', region: 'NY', city: 'Brooklyn', kitchenType: 'COTTAGE_HOME', percentComplete: 100, submittedAt: new Date(), decidedAt: new Date(), decisionReason: 'Demo chef', history: [{ at: new Date().toISOString(), action: 'APPROVED', note: 'Demo chef' }] }).returning();
+  const [org] = await db.insert(s.organizations).values({ name: 'Bestie Amara', slug: 'chef-amara-demo', kind: 'CHEF', status: 'LIVE', featureFlags: {} }).returning();
   await db.insert(s.orgMemberships).values({ userId: u.id, organizationId: org.id, role: 'MERCHANT_OWNER', acceptedAt: new Date() });
   await db.update(s.chefApplications).set({ organizationId: org.id }).where(eq(s.chefApplications.id, app.id));
   const [seller] = await db.insert(s.legalSellers).values({ organizationId: org.id, legalName: 'Amara Okafor', country: 'US', payoutProvider: 'mock', payoutAccountId: 'mock_acct_chef_amara', payoutOnboardingState: 'COMPLETE', bankLast4: '4321', beneficiaryName: 'Amara Okafor' }).returning();
-  const [loc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Chef Amara’s kitchen', slug: 'chef-amara-kitchen', description: bio, cuisine: ['west african', 'nigerian'], phone: '+12125550199', addressLine1: '410 Tompkins Ave', city: 'Brooklyn', region: 'NY', postalCode: '11216', lat: 40.6845, lng: -73.9440, timezone: 'America/New_York', pickupInstructions: 'Side door, ring Kitchen', courierInstructions: 'Side door, ring Kitchen', status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, chefKitchen: true, defaultPrepMinutes: 45, scheduleLeadMinutes: 24 * 60, deliveryRadiusKm: 12, taxRateBps: 888 }).returning();
+  const [loc] = await db.insert(s.locations).values({ organizationId: org.id, legalSellerId: seller.id, name: 'Bestie Amara’s kitchen', slug: 'chef-amara-kitchen', description: bio, cuisine: ['west african', 'nigerian'], phone: '+12125550199', addressLine1: '410 Tompkins Ave', city: 'Brooklyn', region: 'NY', postalCode: '11216', lat: 40.6845, lng: -73.9440, timezone: 'America/New_York', pickupInstructions: 'Side door, ring Kitchen', courierInstructions: 'Side door, ring Kitchen', status: 'LIVE', verifiedAt: new Date(), acceptsPickup: true, acceptsDelivery: true, chefKitchen: true, defaultPrepMinutes: 45, scheduleLeadMinutes: 24 * 60, deliveryRadiusKm: 12, taxRateBps: 888 }).returning();
   await db.insert(s.openingHours).values(op.cookingDays.map((d) => ({ locationId: loc.id, dayOfWeek: d, opens: op.opens, closes: op.closes, service: 'ALL' })));
-  const [p] = await db.insert(s.chefProfiles).values({ organizationId: org.id, userId: u.id, applicationId: app.id, locationId: loc.id, displayName: 'Chef Amara', slug: 'chef-amara', legalName: 'Amara Okafor', bio, cuisines: ['West African'], languages: ['English', 'Igbo', 'Twi'], experienceYears: 9, serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12, kitchenType: 'COTTAGE_HOME', operating: op, verifiedCredentials: ['GOV_ID', 'FOOD_HANDLER', 'KITCHEN_PERMIT', 'LIABILITY_INSURANCE'], brandAgreementAcceptedAt: new Date(), status: 'ACTIVE', acceptingOrders: true }).returning();
-  const [menu] = await db.insert(s.menus).values({ organizationId: org.id, locationId: loc.id, name: 'Chef Amara menu', channels: ['MARKETPLACE', 'DIRECT'] }).returning();
+  const [p] = await db.insert(s.chefProfiles).values({ organizationId: org.id, userId: u.id, applicationId: app.id, locationId: loc.id, displayName: 'Bestie Amara', slug: 'chef-amara', legalName: 'Amara Okafor', bio, cuisines: ['West African'], languages: ['English', 'Igbo', 'Twi'], experienceYears: 9, serviceCity: 'New York', serviceRegion: 'NY', serviceRadiusKm: 12, kitchenType: 'COTTAGE_HOME', operating: op, verifiedCredentials: ['GOV_ID', 'FOOD_HANDLER', 'KITCHEN_PERMIT', 'LIABILITY_INSURANCE'], brandAgreementAcceptedAt: new Date(), status: 'ACTIVE', acceptingOrders: true }).returning();
+  const [menu] = await db.insert(s.menus).values({ organizationId: org.id, locationId: loc.id, name: 'Bestie Amara menu', channels: ['MARKETPLACE', 'DIRECT'] }).returning();
   const [mains] = await db.insert(s.menuCategories).values({ menuId: menu.id, name: 'Mains', sortOrder: 0 }).returning();
   const dishes = [
     { dishName: 'Party jollof rice', description: 'Smoky long-grain jollof with fried plantain. Serves 2.', priceCents: 2200, portionDesc: 'Tray for 2 (800 g)', ingredients: ['rice', 'tomato', 'red pepper', 'scotch bonnet', 'onion', 'thyme', 'plantain'], allergens: [], dietaryTags: ['vegan'], fulfillmentFormat: 'HOT', prepMinutes: 60, dailyCapacity: 15, photo: 'https://images.unsplash.com/photo-1604329760661-e71dc83f8f26?w=1200' },
@@ -318,7 +318,7 @@ async function seedDemoChefAmara(db: ReturnType<typeof createDb>, log: (m: strin
     const [item] = await db.insert(s.menuItems).values({ categoryId: mains.id, name: d.dishName, description: d.description, priceCents: d.priceCents, imageUrl: d.photo, photos: [d.photo], allergens: d.allergens, dietaryTags: d.dietaryTags, servingSize: d.portionDesc, cookMinutes: d.prepMinutes, handling: ['HOT'], isActive: true, sortOrder: i }).returning();
     await db.insert(s.chefDishes).values({ menuItemId: item.id, chefProfileId: p.id, locationId: loc.id, dishName: d.dishName, description: d.description, portionDesc: d.portionDesc, ingredients: d.ingredients, allergensConfirmed: true, mode: 'FIXED', fulfillmentFormat: d.fulfillmentFormat, prepMinutes: d.prepMinutes, dailyCapacity: d.dailyCapacity, photos: [d.photo], reviewStatus: 'PUBLISHED', publishedAt: new Date(), submittedAt: new Date() });
   }
-  log(`demo chef ready: ${email} / chef12345 (Chef Amara, 2 live dishes)`);
+  log(`demo chef ready: ${email} / chef12345 (Bestie Amara, 2 live dishes)`);
 }
 
 main().catch((e) => {

@@ -54,7 +54,7 @@ export async function chefPhaseI({ call, check, A, C }) {
   const ja = alts.dishes?.find((x) => x.id === jollof?.id);
   check('staff see live dishes from other chefs, with the requested day’s status', !!ja && !alts.dishes.some((x) => x.chef.slug === 'chef-carlos') && !!ja.requestedDay && Array.isArray(ja.mentionedAllergens), { n: alts.dishes?.length, ja });
   const jd = (await openDay(jollof, 1, 0));
-  const body = { kind: 'ALTERNATIVE', altDishId: jollof.id, changes: 'Chef Amara’s party jollof rice instead of the spaghetti.', unitPriceCents: jollof.priceCents - 100, quantity: 1, allergens: jollof.allergens, dietaryTags: jollof.dietaryTags, serviceDate: jd.date };
+  const body = { kind: 'ALTERNATIVE', altDishId: jollof.id, changes: 'Bestie Amara’s party jollof rice instead of the spaghetti.', unitPriceCents: jollof.priceCents - 100, quantity: 1, allergens: jollof.allergens, dietaryTags: jollof.dietaryTags, serviceDate: jd.date };
   const cheap = await call('POST', `/admin/chef-requests/${req.id}/quote`, body, A);
   check('staff can’t set another chef’s price', cheap.status === 400 && cheap.json.code === 'ALTERNATIVE_PRICE', cheap.json);
   const chefTry = await call('POST', `/chef/requests/${req.id}/quote`, { ...body, unitPriceCents: jollof.priceCents }, K);

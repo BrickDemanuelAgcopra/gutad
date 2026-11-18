@@ -9,7 +9,7 @@ import type { CustomerFeeRules } from './pricing';
 
 export const PLATFORM_BRAND = 'Gutad';
 
-/** "Gutad's Spaghetti — by Chef Carlos". One helper so listings, receipts, tickets and labels always agree. */
+/** "Gutad's Spaghetti — by Bestie Carlos". One helper so listings, receipts, tickets and labels always agree. */
 export function chefDishTitle(dishName: string, chefDisplayName: string, platformBrand = PLATFORM_BRAND): string {
   const dish = dishName.trim();
   const chef = chefDisplayName.trim();
@@ -121,7 +121,7 @@ export function chefApplicationMissing(d: ChefApplicationData, docs: ChefDocSumm
   need('account', d.account?.phone && d.account.phone.replace(/\D/g, '').length >= 10, 'Mobile phone');
   need('account', d.account?.agreedAt && d.account.agreementVersion === CHEF_AGREEMENT_VERSION, 'Bestie Partner Agreement');
   need('identity', (d.identity?.legalName || '').trim().length >= 3, 'Legal name');
-  need('identity', (d.identity?.displayName || '').trim().length >= 2, 'Public chef name');
+  need('identity', (d.identity?.displayName || '').trim().length >= 2, 'Public Bestie name');
   need('identity', d.identity?.businessType, 'Individual or business');
   if (d.identity?.businessType === 'BUSINESS') need('identity', (d.identity?.businessName || '').trim(), 'Registered business name');
   need('profile', (d.profile?.bio || '').trim().length >= 40, 'Biography (40+ characters)');

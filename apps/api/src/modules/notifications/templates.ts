@@ -447,9 +447,9 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
       });
     // ── Chef Network ────────────────────────────────────────────────────────
     case 'chef.application.received':
-      return sub('We received your Gutad Bestie application', 'Thanks for applying to the Gutad Bestie Network. Our team reviews your kitchen, documents and first menu, usually within 3 business days.', {
+      return sub('We received your Gutad Bestie application', 'Thanks for applying to Gutad Besties. Our team reviews your kitchen, documents and first menu, usually within 3 business days.', {
         eyebrow: 'Chef Network', heading: 'Application received',
-        paragraphs: ['Thanks for applying to the Gutad Bestie Network. Our team now reviews your kitchen, documents and first menu. This usually takes about 3 business days.', 'We will email you if we need anything else.'],
+        paragraphs: ['Thanks for applying to Gutad Besties. Our team now reviews your kitchen, documents and first menu. This usually takes about 3 business days.', 'We will email you if we need anything else.'],
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
       });
     case 'chef.application.changes':
@@ -460,7 +460,7 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
         cta: { label: 'Update your application', url: `${web}/chefs/apply` },
       });
     case 'chef.application.approved':
-      return sub('Welcome to the Gutad Bestie Network', `Your application is approved. Connect payouts and open your availability to start selling as ${p.displayName}.`, {
+      return sub('Welcome to Gutad Besties', `Your application is approved. Connect payouts and open your availability to start selling as ${p.displayName}.`, {
         eyebrow: 'Chef Network', tone: 'success', heading: `Welcome, ${p.displayName || 'Chef'}`,
         paragraphs: ['Your application is approved. Next: connect payouts securely, add your dishes and open your availability.'],
         cta: { label: 'Open your chef dashboard', url: `${web}/chef` },
@@ -473,7 +473,7 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
         cta: { label: 'View or appeal', url: `${web}/chefs/apply` },
       });
     case 'chef.application.waitlisted':
-      return sub('You are on the Gutad Bestie Network waitlist', `Gutad is not onboarding chefs in your area yet${p.reason ? ` (${p.reason})` : ''}. We saved your application and will contact you when we open.`, {
+      return sub('You are on the Gutad Besties waitlist', `Gutad is not onboarding chefs in your area yet${p.reason ? ` (${p.reason})` : ''}. We saved your application and will contact you when we open.`, {
         eyebrow: 'Chef Network', heading: 'You are on our waitlist',
         paragraphs: ['We are not onboarding chefs in your area yet. Your application is saved and we will contact you as soon as we open.'],
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
@@ -560,26 +560,26 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
 /** Representative payloads for previews and test sends (Admin → Settings → Messaging). */
 export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'account.recovery': { link: 'https://gutad.io/account/recover?token=sample' },
-  'chef.application.received': { displayName: 'Chef Carlos', region: 'NY' },
+  'chef.application.received': { displayName: 'Bestie Carlos', region: 'NY' },
   'chef.application.changes': { steps: 'Documents, First menu', note: 'Upload a current food handler card and add allergens to your lasagna.' },
-  'chef.application.approved': { displayName: 'Chef Carlos' },
+  'chef.application.approved': { displayName: 'Bestie Carlos' },
   'chef.application.rejected': { reason: 'The kitchen permit does not cover meals prepared for sale.' },
   'chef.application.waitlisted': { reason: 'not open in WY yet' },
   'chef.document.expiring': { label: 'Food handler card', days: 30, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() },
   'chef.document.expired': { labels: 'Food handler card', paused: true },
   'chef.document.renewed': {},
   'chef.quality.action': { kind: 'DISH_SUSPENDED', label: 'Dish suspended', note: 'Food-safety report: Spaghetti suspended pending review' },
-  'chef.request.reminder': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', respondBy: new Date(Date.now() + 6 * 3_600_000).toISOString(), audience: 'chef' },
-  'chef.request.new': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', respondBy: new Date(Date.now() + 86_400_000).toISOString(), audience: 'chef' },
-  'chef.request.quoted': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', totalCents: 3800, version: 2, kind: 'QUOTE', quoteExpiresAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), serviceDate: '2026-11-28', audience: 'customer' },
-  'chef.request.question': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', body: 'Is the shrimp for an allergy-free table, or just a preference?', respondBy: new Date(Date.now() + 3 * 86_400_000).toISOString(), audience: 'customer' },
-  'chef.request.message': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', body: 'Sounds good, thank you!', from: 'the customer', audience: 'chef' },
-  'chef.request.revision': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', body: 'Could you make it for 4 instead of 2?', respondBy: new Date(Date.now() + 86_400_000).toISOString(), audience: 'chef' },
-  'chef.request.accepted': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', totalCents: 3800, serviceDate: '2026-11-28', audience: 'chef' },
-  'chef.request.declined': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'I can’t source fresh shrimp that week.', audience: 'customer' },
-  'chef.request.withdrawn': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'Plans changed', audience: 'chef' },
-  'chef.request.expired': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'The chef didn’t answer in time', audience: 'customer' },
-  'chef.request.closed': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Chef Carlos', chefName: 'Chef Carlos', requestedDate: '2026-11-28', reason: 'Duplicate request', audience: 'customer' },
+  'chef.request.reminder': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', respondBy: new Date(Date.now() + 6 * 3_600_000).toISOString(), audience: 'chef' },
+  'chef.request.new': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', respondBy: new Date(Date.now() + 86_400_000).toISOString(), audience: 'chef' },
+  'chef.request.quoted': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', totalCents: 3800, version: 2, kind: 'QUOTE', quoteExpiresAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), serviceDate: '2026-11-28', audience: 'customer' },
+  'chef.request.question': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', body: 'Is the shrimp for an allergy-free table, or just a preference?', respondBy: new Date(Date.now() + 3 * 86_400_000).toISOString(), audience: 'customer' },
+  'chef.request.message': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', body: 'Sounds good, thank you!', from: 'the customer', audience: 'chef' },
+  'chef.request.revision': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', body: 'Could you make it for 4 instead of 2?', respondBy: new Date(Date.now() + 86_400_000).toISOString(), audience: 'chef' },
+  'chef.request.accepted': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', totalCents: 3800, serviceDate: '2026-11-28', audience: 'chef' },
+  'chef.request.declined': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', reason: 'I can’t source fresh shrimp that week.', audience: 'customer' },
+  'chef.request.withdrawn': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', reason: 'Plans changed', audience: 'chef' },
+  'chef.request.expired': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', reason: 'The chef didn’t answer in time', audience: 'customer' },
+  'chef.request.closed': { requestId: 'sample', code: 'R-7F3K2A', dishTitle: 'Gutad’s Spaghetti — by Bestie Carlos', chefName: 'Bestie Carlos', requestedDate: '2026-11-28', reason: 'Duplicate request', audience: 'customer' },
   'order.submitted': { number: 'G-10482', locationName: 'Mama Put Kitchen', totalCents: 2840, orderId: 'sample' },
   'order.accepted': { number: 'G-10482', promiseAt: new Date(Date.now() + 25 * 60_000).toISOString(), orderId: 'sample' },
   'order.rejected': { number: 'G-10482', reason: 'KITCHEN_CLOSED', orderId: 'sample' },

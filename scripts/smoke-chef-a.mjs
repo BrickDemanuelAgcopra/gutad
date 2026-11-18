@@ -126,7 +126,7 @@ export async function chefPhaseA({ call, check, A, C, API }) {
   me = (await call('POST', '/chef/me/availability', { accepting: true }, CT)).json;
   check('chef opens availability: profile accepting, kitchen live and unpaused', me.profile?.acceptingOrders === true && me.location?.isPaused === false && me.location?.status === 'LIVE', { p: me.profile?.acceptingOrders, l: me.location });
   const dir = (await call('GET', '/public/chefs?region=NY')).json;
-  check('the public chef directory lists accepting chefs (including demo Chef Carlos)', dir.some((c) => c.slug === me.profile.slug) && dir.some((c) => c.slug === 'chef-carlos'), dir.map((c) => c.slug));
+  check('the public chef directory lists accepting chefs (including demo Bestie Carlos)', dir.some((c) => c.slug === me.profile.slug) && dir.some((c) => c.slug === 'chef-carlos'), dir.map((c) => c.slug));
   const pub = (await call('GET', `/public/chefs/${me.profile.slug}`)).json;
   check('public chef page shows identity, cuisines and verified credentials (no documents)', pub.displayName === me.profile.displayName && pub.portraitUrl && pub.verifiedCredentials.includes('FOOD_HANDLER') && !('legalName' in pub), pub);
   const photo = await fetch(pub.portraitUrl.replace(/^https?:\/\/[^/]+/, API));
@@ -173,6 +173,6 @@ export async function chefPhaseA({ call, check, A, C, API }) {
   const custReq = await call('POST', '/admin/chef-requirements', { key: 'X1', label: 'Xx' }, C);
   check('document rules are staff-only', custReq.status === 403, custReq.status);
   const carlos = (await call('GET', '/public/chefs/chef-carlos')).json;
-  check('demo Chef Carlos is live in the Chef Network', carlos.displayName === 'Chef Carlos' && carlos.acceptingOrders, carlos);
+  check('demo Bestie Carlos is live in the Chef Network', carlos.displayName === 'Bestie Carlos' && carlos.acceptingOrders, carlos);
   return { chefToken: CT, chefProfile: me.profile };
 }

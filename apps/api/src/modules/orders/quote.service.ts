@@ -162,7 +162,7 @@ export class QuoteService {
     const brandIds = [...new Set([...items.values()].map((i) => i.brandId).filter((x): x is string => !!x))];
     const brandRows = new Map((brandIds.length ? await tx.select().from(brands).where(inArray(brands.id, brandIds)) : []).map((b) => [b.id, b]));
     const snapLines: QuoteSnapshotLine[] = [];
-    // Gutad Chef Network: lines carry the branded title ("Gutad's Spaghetti — by Chef Carlos") onto orders, tickets and receipts
+    // Gutad Chef Network: lines carry the branded title ("Gutad's Spaghetti — by Bestie Carlos") onto orders, tickets and receipts
     const chefName = loc.chefKitchen ? ((await tx.select({ n: chefProfiles.displayName }).from(chefProfiles).where(eq(chefProfiles.locationId, loc.id)).limit(1))[0]?.n ?? null) : null;
     for (const l of input.lines) {
       const item = items.get(l.menuItemId);
@@ -450,7 +450,7 @@ export class QuoteService {
     let earliestDate: string | null = null;
     if (loc.chefKitchen && out.length) earliestDate = (await this.chefCalendar.availability({ locationId: loc.id, lines: out.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })) }).catch(() => null))?.earliestDate ?? null;
     if (loc.chefKitchen && out.length && !earliestDate) warnings.push('The chef has no open dates for these dishes right now');
-    return { location: { id: loc.id, slug: loc.slug, name: chefName ? `${chefName} (Gutad Bestie Network)` : loc.name, chefKitchen: loc.chefKitchen }, channel, lines: out, removed, warnings, earliestDate };
+    return { location: { id: loc.id, slug: loc.slug, name: chefName ? `${chefName} (Gutad Besties)` : loc.name, chefKitchen: loc.chefKitchen }, channel, lines: out, removed, warnings, earliestDate };
   }
 
   /**

@@ -26,7 +26,7 @@ export default function ChefApplyPage() {
   return (
     <div className="space-y-6">
       <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-ink-900 to-ink-700 p-6 text-white sm:p-10">
-        <p className="text-xs font-semibold uppercase tracking-widest text-brand-300">Gutad Bestie Network</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-brand-300">Gutad Besties</p>
         <h1 className="mt-2 text-3xl font-bold sm:text-4xl">Cook what you love. We handle the rest.</h1>
         <p className="mt-3 max-w-2xl text-sm text-ink-100 sm:text-base">Sell your dishes as <strong>Gutad’s &lt;your dish&gt; — by &lt;you&gt;</strong>. Gutad brings customers, payments, delivery, support and packaging standards; you set your menu, customizations, cooking days and capacity.</p>
         <ul className="mt-4 grid gap-2 text-sm text-ink-100 sm:grid-cols-3">
@@ -216,7 +216,7 @@ function DataStep({ step, app, cfg, onSaved }: StepProps) {
         {badge}
         <div className="grid gap-3 sm:grid-cols-2">
           <Input label="Legal name (as on your ID)" value={s('legalName')} onChange={(e) => set({ legalName: e.target.value })} />
-          <Input label="Public chef name" value={s('displayName')} onChange={(e) => set({ displayName: e.target.value })} placeholder="Chef Carlos" />
+          <Input label="Public Bestie name" value={s('displayName')} onChange={(e) => set({ displayName: e.target.value })} placeholder="Bestie Carlos" />
         </div>
         {s('displayName') && <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-800">Your dishes will show as <strong>Gutad’s Spaghetti — by {s('displayName')}</strong></p>}
         <RadioCards name="Selling as" value={s('businessType') as 'INDIVIDUAL' | 'BUSINESS'} onChange={(x) => set({ businessType: x })} options={Object.entries(cfg.businessTypes).map(([value, label]) => ({ value: value as 'INDIVIDUAL' | 'BUSINESS', label }))} />

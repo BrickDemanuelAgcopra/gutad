@@ -8,7 +8,7 @@ export async function chefPhaseE({ call, check, A, C }) {
   console.log('\n── Chef Network E: checkout, payments and multi-chef');
   const K = (await call('POST', '/auth/login', { email: 'carlos@demo.gutad.io', password: 'chef12345' })).json.accessToken;
   const M = (await call('POST', '/auth/login', { email: 'amara@demo.gutad.io', password: 'chef12345' })).json.accessToken;
-  check('second demo chef (Chef Amara) signs in', !!M, null);
+  check('second demo chef (Bestie Amara) signs in', !!M, null);
   const carlosOrg = (await call('GET', '/chef/me', undefined, K)).json.organization.id;
   const balance = async () => (await call('GET', `/organizations/${carlosOrg}/balance`, undefined, K)).json.payableCents;
   const carlos = (await call('GET', '/public/chefs/chef-carlos/dishes')).json;
@@ -35,7 +35,7 @@ export async function chefPhaseE({ call, check, A, C }) {
   const bal0 = await balance();
   const o1 = (await place(q1.id)).json;
   check('a chef order is charged in full at checkout (no authorization hold)', o1.prepaid === true && o1.payment?.status === 'CAPTURED' && o1.payment.capturedCents === o1.totalCents, o1.payment);
-  check('the order carries the chef, the acceptance deadline and the cancellation terms', o1.chefNetwork?.chefName === 'Chef Carlos' && !!o1.acceptBy && new Date(o1.acceptBy) < new Date(s1.iso) && o1.chefNetwork.freeCancelUntil === s1.orderBy, o1.chefNetwork);
+  check('the order carries the chef, the acceptance deadline and the cancellation terms', o1.chefNetwork?.chefName === 'Bestie Carlos' && !!o1.acceptBy && new Date(o1.acceptBy) < new Date(s1.iso) && o1.chefNetwork.freeCancelUntil === s1.orderBy, o1.chefNetwork);
   check('commission is the Chef Network rate (15% of food)', o1.commissionBps === 1500 && o1.commissionCents === Math.round(2400 * 0.15), { bps: o1.commissionBps, c: o1.commissionCents });
   check('the chef isn’t credited at checkout (money is held until completion)', (await balance()) === bal0, { bal0 });
   const dec = (await call('POST', `/orders/${o1.id}/reject`, { reason: 'Out of beef this week' }, K)).json;

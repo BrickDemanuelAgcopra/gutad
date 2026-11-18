@@ -38,7 +38,7 @@ function DishView({ d }: { d: Dish }) {
   const ask = (ingredient?: string) => router.push({ pathname: '/requests/new', params: { dishId: d.id, ingredient: ingredient || '', optionIds: ev.optionIds.join(',') } });
   const addToCart = () => {
     const names = ev.chosen.filter((c) => c.priceCents > 0 || !groups.find((g) => g.id === c.groupId)?.options.find((o) => o.id === c.id)?.isDefault).map(modifierLabel);
-    add({ id: d.location.id, slug: d.location.slug, name: `${d.chef.displayName} (Gutad Bestie Network)` }, { menuItemId: d.menuItemId, name: d.title, quantity: qty, unitPriceCents: d.priceCents, modifierOptionIds: ev.optionIds, modifierNames: names, modifiersCents: ev.modifiersCents }, { park: true });
+    add({ id: d.location.id, slug: d.location.slug, name: `${d.chef.displayName} (Gutad Besties)` }, { menuItemId: d.menuItemId, name: d.title, quantity: qty, unitPriceCents: d.priceCents, modifierOptionIds: ev.optionIds, modifierNames: names, modifiersCents: ev.modifiersCents }, { park: true });
     router.push('/checkout');
   };
   return (
