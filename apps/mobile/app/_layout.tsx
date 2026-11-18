@@ -41,7 +41,7 @@ export default function RootLayout() {
         <Stack.Screen name="ops/chef-quality" options={{ title: 'Chef quality' }} />
         <Stack.Screen name="ops/chef-quality/[id]" options={{ title: 'Chef quality' }} />
         <Stack.Screen name="ops/chef-analytics" options={{ title: 'Chef Network analytics' }} />
-        <Stack.Screen name="chefs/index" options={{ title: 'Chefs' }} />
+        <Stack.Screen name="chefs/index" options={{ title: 'Besties' }} />
         <Stack.Screen name="chefs/[slug]" options={{ title: 'Chef' }} />
         <Stack.Screen name="chefs/dish/[id]" options={{ title: 'Dish' }} />
         <Stack.Screen name="ops/executive" options={{ title: 'Executive dashboard' }} />

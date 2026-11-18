@@ -18,8 +18,8 @@ export default function ChefsDirectory() {
     <div className="space-y-6">
       <section className="rounded-3xl bg-brand-50 p-6 sm:p-10">
         <p className="text-xs font-semibold uppercase tracking-widest text-brand-700">Gutad Besties</p>
-        <h1 className="mt-2 text-3xl font-bold text-ink-900">Dishes by independent chefs, delivered by Gutad</h1>
-        <p className="mt-2 max-w-2xl text-sm text-ink-700">Every chef is reviewed and cooks in an approved kitchen. Order for today, or schedule ahead for holidays and celebrations.</p>
+        <h1 className="mt-2 text-3xl font-bold text-ink-900">Dishes by Gutad Besties, delivered by Gutad</h1>
+        <p className="mt-2 max-w-2xl text-sm text-ink-700">Every Bestie is an independent chef or cook, reviewed and cooking in an approved kitchen. Order for today, or schedule ahead for holidays and celebrations.</p>
         <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_220px]">
           <Input aria-label="Search chefs" placeholder="Search chefs or dishes" value={q} onChange={(e) => setQ(e.target.value)} />
           <Select aria-label="Cuisine" value={cuisine} onChange={(e) => setCuisine(e.target.value)}><option value="">All cuisines</option>{CHEF_CUISINES.map((c) => <option key={c}>{c}</option>)}</Select>

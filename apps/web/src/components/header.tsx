@@ -20,7 +20,7 @@ export function Header() {
           <Link href="/search" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">Restaurants</Link>
           <Link href="/search?service=reservations" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">Reserve</Link>
           <Link href="/search?service=events" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">Experiences</Link>
-          <Link href="/chefs" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">Chefs</Link>
+          <Link href="/chefs" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">Besties</Link>
           <Link href="/meal-kits" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">Meal kits</Link>
           <Link href="/for-restaurants" className="rounded-lg px-3 py-1.5 text-ink-700 hover:bg-ink-50">For restaurants</Link>
         </nav>

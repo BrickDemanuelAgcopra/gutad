@@ -13,8 +13,8 @@ export default function Chefs() {
   const { data } = useApi<Chef[]>(`/public/chefs${q.trim().length >= 2 ? `?q=${encodeURIComponent(q.trim())}` : ''}`, { deps: [q] });
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
-      <Text style={{ fontSize: 22, fontWeight: '700' }}>Dishes by independent chefs</Text>
-      <Muted>Every chef is reviewed and cooks in an approved kitchen. Order ahead for holidays and celebrations.</Muted>
+      <Text style={{ fontSize: 22, fontWeight: '700' }}>Dishes by Gutad Besties</Text>
+      <Muted>Every Bestie is an independent chef or cook, reviewed and cooking in an approved kitchen. Order ahead for holidays and celebrations.</Muted>
       <View style={{ marginTop: 10 }}><Input placeholder="Search chefs or dishes" value={q} onChangeText={setQ} /></View>
       {!data ? <Loading /> : data.map((c) => (
         <Pressable key={c.id} onPress={() => router.push({ pathname: '/chefs/[slug]', params: { slug: c.slug } })}>
