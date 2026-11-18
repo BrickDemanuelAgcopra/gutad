@@ -22,7 +22,7 @@ export function useQuoteCheckout() {
   const { add } = useCart();
   const router = useRouter();
   return (l: ChefQuoteCartLine) => {
-    add({ id: l.location.id, slug: l.location.slug, name: `${l.chefName} (Gutad Chef Network)` }, { menuItemId: l.menuItemId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifierOptionIds: l.modifierOptionIds, modifierNames: l.modifierNames, modifiersCents: 0, chefRequestQuoteId: l.chefRequestQuoteId, serviceDate: l.serviceDate, serviceTime: l.serviceTime }, { park: true });
+    add({ id: l.location.id, slug: l.location.slug, name: `${l.chefName} (Gutad Bestie Network)` }, { menuItemId: l.menuItemId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifierOptionIds: l.modifierOptionIds, modifierNames: l.modifierNames, modifiersCents: 0, chefRequestQuoteId: l.chefRequestQuoteId, serviceDate: l.serviceDate, serviceTime: l.serviceTime }, { park: true });
     router.push('/checkout');
   };
 }

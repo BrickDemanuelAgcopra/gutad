@@ -450,7 +450,7 @@ export class QuoteService {
     let earliestDate: string | null = null;
     if (loc.chefKitchen && out.length) earliestDate = (await this.chefCalendar.availability({ locationId: loc.id, lines: out.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity })) }).catch(() => null))?.earliestDate ?? null;
     if (loc.chefKitchen && out.length && !earliestDate) warnings.push('The chef has no open dates for these dishes right now');
-    return { location: { id: loc.id, slug: loc.slug, name: chefName ? `${chefName} (Gutad Chef Network)` : loc.name, chefKitchen: loc.chefKitchen }, channel, lines: out, removed, warnings, earliestDate };
+    return { location: { id: loc.id, slug: loc.slug, name: chefName ? `${chefName} (Gutad Bestie Network)` : loc.name, chefKitchen: loc.chefKitchen }, channel, lines: out, removed, warnings, earliestDate };
   }
 
   /**

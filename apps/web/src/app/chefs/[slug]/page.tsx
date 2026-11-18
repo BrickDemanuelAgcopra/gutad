@@ -21,7 +21,7 @@ export default function ChefStorefront() {
       <section className="flex flex-col gap-4 rounded-3xl border border-ink-100 bg-white p-6 shadow-card sm:flex-row sm:items-center">
         {c.portraitUrl ? <img src={c.portraitUrl} alt={c.displayName} className="h-28 w-28 rounded-full object-cover" /> : <div className="grid h-28 w-28 place-items-center rounded-full bg-brand-100 text-4xl">👩‍🍳</div>}
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold uppercase tracking-widest text-brand-700">Gutad Chef Network</p>
+          <p className="text-xs font-semibold uppercase tracking-widest text-brand-700">Gutad Bestie Network</p>
           <h1 className="text-3xl font-bold">{c.displayName}</h1>
           <p className="text-sm text-ink-500">{c.cuisines.join(' · ')}{c.experienceYears ? ` · ${c.experienceYears} years cooking` : ''}{c.languages.length ? ` · Speaks ${c.languages.join(', ')}` : ''}</p>
           <div className="mt-2 flex flex-wrap gap-1">{c.verifiedCredentials.filter((k) => CRED[k]).map((k) => <Badge key={k} tone="good">✓ {CRED[k]}</Badge>)}</div>

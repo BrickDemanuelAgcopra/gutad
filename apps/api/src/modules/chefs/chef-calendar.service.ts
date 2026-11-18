@@ -367,7 +367,7 @@ export class ChefCalendarService {
 
   private async myProfile(user: JwtPayload) {
     const [row] = await this.db.select({ p: chefProfiles }).from(chefProfiles).innerJoin(orgMemberships, and(eq(orgMemberships.organizationId, chefProfiles.organizationId), eq(orgMemberships.userId, user.sub))).limit(1);
-    if (!row) throw new NotFoundException({ message: 'You are not an approved Gutad chef yet', code: 'NOT_A_CHEF' });
+    if (!row) throw new NotFoundException({ message: 'You are not an approved Gutad Bestie yet', code: 'NOT_A_CHEF' });
     if (!row.p.locationId) throw new ConflictException('No approved kitchen');
     return row.p as Profile & { locationId: string };
   }

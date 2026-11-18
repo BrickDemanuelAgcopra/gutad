@@ -114,7 +114,7 @@ export class OrdersService {
     const locs: (typeof locations.$inferSelect)[] = [];
     for (const q of qs) {
       const loc = await this.placeAllowed(q.locationId);
-      if (!loc.chefKitchen) throw new BadRequestException({ message: 'Only Gutad Chef Network orders can be checked out together', code: 'NOT_CHEF_ORDER' });
+      if (!loc.chefKitchen) throw new BadRequestException({ message: 'Only Gutad Bestie Network orders can be checked out together', code: 'NOT_CHEF_ORDER' });
       if (!q.scheduledFor) throw new BadRequestException({ message: 'Each chef order needs a day and time', code: 'SCHEDULE_REQUIRED' });
       locs.push(loc);
     }
@@ -610,7 +610,7 @@ export class OrdersService {
   private amendCheck(o: typeof orders.$inferSelect, now = new Date()) {
     const lines = ((o.priceSnapshot as { lines?: QuoteSnapshotLine[] } | null)?.lines || []);
     const base = { until: o.freeCancelUntil?.toISOString() ?? null, scheduledFor: o.scheduledFor?.toISOString() ?? null, chargedCents: o.totalCents };
-    if (!o.prepaid) return { ...base, allowed: false, code: 'NOT_AMENDABLE', reason: 'Only Gutad Chef Network orders can be changed after payment. Cancel and order again.' };
+    if (!o.prepaid) return { ...base, allowed: false, code: 'NOT_AMENDABLE', reason: 'Only Gutad Bestie Network orders can be changed after payment. Cancel and order again.' };
     if (!['SUBMITTED', 'ACCEPTED'].includes(o.status)) return { ...base, allowed: false, code: 'NOT_AMENDABLE', reason: `This order is ${o.status.toLowerCase()}` };
     if (!o.freeCancelUntil || o.freeCancelUntil <= now) return { ...base, allowed: false, code: 'AMEND_WINDOW_CLOSED', reason: 'Changes close at the order cutoff for the day' };
     if (lines.some((l) => l.chefRequestQuoteId)) return { ...base, allowed: false, code: 'HAS_SPECIAL_REQUEST', reason: 'Orders with a special request can’t be changed. Cancel for a full refund and ask the chef again.' };

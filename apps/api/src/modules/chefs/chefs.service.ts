@@ -41,7 +41,7 @@ export class ChefsService {
       .from(chefProfiles)
       .innerJoin(orgMemberships, and(eq(orgMemberships.organizationId, chefProfiles.organizationId), eq(orgMemberships.userId, user.sub)))
       .limit(1);
-    if (!rows.length) throw new NotFoundException({ message: 'You are not an approved Gutad chef yet', code: 'NOT_A_CHEF' });
+    if (!rows.length) throw new NotFoundException({ message: 'You are not an approved Gutad Bestie yet', code: 'NOT_A_CHEF' });
     return rows[0].p;
   }
 

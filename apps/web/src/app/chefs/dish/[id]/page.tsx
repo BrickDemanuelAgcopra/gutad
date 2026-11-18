@@ -62,7 +62,7 @@ function DishView({ d }: { d: Dish }) {
   const addToCart = (go: boolean) => {
     if (!ev.ok) return;
     const names = ev.chosen.filter((c) => c.priceCents > 0 || !groups.find((g) => g.id === c.groupId)?.options.find((o) => o.id === c.id)?.isDefault).map(modifierLabel);
-    add({ id: d.location.id, slug: d.location.slug, name: `${d.chef.displayName} (Gutad Chef Network)` }, { menuItemId: d.menuItemId, name: d.title, quantity: qty, unitPriceCents: d.priceCents, modifierOptionIds: ev.optionIds, modifierNames: names, modifiersCents: ev.modifiersCents }, 'MARKETPLACE', 'chef-network', { park: true });
+    add({ id: d.location.id, slug: d.location.slug, name: `${d.chef.displayName} (Gutad Bestie Network)` }, { menuItemId: d.menuItemId, name: d.title, quantity: qty, unitPriceCents: d.priceCents, modifierOptionIds: ev.optionIds, modifierNames: names, modifiersCents: ev.modifiersCents }, 'MARKETPLACE', 'chef-network', { park: true });
     setAdded(true);
     setSheet(false);
     if (go) router.push('/checkout');

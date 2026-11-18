@@ -24,7 +24,7 @@ export default function RootLayout() {
         <Stack.Screen name="kiosk/[slug]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="ops/index" options={{ title: 'Gutad Ops' }} />
         <Stack.Screen name="ops/chefs" options={{ title: 'Chef applications' }} />
-        <Stack.Screen name="chefs/apply" options={{ title: 'Cook with Gutad' }} />
+        <Stack.Screen name="chefs/apply" options={{ title: 'Become a Gutad Bestie' }} />
         <Stack.Screen name="chef/index" options={{ title: 'Chef dashboard' }} />
         <Stack.Screen name="chef/dishes" options={{ title: 'Dishes' }} />
         <Stack.Screen name="chef/calendar" options={{ title: 'Cooking calendar' }} />

@@ -26,7 +26,7 @@ export default function Chefs() {
           </Card>
         </Pressable>
       ))}
-      <Link href="/chefs/apply" asChild><Button title="Cook with Gutad" variant="secondary" onPress={() => undefined} /></Link>
+      <Link href="/chefs/apply" asChild><Button title="Become a Gutad Bestie" variant="secondary" onPress={() => undefined} /></Link>
     </ScrollView>
   );
 }

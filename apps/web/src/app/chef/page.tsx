@@ -27,7 +27,7 @@ function Dashboard() {
   if (error || !data)
     return (
       <Alert tone="info">
-        You’re not an approved Gutad chef yet. <Link href="/chefs/apply" className="underline">Continue your application</Link>.
+        You’re not an approved Gutad Bestie yet. <Link href="/chefs/apply" className="underline">Continue your application</Link>.
       </Alert>
     );
   const p = data.profile;

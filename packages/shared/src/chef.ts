@@ -83,7 +83,7 @@ export interface ChefStepDef {
 }
 
 export const CHEF_APPLICATION_STEPS: ChefStepDef[] = [
-  { key: 'account', label: 'Account', description: 'Contact phone and the Chef Partner Agreement' },
+  { key: 'account', label: 'Account', description: 'Contact phone and the Bestie Partner Agreement' },
   { key: 'identity', label: 'Identity & business', description: 'Legal name, public chef name, individual or business' },
   { key: 'profile', label: 'Public profile', description: 'Portrait, biography, cuisines, experience and service area' },
   { key: 'kitchen', label: 'Kitchen', description: 'Where you cook, who operates it, pickup access and capacity' },
@@ -119,7 +119,7 @@ export function chefApplicationMissing(d: ChefApplicationData, docs: ChefDocSumm
   const m: Record<ChefStepKey, string[]> = { account: [], identity: [], profile: [], kitchen: [], documents: [], operating: [], payments: [], menu: [], readiness: [] };
   const need = (step: ChefStepKey, ok: unknown, label: string) => { if (!ok) m[step].push(label); };
   need('account', d.account?.phone && d.account.phone.replace(/\D/g, '').length >= 10, 'Mobile phone');
-  need('account', d.account?.agreedAt && d.account.agreementVersion === CHEF_AGREEMENT_VERSION, 'Chef Partner Agreement');
+  need('account', d.account?.agreedAt && d.account.agreementVersion === CHEF_AGREEMENT_VERSION, 'Bestie Partner Agreement');
   need('identity', (d.identity?.legalName || '').trim().length >= 3, 'Legal name');
   need('identity', (d.identity?.displayName || '').trim().length >= 2, 'Public chef name');
   need('identity', d.identity?.businessType, 'Individual or business');

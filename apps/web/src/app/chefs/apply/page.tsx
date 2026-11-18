@@ -26,7 +26,7 @@ export default function ChefApplyPage() {
   return (
     <div className="space-y-6">
       <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-ink-900 to-ink-700 p-6 text-white sm:p-10">
-        <p className="text-xs font-semibold uppercase tracking-widest text-brand-300">Gutad Chef Network</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-brand-300">Gutad Bestie Network</p>
         <h1 className="mt-2 text-3xl font-bold sm:text-4xl">Cook what you love. We handle the rest.</h1>
         <p className="mt-3 max-w-2xl text-sm text-ink-100 sm:text-base">Sell your dishes as <strong>Gutad’s &lt;your dish&gt; — by &lt;you&gt;</strong>. Gutad brings customers, payments, delivery, support and packaging standards; you set your menu, customizations, cooking days and capacity.</p>
         <ul className="mt-4 grid gap-2 text-sm text-ink-100 sm:grid-cols-3">
@@ -192,7 +192,7 @@ function DataStep({ step, app, cfg, onSaved }: StepProps) {
         {badge}
         <Input label="Mobile phone" type="tel" autoComplete="tel" value={s('phone')} onChange={(e) => set({ phone: e.target.value })} placeholder="+1 555 123 4567" />
         <div className="rounded-xl border border-ink-100 bg-ink-50 p-4 text-sm text-ink-700">
-          <p className="font-semibold text-ink-900">Gutad Chef Partner Agreement (v{cfg.agreementVersion})</p>
+          <p className="font-semibold text-ink-900">Gutad Bestie Partner Agreement (v{cfg.agreementVersion})</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
             <li>Gutad sells your dishes to customers as “Gutad’s &lt;dish&gt; — by &lt;you&gt;”; you remain the preparer and keep ownership of your recipes.</li>
             <li>You only cook in your approved kitchen and keep permits, certificates and insurance current.</li>
@@ -204,7 +204,7 @@ function DataStep({ step, app, cfg, onSaved }: StepProps) {
         {initial.agreedAt ? (
           <p className="text-sm text-emerald-700">✓ Accepted {when(initial.agreedAt as string)}</p>
         ) : (
-          <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={!!v.agreed} onChange={(e) => set({ agreed: e.target.checked })} /> I have read and accept the Chef Partner Agreement and the <Link href="/terms" className="underline">Terms</Link>.</label>
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={!!v.agreed} onChange={(e) => set({ agreed: e.target.checked })} /> I have read and accept the Bestie Partner Agreement and the <Link href="/terms" className="underline">Terms</Link>.</label>
         )}
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={!!v.smsConsent} onChange={(e) => set({ smsConsent: e.target.checked })} /> Text me order and request alerts (message rates may apply; reply STOP to opt out).</label>
       </div>

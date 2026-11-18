@@ -447,9 +447,9 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
       });
     // ── Chef Network ────────────────────────────────────────────────────────
     case 'chef.application.received':
-      return sub('We received your Gutad chef application', 'Thanks for applying to the Gutad Chef Network. Our team reviews your kitchen, documents and first menu, usually within 3 business days.', {
+      return sub('We received your Gutad Bestie application', 'Thanks for applying to the Gutad Bestie Network. Our team reviews your kitchen, documents and first menu, usually within 3 business days.', {
         eyebrow: 'Chef Network', heading: 'Application received',
-        paragraphs: ['Thanks for applying to the Gutad Chef Network. Our team now reviews your kitchen, documents and first menu. This usually takes about 3 business days.', 'We will email you if we need anything else.'],
+        paragraphs: ['Thanks for applying to the Gutad Bestie Network. Our team now reviews your kitchen, documents and first menu. This usually takes about 3 business days.', 'We will email you if we need anything else.'],
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
       });
     case 'chef.application.changes':
@@ -460,20 +460,20 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
         cta: { label: 'Update your application', url: `${web}/chefs/apply` },
       });
     case 'chef.application.approved':
-      return sub('Welcome to the Gutad Chef Network', `Your application is approved. Connect payouts and open your availability to start selling as ${p.displayName}.`, {
+      return sub('Welcome to the Gutad Bestie Network', `Your application is approved. Connect payouts and open your availability to start selling as ${p.displayName}.`, {
         eyebrow: 'Chef Network', tone: 'success', heading: `Welcome, ${p.displayName || 'Chef'}`,
         paragraphs: ['Your application is approved. Next: connect payouts securely, add your dishes and open your availability.'],
         cta: { label: 'Open your chef dashboard', url: `${web}/chef` },
       });
     case 'chef.application.rejected':
-      return sub('About your Gutad chef application', `We could not approve your application: ${p.reason}. You can appeal from your application page.`, {
+      return sub('About your Gutad Bestie application', `We could not approve your application: ${p.reason}. You can appeal from your application page.`, {
         eyebrow: 'Chef Network', tone: 'danger', heading: 'We could not approve your application',
         details: [['Reason', p.reason as string]],
         paragraphs: ['If you think this is a mistake or your situation has changed, you can appeal from your application page.'],
         cta: { label: 'View or appeal', url: `${web}/chefs/apply` },
       });
     case 'chef.application.waitlisted':
-      return sub('You are on the Gutad Chef Network waitlist', `Gutad is not onboarding chefs in your area yet${p.reason ? ` (${p.reason})` : ''}. We saved your application and will contact you when we open.`, {
+      return sub('You are on the Gutad Bestie Network waitlist', `Gutad is not onboarding chefs in your area yet${p.reason ? ` (${p.reason})` : ''}. We saved your application and will contact you when we open.`, {
         eyebrow: 'Chef Network', heading: 'You are on our waitlist',
         paragraphs: ['We are not onboarding chefs in your area yet. Your application is saved and we will contact you as soon as we open.'],
         cta: { label: 'View your application', url: `${web}/chefs/apply` },
@@ -501,7 +501,7 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
     case 'chef.quality.action':
       return sub(`Gutad quality update: ${p.label}`, String(p.note || ''), {
         eyebrow: 'Chef Network', tone: ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'success' : 'warning', heading: String(p.label || 'Quality update'),
-        paragraphs: [String(p.note || ''), ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'Thanks for working with us on this.' : 'Reply to this email or contact Gutad chef support if you have questions or want to share your side.'],
+        paragraphs: [String(p.note || ''), ['DISH_REINSTATED', 'CHEF_REINSTATED'].includes(String(p.kind)) ? 'Thanks for working with us on this.' : 'Reply to this email or contact Gutad Bestie support if you have questions or want to share your side.'],
         cta: { label: 'View your quality record', url: `${web}/chef/compliance` },
       });
 

@@ -17,7 +17,7 @@ export default function ChefsDirectory() {
   return (
     <div className="space-y-6">
       <section className="rounded-3xl bg-brand-50 p-6 sm:p-10">
-        <p className="text-xs font-semibold uppercase tracking-widest text-brand-700">Gutad Chef Network</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-brand-700">Gutad Bestie Network</p>
         <h1 className="mt-2 text-3xl font-bold text-ink-900">Dishes by independent chefs, delivered by Gutad</h1>
         <p className="mt-2 max-w-2xl text-sm text-ink-700">Every chef is reviewed and cooks in an approved kitchen. Order for today, or schedule ahead for holidays and celebrations.</p>
         <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_220px]">
@@ -26,7 +26,7 @@ export default function ChefsDirectory() {
         </div>
       </section>
       {loading && !data ? <Spinner /> : !data?.length ? (
-        <Empty>No chefs match yet. <Link href="/chefs/apply" className="underline">Are you a chef? Apply to cook with Gutad.</Link></Empty>
+        <Empty>No chefs match yet. <Link href="/chefs/apply" className="underline">Are you a chef? Apply to become a Gutad Bestie.</Link></Empty>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {data.map((c) => (
@@ -44,7 +44,7 @@ export default function ChefsDirectory() {
           ))}
         </div>
       )}
-      <p className="text-center text-sm text-ink-500">Cook professionally? <Link href="/chefs/apply" className="font-medium text-brand-700 underline">Join the Gutad Chef Network</Link></p>
+      <p className="text-center text-sm text-ink-500">Cook professionally? <Link href="/chefs/apply" className="font-medium text-brand-700 underline">Become a Gutad Bestie</Link></p>
     </div>
   );
 }
