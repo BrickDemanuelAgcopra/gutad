@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { createTransport, type Transporter } from 'nodemailer';
 import { loadConfig } from '../../config/config';
 import { blocksFromText, renderEmailHtml } from './email-layout';
 import type { Rendered } from './templates';
@@ -27,12 +28,40 @@ export function toE164(phone: string): string {
 @Injectable()
 export class Senders {
   private readonly log = new Logger('Notify');
+  private smtp?: { key: string; t: Transporter };
+
+  private brevoSmtp(cfg: ReturnType<typeof loadConfig>): Transporter {
+    const key = `${cfg.BREVO_SMTP_HOST}:${cfg.BREVO_SMTP_PORT}:${cfg.BREVO_SMTP_LOGIN}:${cfg.BREVO_API_KEY}`;
+    if (this.smtp?.key !== key) {
+      this.smtp = {
+        key,
+        t: createTransport({
+          host: cfg.BREVO_SMTP_HOST, port: cfg.BREVO_SMTP_PORT, secure: cfg.BREVO_SMTP_PORT === 465, requireTLS: cfg.BREVO_SMTP_PORT !== 465,
+          auth: { user: cfg.BREVO_SMTP_LOGIN, pass: cfg.BREVO_API_KEY },
+          pool: true, maxConnections: 3, connectionTimeout: TIMEOUT_MS, greetingTimeout: TIMEOUT_MS, socketTimeout: TIMEOUT_MS,
+        }),
+      };
+    }
+    return this.smtp.t;
+  }
 
   async email(to: string, r: Rendered): Promise<{ provider: string; id?: string }> {
     const cfg = loadConfig();
     if (cfg.EMAIL_PROVIDER === 'brevo') {
       if (!cfg.BREVO_API_KEY) throw new Error('EMAIL_PROVIDER=brevo but BREVO_API_KEY is empty');
-      if (cfg.BREVO_API_KEY.startsWith('xsmtpsib-')) throw new Error('BREVO_API_KEY is a Brevo SMTP key (xsmtpsib-…); the API needs an API v3 key (xkeysib-…) from Brevo > SMTP & API > API Keys');
+      // An SMTP key (xsmtpsib-…) only works on Brevo's SMTP relay; an API key (xkeysib-…) uses the HTTP API.
+      if (cfg.BREVO_API_KEY.startsWith('xsmtpsib-')) {
+        if (!cfg.BREVO_SMTP_LOGIN) throw new Error('BREVO_API_KEY is a Brevo SMTP key: set BREVO_SMTP_LOGIN (Brevo > SMTP & API > SMTP, e.g. 9a1b2c001@smtp-brevo.com)');
+        const info = await this.brevoSmtp(cfg).sendMail({
+          from: { name: cfg.EMAIL_FROM_NAME, address: cfg.EMAIL_FROM },
+          to,
+          ...(cfg.EMAIL_REPLY_TO ? { replyTo: cfg.EMAIL_REPLY_TO } : {}),
+          subject: r.subject,
+          text: r.text,
+          html: emailHtml(r),
+        });
+        return { provider: 'brevo-smtp', id: info.messageId };
+      }
       const res = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: { 'api-key': cfg.BREVO_API_KEY, 'Content-Type': 'application/json', Accept: 'application/json' },

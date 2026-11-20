@@ -34,6 +34,10 @@ const schema = z.object({
   EMAIL_PROVIDER: z.enum(['log', 'smtp', 'brevo']).default('log'),
   SMTP_URL: z.string().optional().default(''),
   BREVO_API_KEY: z.string().optional().default(''),
+  /** Brevo SMTP login (Brevo > SMTP & API > SMTP, e.g. 9a1b2c001@smtp-brevo.com). Used when BREVO_API_KEY is an SMTP key (xsmtpsib-…). */
+  BREVO_SMTP_LOGIN: z.string().optional().default(''),
+  BREVO_SMTP_HOST: z.string().optional().default('smtp-relay.brevo.com'),
+  BREVO_SMTP_PORT: z.coerce.number().optional().default(587),
   EMAIL_FROM: z.string().default('no-reply@gutad.io'),
   EMAIL_FROM_NAME: z.string().default('Gutad'),
   /** Where customer replies go (empty = no Reply-To header). */
