@@ -534,7 +534,9 @@ export class AuthService {
     const memberships = await this.db.select().from(orgMemberships).where(eq(orgMemberships.userId, userId));
     const addrs = await this.db.select().from(addresses).where(eq(addresses.userId, userId));
     const { passwordHash: _ph, mfaSecret: _ms, mfaRecoveryCodes: rc, ...safe } = user;
-    return { ...safe, mfaRecoveryCodesLeft: rc.length, memberships, addresses: addrs };
+    // whether an unexpired verification code is out, so the app can say "we sent a code" only when one was sent
+    const emailCodeSent = !user.emailVerifiedAt && !!(await this.redis.getJson<{ email: string }>(`emailverify:code:${userId}`).then((st) => st?.email === user.email));
+    return { ...safe, mfaRecoveryCodesLeft: rc.length, memberships, addresses: addrs, emailCodeSent };
   }
 
   async updateProfile(userId: string, input: Partial<{ name: string; phone: string; locale: string; timezone: string; dietaryNotes: string; marketingConsent: boolean; smsConsent: boolean }>) {

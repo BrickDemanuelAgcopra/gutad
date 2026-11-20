@@ -102,25 +102,36 @@ const RESTRICTION_TEXT: Record<string, string> = { ORDERING_BLOCKED: 'Ordering i
 
 /** Shown until the account's email is confirmed: enter the emailed code, or resend it. */
 function VerifyEmailBanner() {
-  const { data, reload } = useApi<{ email: string; emailVerifiedAt: string | null; isGuest: boolean }>('/auth/me');
+  const { data, reload } = useApi<{ email: string; emailVerifiedAt: string | null; isGuest: boolean; emailCodeSent?: boolean }>('/auth/me');
   const [code, setCode] = useState('');
   const [msg, setMsg] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   if (!data || data.emailVerifiedAt || data.isGuest) return null;
+  const sent = !!data.emailCodeSent;
   const run = async (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true); setMsg(null);
     try { await fn(); setMsg({ tone: 'info', text: ok }); } catch (e) { setMsg({ tone: 'error', text: (e as Error).message }); } finally { setBusy(false); }
   };
   const verify = () => run(async () => { await api.post('/auth/verify-email', { code }); reload(); }, 'Your email is confirmed.');
+  const send = () => run(async () => { await api.post('/auth/verify-email/send', {}); reload(); }, `Code sent to ${data.email}. It can take a minute to arrive; check spam too.`);
   return (
     <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm">
       <div className="font-medium">Confirm your email</div>
-      <div className="text-ink-700">We sent a 6-digit code to {data.email}. Enter it below, or tap the link in the email.</div>
-      <div className="mt-2 flex flex-wrap items-end gap-2">
-        <Input label="Code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} onKeyDown={(e) => e.key === 'Enter' && code.length === 6 && verify()} />
-        <Button size="sm" disabled={busy || code.length !== 6} onClick={verify}>Confirm</Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => api.post('/auth/verify-email/send', {}), `New code sent to ${data.email}.`)}>Send a new code</Button>
-      </div>
+      {sent ? (
+        <>
+          <div className="text-ink-700">Enter the 6-digit code we emailed to {data.email}, or tap the link in that email. It’s valid for 24 hours.</div>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <Input label="Code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} onKeyDown={(e) => e.key === 'Enter' && code.length === 6 && verify()} />
+            <Button size="sm" disabled={busy || code.length !== 6} onClick={verify}>Confirm</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={send}>Didn’t get it? Send a new code</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="text-ink-700">Confirm {data.email} so we can send you order updates and account emails. We’ll email you a 6-digit code.</div>
+          <div className="mt-2"><Button size="sm" disabled={busy} onClick={send}>{busy ? 'Sending…' : 'Email me a code'}</Button></div>
+        </>
+      )}
       {msg && <div className={`mt-2 ${msg.tone === 'error' ? 'text-red-600' : 'text-ink-700'}`}>{msg.text}</div>}
     </div>
   );
