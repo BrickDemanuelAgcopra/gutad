@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
-import { createPublicKey, verify as cryptoVerify, type JsonWebKey } from 'node:crypto';
+import { createPublicKey, randomInt, verify as cryptoVerify, type JsonWebKey } from 'node:crypto';
 import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { BLOCKED_STATUSES, DEFAULT_ACCESS_POLICY, isStaffRole, type AccessPolicy } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
@@ -139,6 +139,7 @@ export class AuthService {
     if (input.marketingConsent) {
       await this.db.insert(consents).values({ userId: user.id, purpose: 'marketing_email', granted: true, source: 'register' });
     }
+    if (!user.emailVerifiedAt) await this.sendEmailVerification(user.id).catch(() => undefined);
     return this.startSession(user.id, ['pwd'], meta);
   }
 
@@ -440,6 +441,62 @@ export class AuthService {
     if (typeof claims.exp !== 'number' || claims.exp * 1000 < Date.now()) throw new UnauthorizedException('Identity token expired');
     if (claims.nonce !== nonce) throw new UnauthorizedException('Nonce mismatch');
     return claims;
+  }
+
+  // ───── email verification ─────
+
+  /** Emails a 6-digit code and a one-click link (both valid 24h). Resends are limited to one a minute and 10 a day. */
+  async sendEmailVerification(userId: string) {
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new NotFoundException();
+    if (user.emailVerifiedAt) return { alreadyVerified: true };
+    if ((await this.redis.incrWindow(`emailverify:cool:${userId}`, 60)) > 1) throw new BadRequestException({ message: 'Please wait a minute before requesting another code', code: 'VERIFY_COOLDOWN' });
+    if ((await this.redis.incrWindow(`emailverify:day:${userId}`, 86_400)) > 10) throw new BadRequestException({ message: 'Too many codes requested today. Try again tomorrow.', code: 'VERIFY_LIMIT' });
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const raw = token(24);
+    await this.redis.setJson(`emailverify:code:${userId}`, { codeHash: this.crypto.sha256(code), tokenHash: this.crypto.sha256(raw), email: user.email, attempts: 0 }, 86_400);
+    await this.redis.setJson(`emailverify:tok:${this.crypto.sha256(raw)}`, { userId, email: user.email }, 86_400);
+    await this.notify.queue({
+      userId,
+      template: 'account.verify_email',
+      payload: { code, name: user.name, link: `${loadConfig().PUBLIC_WEB_URL}/account/verify?token=${raw}` },
+      channels: ['EMAIL'],
+    });
+    return { sent: true };
+  }
+
+  /** Confirms the signed-in user's email with the 6-digit code. Five wrong tries void the code. */
+  async verifyEmailCode(userId: string, code: string) {
+    const key = `emailverify:code:${userId}`;
+    const st = await this.redis.getJson<{ codeHash: string; tokenHash: string; email: string; attempts: number }>(key);
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new NotFoundException();
+    if (user.emailVerifiedAt) return { verified: true };
+    if (!st || st.email !== user.email) throw new BadRequestException({ message: 'This code has expired. Send a new one.', code: 'VERIFY_EXPIRED' });
+    if (this.crypto.sha256(code.trim()) !== st.codeHash) {
+      if (st.attempts + 1 >= 5) await this.redis.del(key, `emailverify:tok:${st.tokenHash}`);
+      else await this.redis.setJson(key, { ...st, attempts: st.attempts + 1 }, 86_400);
+      throw new BadRequestException({ message: st.attempts + 1 >= 5 ? 'Too many wrong codes. Send a new one.' : 'That code is not right. Check the email and try again.', code: 'VERIFY_INVALID' });
+    }
+    await this.markEmailVerified(userId, st.tokenHash);
+    return { verified: true };
+  }
+
+  /** Confirms an email from the link in the verification email; works signed out. */
+  async verifyEmailToken(rawToken: string) {
+    const tokenHash = this.crypto.sha256(rawToken);
+    const st = await this.redis.getJson<{ userId: string; email: string }>(`emailverify:tok:${tokenHash}`);
+    if (!st) throw new BadRequestException({ message: 'This link is invalid or has expired. Sign in to get a new one.', code: 'VERIFY_EXPIRED' });
+    const [user] = await this.db.select().from(users).where(eq(users.id, st.userId)).limit(1);
+    if (!user || user.email !== st.email) throw new BadRequestException({ message: 'This link is invalid or has expired. Sign in to get a new one.', code: 'VERIFY_EXPIRED' });
+    if (!user.emailVerifiedAt) await this.markEmailVerified(user.id, tokenHash);
+    return { verified: true, email: user.email };
+  }
+
+  private async markEmailVerified(userId: string, tokenHash: string) {
+    await this.db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, userId));
+    await this.redis.del(`emailverify:code:${userId}`, `emailverify:tok:${tokenHash}`);
+    await this.audit.log({ actorId: userId, action: 'auth.email_verified', entityType: 'user', entityId: userId });
   }
 
   // ───── recovery & profile ─────

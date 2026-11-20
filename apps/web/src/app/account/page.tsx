@@ -23,6 +23,7 @@ function AccountInner() {
   return (
     <div>
       <h1 className="text-2xl font-bold">Hi {user.name || user.email}</h1>
+      <VerifyEmailBanner />
       <RestrictionBanner />
       <div className="mt-4"><Tabs tabs={[{ id: 'orders', label: 'Orders' }, { id: 'requests', label: 'Special requests' }, { id: 'reservations', label: 'Reservations' }, { id: 'tickets', label: 'Tickets' }, { id: 'kits', label: 'Meal kits' }, { id: 'rewards', label: 'Rewards & membership' }, { id: 'profile', label: 'Profile' }, { id: 'payments', label: 'Payments' }, { id: 'notifications', label: 'Notifications' }, { id: 'privacy', label: 'Privacy' }, { id: 'security', label: 'Security' }]} active={tab} onChange={setTab} /></div>
       <div className="mt-6">
@@ -98,6 +99,32 @@ function Profile() {
 }
 
 const RESTRICTION_TEXT: Record<string, string> = { ORDERING_BLOCKED: 'Ordering is paused on your account', PROMOTIONS_BLOCKED: 'Promotions and promo codes are paused on your account', REFUND_REVIEW: 'Refund requests on your account are reviewed by a second person' };
+
+/** Shown until the account's email is confirmed: enter the emailed code, or resend it. */
+function VerifyEmailBanner() {
+  const { data, reload } = useApi<{ email: string; emailVerifiedAt: string | null; isGuest: boolean }>('/auth/me');
+  const [code, setCode] = useState('');
+  const [msg, setMsg] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!data || data.emailVerifiedAt || data.isGuest) return null;
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true); setMsg(null);
+    try { await fn(); setMsg({ tone: 'info', text: ok }); } catch (e) { setMsg({ tone: 'error', text: (e as Error).message }); } finally { setBusy(false); }
+  };
+  const verify = () => run(async () => { await api.post('/auth/verify-email', { code }); reload(); }, 'Your email is confirmed.');
+  return (
+    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm">
+      <div className="font-medium">Confirm your email</div>
+      <div className="text-ink-700">We sent a 6-digit code to {data.email}. Enter it below, or tap the link in the email.</div>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <Input label="Code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} onKeyDown={(e) => e.key === 'Enter' && code.length === 6 && verify()} />
+        <Button size="sm" disabled={busy || code.length !== 6} onClick={verify}>Confirm</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => api.post('/auth/verify-email/send', {}), `New code sent to ${data.email}.`)}>Send a new code</Button>
+      </div>
+      {msg && <div className={`mt-2 ${msg.tone === 'error' ? 'text-red-600' : 'text-ink-700'}`}>{msg.text}</div>}
+    </div>
+  );
+}
 
 function RestrictionBanner() {
   const { data, reload } = useApi<{ id: string; kind: string; reason: string; expiresAt: string | null; appealStatus: string; appealDecisionNote: string | null }[]>('/me/restrictions');

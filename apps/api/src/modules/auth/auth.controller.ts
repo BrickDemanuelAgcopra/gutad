@@ -71,6 +71,9 @@ export class AuthController {
   @ApiBearerAuth() @Post('mfa/setup') mfaSetup(@CurrentUser() u: JwtPayload) { return this.auth.mfaSetup(u); }
   @ApiBearerAuth() @Post('mfa/enable') mfaEnable(@CurrentUser() u: JwtPayload, @Body(zod(CodeDto)) b: { code: string }) { return this.auth.mfaEnable(u, b.code); }
   @ApiBearerAuth() @Post('mfa/disable') mfaDisable(@CurrentUser() u: JwtPayload, @Body(zod(CodeDto)) b: { code: string }) { return this.auth.mfaDisable(u, b.code); }
+  @ApiBearerAuth() @Post('verify-email/send') verifySend(@CurrentUser() u: JwtPayload) { return this.auth.sendEmailVerification(u.sub); }
+  @ApiBearerAuth() @Post('verify-email') verifyCode(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code') }))) b: { code: string }) { return this.auth.verifyEmailCode(u.sub, b.code); }
+  @Public() @Post('verify-email/link') verifyLink(@Body(zod(z.object({ token: z.string().min(10).max(200) }))) b: { token: string }) { return this.auth.verifyEmailToken(b.token); }
   @ApiBearerAuth() @Get('me') me(@CurrentUser() u: JwtPayload) { return this.auth.me(u.sub); }
   @ApiBearerAuth() @Patch('me') update(@CurrentUser() u: JwtPayload, @Body(zod(ProfileDto)) b: z.infer<typeof ProfileDto>) { return this.auth.updateProfile(u.sub, b); }
   @ApiBearerAuth() @Post('me/push-token') push(@CurrentUser() u: JwtPayload, @Body(zod(PushTokenDto)) b: z.infer<typeof PushTokenDto>) { return this.auth.registerPushToken(u.sub, b.token); }

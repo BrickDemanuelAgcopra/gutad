@@ -48,6 +48,15 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
   const num = p.number ? String(p.number) : '';
 
   switch (template) {
+    case 'account.verify_email':
+      return sub(`${p.code} is your Gutad verification code`, `Welcome to Gutad! Your verification code is ${p.code}. Or confirm with this link (valid 24h): ${p.link}`, {
+        eyebrow: 'Welcome to Gutad', heading: 'Confirm your email',
+        paragraphs: [`Thanks for creating a Gutad account${p.name ? `, ${p.name}` : ''}. Enter this code on Gutad, or tap the button, to confirm this is your email address.`],
+        code: { label: 'Verification code', value: String(p.code) },
+        cta: { label: 'Confirm my email', url: String(p.link) },
+        note: "The code and link expire in 24 hours. If you didn't create a Gutad account, you can ignore this email.",
+      });
+
     case 'account.recovery':
       return sub('Reset your Gutad password', `Use this link to reset your password (valid 24h): ${p.link}`, {
         eyebrow: 'Account security', tone: 'neutral', heading: 'Reset your password',
@@ -559,6 +568,7 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
 
 /** Representative payloads for previews and test sends (Admin → Settings → Messaging). */
 export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
+  'account.verify_email': { code: '482913', name: 'Casey', link: 'https://gutad.io/account/verify?token=sample' },
   'account.recovery': { link: 'https://gutad.io/account/recover?token=sample' },
   'chef.application.received': { displayName: 'Bestie Carlos', region: 'NY' },
   'chef.application.changes': { steps: 'Documents, First menu', note: 'Upload a current food handler card and add allergens to your lasagna.' },

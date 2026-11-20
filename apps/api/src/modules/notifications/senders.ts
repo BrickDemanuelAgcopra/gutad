@@ -32,6 +32,7 @@ export class Senders {
     const cfg = loadConfig();
     if (cfg.EMAIL_PROVIDER === 'brevo') {
       if (!cfg.BREVO_API_KEY) throw new Error('EMAIL_PROVIDER=brevo but BREVO_API_KEY is empty');
+      if (cfg.BREVO_API_KEY.startsWith('xsmtpsib-')) throw new Error('BREVO_API_KEY is a Brevo SMTP key (xsmtpsib-…); the API needs an API v3 key (xkeysib-…) from Brevo > SMTP & API > API Keys');
       const res = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: { 'api-key': cfg.BREVO_API_KEY, 'Content-Type': 'application/json', Accept: 'application/json' },
