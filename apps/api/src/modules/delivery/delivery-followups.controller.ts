@@ -90,6 +90,11 @@ export class DeliveryFollowupsController {
     await this.courier.syncDocChecks(doc.driverId);
     return doc;
   }
+  @ApiBearerAuth() @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_COURIER_FILE_BYTES, files: 1 } }))
+  @Post('driver/photos') photo(@CurrentUser() u: JwtPayload, @UploadedFile() file: IncomingFile | undefined, @Body(zod(z.object({ purpose: z.string().max(20) }))) b: { purpose: string }) {
+    return this.files.uploadPhoto(u, file, b.purpose);
+  }
   @ApiBearerAuth() @Get('files/:id/link') fileLink(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.files.link(u, id); }
   @Public() @Get('files/:id/signed') async signed(@Param('id') id: string, @Query('exp') exp: string, @Query('sig') sig: string, @Res() res: Response) {
     const f = await this.files.readSigned(id, exp, sig);

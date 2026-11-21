@@ -109,6 +109,15 @@ export class CourierService {
 
   // ───── onboarding view ─────
 
+  /** Delivery areas a courier can choose during sign-up: active service zones of open locations in that city. */
+  async zonesForCity(city: string) {
+    const key = city.trim().toLowerCase();
+    if (key.length < 2) return [];
+    const rows = await this.db.select({ id: deliveryZones.id, name: deliveryZones.name, location: locations.name, city: locations.city }).from(deliveryZones).innerJoin(locations, eq(locations.id, deliveryZones.locationId))
+      .where(and(eq(deliveryZones.isActive, true), eq(deliveryZones.kind, 'SERVICE'), sql`lower(trim(${locations.city})) = ${key}`)).orderBy(locations.name, deliveryZones.name).limit(100);
+    return rows.map((r) => ({ id: r.id, name: r.name, location: r.location }));
+  }
+
   async availabilityFor(city: string) {
     const cfg = await this.recruitmentCfg();
     const key = city.trim().toLowerCase();

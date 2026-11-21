@@ -27,6 +27,7 @@ export class CourierController {
   constructor(private readonly svc: CourierService) {}
 
   // onboarding
+  @Get('driver/onboarding/zones') zones(@Query('city') city?: string) { return this.svc.zonesForCity(city || ''); }
   @Get('driver/onboarding') onboarding(@CurrentUser() u: JwtPayload) { return this.svc.onboardingView(u.sub); }
   @Post('driver/onboarding/location') location(@CurrentUser() u: JwtPayload, @Body(zod(LocationDto)) b: z.infer<typeof LocationDto>) { return this.svc.saveStep(u, 'location', b); }
   @Post('driver/onboarding/submit') submit(@CurrentUser() u: JwtPayload) { return this.svc.submit(u); }

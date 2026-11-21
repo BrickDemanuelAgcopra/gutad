@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { TRIP_ISSUES, type PickupCheck, type TripIssue } from '@gutad/shared';
 import { api, money, when } from '@/lib/api';
 import { Alert, Badge, Button, Input, Select, statusTone } from '@/components/ui';
-import { getLoc, humanize, useCourierAction, useNow } from './common';
+import { getLoc, humanize, PhotoCapture, useCourierAction, useNow, type UploadedPhoto } from './common';
 
 export interface Offer {
   id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number }; tipCents: number;
@@ -53,8 +53,6 @@ export function OfferCard({ offer: o, onAnswer }: { offer: Offer; onAnswer: (acc
     </div>
   );
 }
-
-const PLACEHOLDER_PROOF = 'https://placehold.co/600x400?text=Handoff';
 
 /** One active trip: arrive, pickup check, drop-off proof, problems and release. */
 export function JobCard({ job: j, onChange }: { job: Job; onChange: () => Promise<void> }) {
@@ -109,8 +107,9 @@ function HandoffForm({ job, busy, onSubmit }: { job: Job; busy: boolean; onSubmi
   const [pin, setPin] = useState('');
   const [name, setName] = useState('');
   const [idChecked, setIdChecked] = useState(false);
-  const ready = (method === 'PHOTO' || (method === 'PIN' && pin.length >= 4) || (method === 'SIGNATURE' && name.trim().length >= 2)) && (!job.requiresIdCheck || idChecked);
-  const body = () => ({ ...(method === 'PHOTO' ? { proofPhotoUrl: PLACEHOLDER_PROOF } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: name.trim() }), ...(job.requiresIdCheck ? { idChecked } : {}) });
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
+  const ready = ((method === 'PHOTO' && !!photo) || (method === 'PIN' && pin.length >= 4) || (method === 'SIGNATURE' && name.trim().length >= 2)) && (!job.requiresIdCheck || idChecked);
+  const body = () => ({ ...(method === 'PHOTO' ? { proofPhotoUrl: photo!.url } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: name.trim() }), ...(job.requiresIdCheck ? { idChecked } : {}) });
   const methods: Method[] = job.pinRequired ? ['PIN'] : ['PHOTO', 'PIN', 'SIGNATURE'];
   return (
     <div className="rounded-lg bg-ink-50 p-3">
@@ -119,7 +118,7 @@ function HandoffForm({ job, busy, onSubmit }: { job: Job; busy: boolean; onSubmi
       <div className="flex flex-wrap gap-3">{methods.map((m) => <label key={m} className="flex items-center gap-1"><input type="radio" name={`m-${job.id}`} checked={method === m} onChange={() => setMethod(m)} /> {m === 'PHOTO' ? 'Photo' : m === 'PIN' ? 'Customer PIN' : 'Signature'}</label>)}</div>
       {method === 'PIN' && <Input className="mt-2" label="PIN" inputMode="numeric" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />}
       {method === 'SIGNATURE' && <Input className="mt-2" label="Name of the person who received it" value={name} onChange={(e) => setName(e.target.value)} />}
-      {method === 'PHOTO' && <p className="mt-2 text-xs text-ink-500">Take a clear photo of the order at the door (the mobile app uses your camera).</p>}
+      {method === 'PHOTO' && <div className="mt-2"><p className="mb-1 text-xs text-ink-500">Take a clear photo of the order at the door, with the door number in view if you can.</p><PhotoCapture purpose="HANDOFF" label="Take handoff photo" value={photo} onChange={setPhoto} /></div>}
       {job.requiresIdCheck && <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} /> I checked the customer’s ID and they are old enough</label>}
       <Button className="mt-2" size="sm" disabled={busy || !ready} onClick={() => onSubmit(body())}>Delivered</Button>
     </div>
@@ -132,6 +131,7 @@ function IssueMenu({ job, onReported }: { job: Job; onReported: (outcome: string
   const kinds = (Object.keys(TRIP_ISSUES) as TripIssue[]).filter((k) => TRIP_ISSUES[k].stage === 'ANY' || TRIP_ISSUES[k].stage === stage);
   const [kind, setKind] = useState<TripIssue>(kinds[0]);
   const [note, setNote] = useState('');
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
   const { run, error, busy } = useCourierAction();
   if (!open) return <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>Report a problem</Button>;
   const k = kinds.includes(kind) ? kind : kinds[0];
@@ -140,8 +140,9 @@ function IssueMenu({ job, onReported }: { job: Job; onReported: (outcome: string
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
         <Select label="What happened?" value={k} onChange={(e) => setKind(e.target.value as TripIssue)}>{kinds.map((x) => <option key={x} value={x}>{TRIP_ISSUES[x].label}</option>)}</Select>
         <Input label="Details (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-        <div className="flex gap-1"><Button size="sm" disabled={busy} onClick={() => run(async () => { const r = await api.post<{ outcome: string }>(`/driver/jobs/${job.id}/issue`, { kind: k, note: note.trim() || undefined }); setOpen(false); setNote(''); await onReported(r.outcome); })}>Send</Button><Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button></div>
+        <div className="flex gap-1"><Button size="sm" disabled={busy} onClick={() => run(async () => { const r = await api.post<{ outcome: string }>(`/driver/jobs/${job.id}/issue`, { kind: k, note: note.trim() || undefined, photoUrl: photo?.url }); setOpen(false); setNote(''); setPhoto(null); await onReported(r.outcome); })}>Send</Button><Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button></div>
       </div>
+      <div className="mt-2"><PhotoCapture purpose="ISSUE" label="Add a photo (optional)" value={photo} onChange={setPhoto} /></div>
       {error && <div className="mt-2"><Alert>{error}</Alert></div>}
     </div>
   );
@@ -165,6 +166,7 @@ function Release({ job, onDone }: { job: Job; onDone: () => Promise<void> }) {
 function ExceptionBox({ job, onDone }: { job: Job; onDone: () => void }) {
   const { run, error } = useCourierAction();
   const [kind, setKind] = useState('CUSTOMER_UNREACHABLE');
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
   const ex = job.exception && !job.exception.resolution ? job.exception : null;
   const waiting = ex ? new Date(ex.waitUntil) > new Date() : false;
   const act = (fn: () => Promise<unknown>) => run(async () => { await fn(); onDone(); });
@@ -177,7 +179,8 @@ function ExceptionBox({ job, onDone }: { job: Job; onDone: () => void }) {
         <div className="space-y-1 text-xs">
           <div><b>{humanize(ex.kind)}</b> · {ex.attempts.length} attempt(s) · {waiting ? `keep trying until ${new Date(ex.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'wait time is over'}</div>
           <div className="flex flex-wrap gap-1">{['CALL', 'SMS', 'DOOR'].map((m) => <Button key={m} size="sm" variant="secondary" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception`, { kind: ex.kind, method: m }))}>Log {m.toLowerCase()}</Button>)}</div>
-          {!waiting && <div className="flex flex-wrap gap-1"><Button size="sm" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: 'https://placehold.co/600x400?text=Left+safely' }))}>Leave safely (photo)</Button><Button size="sm" variant="secondary" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'RETURN' }))}>Return to restaurant</Button><Button size="sm" variant="ghost" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'DISPOSE' }))}>Dispose</Button></div>}
+          {!waiting && <PhotoCapture purpose="SAFE_PLACE" label="Photo of where you left it" value={photo} onChange={setPhoto} />}
+          {!waiting && <div className="flex flex-wrap gap-1"><Button size="sm" disabled={!photo} onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: photo!.url }))}>Leave safely</Button><Button size="sm" variant="secondary" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'RETURN' }))}>Return to restaurant</Button><Button size="sm" variant="ghost" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'DISPOSE' }))}>Dispose</Button></div>}
         </div>
       )}
     </div>

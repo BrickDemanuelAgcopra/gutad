@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { bearing, bearingDiff, DEFAULT_AVAILABILITY, DEFAULT_BATCHING, DEFAULT_DISPATCH, DEFAULT_PAY_POLICY, HARD_REQUIREMENTS, offerPay, REQUIRED_COURIER_DOCS, waitingPay, type AvailabilityConfig, type BatchingConfig, type CourierPayPolicy, type DispatchConfig, type OfferPay } from '@gutad/shared';
 import { ModuleRef } from '@nestjs/core';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { courierDocuments, courierEligibility, courierRecords, courierTimeEntries, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, users } from '../../db/schema';
+import { courierDocuments, courierEligibility, courierRecords, courierTimeEntries, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, storedFiles, users } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
 import { assertCan, assertOrgAccess, hasAnyRole, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { LedgerService } from '../../core/ledger.service';
@@ -16,6 +16,7 @@ import { DeliveryProviderRegistry } from './providers/provider-registry';
 import { RoutingService } from './routing.service';
 import { LiveService } from './live.service';
 import { RedisService } from '../../core/redis.service';
+import { storedFileId, viewableUrl } from './file-links';
 
 type Status = (typeof deliveryJobs.status.enumValues)[number];
 
@@ -847,7 +848,7 @@ export class DeliveryService {
       if (handoffPin !== undefined && handoffPin !== '') {
         if (!job.handoffPin || handoffPin.trim() !== job.handoffPin) throw new BadRequestException({ message: 'That PIN doesn’t match. Ask the customer to check their order page.', code: 'PIN_MISMATCH' });
         patch.handoffMethod = 'PIN';
-      } else if (data.proofPhotoUrl) patch.handoffMethod = 'PHOTO';
+      } else if (data.proofPhotoUrl) { await this.assertOwnPhoto(d.id, data.proofPhotoUrl); patch.handoffMethod = 'PHOTO'; }
       else if (data.proofSignature) patch.handoffMethod = 'SIGNATURE';
       else throw new BadRequestException({ message: 'Proof of handoff required: a photo, the customer’s PIN or a signature', code: 'PROOF_REQUIRED' });
       if (idChecked) patch.idCheckedAt = new Date();
@@ -898,6 +899,14 @@ export class DeliveryService {
   }
 
   /** 17.7 after the wait timer: return to the restaurant, dispose, or leave in a safe place (proof required). Staff can resolve early. */
+  /** A `/files/<id>` proof must be a photo this courier uploaded (external links from older app builds pass through). */
+  private async assertOwnPhoto(driverId: string, url: string) {
+    const id = storedFileId(url);
+    if (!id) return;
+    const [f] = await this.db.select({ driverId: storedFiles.driverId, purpose: storedFiles.purpose }).from(storedFiles).where(eq(storedFiles.id, id)).limit(1);
+    if (!f || f.driverId !== driverId || !f.purpose.startsWith('COURIER_PHOTO_')) throw new BadRequestException({ message: 'Take the handoff photo again', code: 'PHOTO_INVALID' });
+  }
+
   async resolveException(user: JwtPayload | null, jobId: string, input: { resolution: 'RETURN' | 'DISPOSE' | 'SAFE_PLACE'; note?: string; proofPhotoUrl?: string }, staff = false) {
     const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.id, jobId)).limit(1);
     if (!job) throw new NotFoundException();
@@ -906,6 +915,7 @@ export class DeliveryService {
     if (!ex || ex.resolution) throw new ConflictException('No open exception on this delivery');
     if (!staff && new Date(ex.waitUntil) > new Date()) throw new ConflictException({ message: `Keep trying until ${new Date(ex.waitUntil).toLocaleTimeString()}`, code: 'WAIT_TIMER' });
     if (input.resolution === 'SAFE_PLACE' && !input.proofPhotoUrl) throw new BadRequestException('A photo is required when leaving the order');
+    if (!staff && input.proofPhotoUrl && job.driverId) await this.assertOwnPhoto(job.driverId, input.proofPhotoUrl);
     return this.db.transaction(async (tx) => {
       await tx.update(deliveryJobs).set({ exception: { ...ex, resolution: input.resolution, resolvedAt: new Date().toISOString(), note: input.note } }).where(eq(deliveryJobs.id, jobId));
       if (input.resolution === 'SAFE_PLACE') return this.transition(jobId, 'DELIVERED', { proofPhotoUrl: input.proofPhotoUrl, note: input.note, exception: ex.kind }, tx);
@@ -922,7 +932,7 @@ export class DeliveryService {
     if (isPlatformStaff(user)) assertCan(user, 'delivery.read', 'support.read');
     else assertOrgAccess(user, loc!.org, job.locationId);
     await this.audit.log({ organizationId: loc?.org, actorId: user.sub, action: 'delivery.proof_view', entityType: 'delivery_job', entityId: jobId });
-    return { jobId, deliveredAt: job.deliveredAt, proofPhotoUrl: job.proofPhotoUrl, proofSignature: job.proofSignature, purgedAt: job.proofPurgedAt };
+    return { jobId, deliveredAt: job.deliveredAt, proofPhotoUrl: viewableUrl(job.proofPhotoUrl), proofSignature: job.proofSignature, purgedAt: job.proofPurgedAt };
   }
 
   /** 17.8 retention: remove proof after `proofRetentionDays`, unless the order has an open support ticket. */

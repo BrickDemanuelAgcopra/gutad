@@ -7,6 +7,7 @@ import { Badge, Button, C, Card, ErrorText, Input, Muted, s, tone } from '../ui'
 import { Choice, Toggle } from '../chef-ui';
 import { currentPos, errCode, label, mins, useCountdown, type Addr, type DriverStatus, type Job, type Offer } from './common';
 import { sendOrQueue } from './queue';
+import { PhotoCapture, type UploadedPhoto } from './photo';
 
 /** Online / break / finish-after-current, why offers aren't coming, and today's time and earnings. */
 export function StatusPanel({ st, onChange }: { st: DriverStatus; onChange: () => void }) {
@@ -120,6 +121,9 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
   const [pin, setPin] = useState('');
   const [sig, setSig] = useState('');
   const [idOk, setIdOk] = useState(false);
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
+  const [safePhoto, setSafePhoto] = useState<UploadedPhoto | null>(null);
+  const [issuePhoto, setIssuePhoto] = useState<UploadedPhoto | null>(null);
 
   const ex = j.exception && !j.exception.resolution ? j.exception : null;
   const waiting = ex ? new Date(ex.waitUntil) > new Date() : false;
@@ -141,7 +145,7 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
   });
   const plain = (fn: () => Promise<unknown>) => run(async () => { await fn(); onChange(); });
   const issues = (Object.keys(TRIP_ISSUES) as TripIssue[]).filter((k) => TRIP_ISSUES[k].stage === 'ANY' || TRIP_ISSUES[k].stage === (atPickup ? 'PICKUP' : 'DROPOFF') || (j.requiresIdCheck && k === 'ID_CHECK_FAILED' && !atPickup));
-  const handoffOk = (method === 'PHOTO' || (method === 'PIN' && /^\d{4,6}$/.test(pin)) || (method === 'SIGNATURE' && sig.trim().length > 1)) && (!j.requiresIdCheck || idOk) && (!j.pinRequired || method === 'PIN');
+  const handoffOk = ((method === 'PHOTO' && !!photo) || (method === 'PIN' && /^\d{4,6}$/.test(pin)) || (method === 'SIGNATURE' && sig.trim().length > 1)) && (!j.requiresIdCheck || idOk) && (!j.pinRequired || method === 'PIN');
 
   return (
     <View style={{ marginBottom: 14, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.ink1 }}>
@@ -171,11 +175,11 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
           {j.pinRequired ? <Muted>This order needs the customer’s PIN.</Muted> : <Choice value={method} onChange={setMethod} options={[{ value: 'PHOTO', label: 'Photo at the door' }, { value: 'PIN', label: 'Customer’s PIN' }, { value: 'SIGNATURE', label: 'Signature' }]} />}
           {method === 'PIN' && <Input label="PIN from the customer" keyboardType="number-pad" maxLength={6} value={pin} onChangeText={setPin} />}
           {method === 'SIGNATURE' && <Input label="Customer signs by typing their name" value={sig} onChangeText={setSig} />}
-          {method === 'PHOTO' && <Muted>A photo of the order at the door is attached when you complete.</Muted>}
+          {method === 'PHOTO' && <><Muted>Take a clear photo of the order at the door, with the door number in view if you can.</Muted><PhotoCapture purpose="HANDOFF" label="Take handoff photo" value={photo} onChange={setPhoto} library={false} /></>}
           {j.requiresIdCheck && <Toggle on={idOk} onChange={setIdOk} title="I checked the customer’s ID" text="They are of legal age and the ID matches. If not, don’t hand over; report the failed ID check." />}
           <Button title="Complete delivery" disabled={busy || !handoffOk} onPress={() => send(`/driver/jobs/${j.id}/transition`, {
             status: 'DELIVERED',
-            ...(method === 'PHOTO' ? { proofPhotoUrl: 'https://placehold.co/600x400?text=Handoff' } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: sig.trim() }),
+            ...(method === 'PHOTO' ? { proofPhotoUrl: photo!.url } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: sig.trim() }),
             ...(j.requiresIdCheck ? { idChecked: idOk } : {}),
           }, 'Delivered')} />
         </View>
@@ -187,7 +191,8 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
           <Text style={{ fontWeight: '600' }}>{label(ex.kind)} · {ex.attempts.length} attempt(s)</Text>
           <Muted>{waiting ? `Keep trying until ${new Date(ex.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Wait time is over'}</Muted>
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>{['CALL', 'SMS', 'DOOR'].map((m) => <Button key={m} title={`Log ${m.toLowerCase()}`} variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception`, { kind: ex.kind, method: m }))} />)}</View>
-          {!waiting && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><Button title="Leave safely (photo)" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: 'https://placehold.co/600x400?text=Left+safely' }))} /><Button title="Return" variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'RETURN' }))} /><Button title="Dispose" variant="ghost" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'DISPOSE' }))} /></View>}
+          {!waiting && <PhotoCapture purpose="SAFE_PLACE" label="Photo of where you left it" value={safePhoto} onChange={setSafePhoto} library={false} />}
+          {!waiting && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><Button title="Leave safely" disabled={!safePhoto} onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: safePhoto!.url }))} /><Button title="Return" variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'RETURN' }))} /><Button title="Dispose" variant="ghost" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'DISPOSE' }))} /></View>}
         </View>
       )}
 
@@ -199,7 +204,8 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
         <View style={{ padding: 10, backgroundColor: '#fff4ec', borderRadius: 10 }}>
           <Choice value={issue || undefined} onChange={(v) => setIssue(v)} options={issues.map((k) => ({ value: k, label: TRIP_ISSUES[k].label }))} />
           <Input label="What happened? (optional)" multiline value={issueNote} onChangeText={setIssueNote} />
-          <Button title="Send report" disabled={busy || !issue} onPress={() => send(`/driver/jobs/${j.id}/issue`, { kind: issue, note: issueNote.trim() || undefined }, `Problem: ${issue ? TRIP_ISSUES[issue].label : ''}`).then((r) => { if (r && !r.queued) { setOutcome(r.result?.outcome || 'Reported. We’ll be in touch.'); setIssue(null); setIssueNote(''); } })} />
+          <PhotoCapture purpose="ISSUE" label="Add a photo (optional)" value={issuePhoto} onChange={setIssuePhoto} />
+          <Button title="Send report" disabled={busy || !issue} onPress={() => send(`/driver/jobs/${j.id}/issue`, { kind: issue, note: issueNote.trim() || undefined, photoUrl: issuePhoto?.url }, `Problem: ${issue ? TRIP_ISSUES[issue].label : ''}`).then((r) => { if (r && !r.queued) { setOutcome(r.result?.outcome || 'Reported. We’ll be in touch.'); setIssue(null); setIssueNote(''); setIssuePhoto(null); } })} />
         </View>
       )}
       {outcome && <Text style={{ color: C.info, marginTop: 4 }}>{outcome}</Text>}

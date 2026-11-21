@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   APPLICATION_STATUS_LABELS, COURIER_AGREEMENT_SUMMARY, COURIER_AGREEMENT_VERSION, COURIER_DOC_LABELS, ELIGIBILITY_LABELS, EQUIPMENT_ITEMS, EQUIPMENT_LABELS,
   MOTOR_VEHICLES, ONBOARDING_STEPS, REQUIRED_EQUIPMENT, SCREENING_CONSENT_VERSION, TRAINING_MODULES, VEHICLE_TYPES,
@@ -10,7 +10,7 @@ import { api, when } from '@/lib/api';
 import { useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, statusTone } from '@/components/ui';
 import { CourierDocUpload } from '@/components/courier-docs';
-import { applicationTone, checkTone, humanize, useCourierAction, type Onboarding } from './common';
+import { applicationTone, checkTone, humanize, PhotoCapture, StoredPhoto, useCourierAction, type Onboarding, type UploadedPhoto } from './common';
 
 const docLabel = (k: string) => COURIER_DOC_LABELS[k as CourierDocKind] || humanize(k);
 const EDITABLE = ['DRAFT', 'NEEDS_ACTION'];
@@ -148,6 +148,12 @@ function Saver({ label = 'Save and continue', disabled, busy, error, onClick }: 
 function LocationStep({ ob, onSaved }: StepProps) {
   const l = ob.data.location || {};
   const [f, setF] = useState({ country: l.country || 'US', city: l.city || '', transport: l.transport || ob.driver?.vehicleType || 'BIKE' });
+  const [zoneIds, setZoneIds] = useState<string[]>(l.zoneIds || []);
+  const [cityQ, setCityQ] = useState(f.city);
+  useEffect(() => { const t = setTimeout(() => setCityQ(f.city.trim()), 400); return () => clearTimeout(t); }, [f.city]);
+  const zones = useApi<{ id: string; name: string; location: string }[]>(cityQ.length >= 2 ? `/driver/onboarding/zones?city=${encodeURIComponent(cityQ)}` : null);
+  const offered = zones.data || [];
+  const chosen = zoneIds.filter((z) => offered.some((o) => o.id === z));
   const { run, busy, error } = useCourierAction();
   return (
     <div className="space-y-2">
@@ -156,9 +162,10 @@ function LocationStep({ ob, onSaved }: StepProps) {
         <Input label="City" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} />
         <Select label="How you get around" value={f.transport} onChange={(e) => setF({ ...f, transport: e.target.value })}>{VEHICLE_TYPES.map((v) => <option key={v} value={v}>{humanize(v)}</option>)}</Select>
       </div>
+      {cityQ.length >= 2 && <div><p className="text-sm font-medium">Where you’d like to deliver</p>{offered.length ? <><p className="text-xs text-ink-500">Pick the areas you know. Leave all unticked to get offers anywhere in {cityQ}.</p><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">{offered.map((z) => <label key={z.id} className="flex items-center gap-1 text-sm"><input type="checkbox" checked={chosen.includes(z.id)} onChange={(e) => setZoneIds(e.target.checked ? [...chosen, z.id] : chosen.filter((x) => x !== z.id))} /> {z.name} <span className="text-xs text-ink-500">({z.location})</span></label>)}</div></> : <p className="text-xs text-ink-500">{zones.loading ? 'Looking up delivery areas…' : `No delivery areas are set up in ${cityQ} yet; you’ll get offers anywhere in the city.`}</p>}</div>}
       {MOTOR_VEHICLES.includes(f.transport) && <p className="text-xs text-ink-500">With a {humanize(f.transport)} you’ll also need a driving licence, insurance and vehicle registration.</p>}
       {ob.availability && <p className="text-sm text-ink-700">{ob.availability.message}</p>}
-      <Saver busy={busy} error={error} disabled={f.country.length < 2 || f.city.length < 2} onClick={() => run(async () => { await api.post('/driver/onboarding/location', f); await onSaved(); })} />
+      <Saver busy={busy} error={error} disabled={f.country.length < 2 || f.city.length < 2 || zones.loading} onClick={() => run(async () => { await api.post('/driver/onboarding/location', { ...f, zoneIds: chosen }); await onSaved(); })} />
     </div>
   );
 }
@@ -187,6 +194,7 @@ function AccountStep({ ob, onSaved }: StepProps) {
 function ProfileStep({ ob, onSaved }: StepProps) {
   const p = ob.data.profile || {};
   const [f, setF] = useState({ legalName: p.legalName || '', addressLine1: p.addressLine1 || '', city: p.city || ob.data.location?.city || '', postalCode: p.postalCode || '', phone: p.phone || '', languages: (p.languages || ['English']).join(', '), photoUrl: p.photoUrl || '' });
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
   const { run, busy, error } = useCourierAction();
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   const languages = f.languages.split(',').map((x) => x.trim()).filter(Boolean);
@@ -199,7 +207,7 @@ function ProfileStep({ ob, onSaved }: StepProps) {
         <Input label="City" value={f.city} onChange={set('city')} />
         <Input label="Postal code" value={f.postalCode} onChange={set('postalCode')} />
         <Input label="Languages you speak (comma separated)" value={f.languages} onChange={set('languages')} />
-        <Input className="sm:col-span-2" label="Profile photo link (optional)" placeholder="https://" value={f.photoUrl} onChange={set('photoUrl')} />
+        <div className="sm:col-span-2"><p className="mb-1 text-sm font-medium">Profile photo (optional)</p>{f.photoUrl && !photo && <StoredPhoto url={f.photoUrl} alt="Current profile photo" />}<PhotoCapture purpose="PROFILE" label="Take or choose a photo" value={photo} onChange={(p) => { setPhoto(p); setF({ ...f, photoUrl: p?.url || '' }); }} /></div>
       </div>
       <Saver busy={busy} error={error} disabled={f.legalName.length < 2 || f.addressLine1.length < 3 || f.city.length < 2 || f.postalCode.length < 3 || f.phone.length < 6 || !languages.length}
         onClick={() => run(async () => { await api.post('/driver/onboarding/profile', { legalName: f.legalName, addressLine1: f.addressLine1, city: f.city, postalCode: f.postalCode, phone: f.phone, languages, photoUrl: f.photoUrl || undefined }); await onSaved(); })} />
@@ -342,13 +350,14 @@ function EquipmentStep({ ob, onSaved }: StepProps) {
   const e0 = ob.data.equipment;
   const [items, setItems] = useState<EquipmentItem[]>(e0?.items || []);
   const [photoUrl, setPhotoUrl] = useState(e0?.photoUrl || '');
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
   const { run, busy, error } = useCourierAction();
   const missingRequired = REQUIRED_EQUIPMENT.filter((r) => !items.includes(r));
   return (
     <div className="space-y-2 text-sm">
       <p>Tick what you have:</p>
       {EQUIPMENT_ITEMS.map((k) => <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={items.includes(k)} onChange={(e) => setItems(e.target.checked ? [...items, k] : items.filter((x) => x !== k))} /> {EQUIPMENT_LABELS[k]}{REQUIRED_EQUIPMENT.includes(k) && <Badge tone="warn">required</Badge>}</label>)}
-      <Input label="Photo of your gear (link, optional)" placeholder="https://" value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} />
+      <div><p className="mb-1 text-sm font-medium">Photo of your gear (optional)</p>{photoUrl && !photo && <StoredPhoto url={photoUrl} alt="Your gear" />}<PhotoCapture purpose="EQUIPMENT" label="Take or choose a photo" value={photo} onChange={(p) => { setPhoto(p); setPhotoUrl(p?.url || ''); }} /></div>
       {missingRequired.length > 0 && <p className="text-xs text-amber-700">You need: {missingRequired.map((r) => EQUIPMENT_LABELS[r]).join(', ')}.</p>}
       <Saver label="Save equipment" busy={busy} error={error} disabled={missingRequired.length > 0} onClick={() => run(async () => { await api.post('/driver/onboarding/equipment', { items, photoUrl: photoUrl || undefined }); await onSaved(); })} />
     </div>

@@ -186,3 +186,7 @@ export const REVIEW_ISSUES = { MISSING_ITEMS: 'Items were missing', NOT_RECEIVED
 export type ReviewIssue = keyof typeof REVIEW_ISSUES;
 export const REVIEW_STATUSES = ['VISIBLE', 'PENDING_MODERATION', 'HIDDEN'] as const;
 export const REVIEW_EDIT_DAYS = 7;
+
+/** Photos a courier uploads (stored privately; referenced as `/files/<id>`). */
+export const COURIER_PHOTO_PURPOSES = ['HANDOFF', 'SAFE_PLACE', 'PROFILE', 'EQUIPMENT', 'ISSUE'] as const;
+export type CourierPhotoPurpose = (typeof COURIER_PHOTO_PURPOSES)[number];

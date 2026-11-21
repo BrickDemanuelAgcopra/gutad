@@ -1,14 +1,14 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { COURIER_DOC_KINDS } from '@gutad/shared';
+import { COURIER_DOC_KINDS, COURIER_PHOTO_PURPOSES } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
 import { courierDocuments, storedFiles } from '../../db/schema';
 import { can, isPlatformStaff, JwtPayload } from '../../common/auth';
 import { AuditService } from '../../core/audit.service';
 import { StorageService } from '../../core/storage.service';
-import { loadConfig } from '../../config/config';
 import { DeliveryService } from './delivery.service';
+import { signFile, viewableUrl } from './file-links';
 
 export const MAX_COURIER_FILE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_MIME: Record<string, string> = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif' };
@@ -46,6 +46,25 @@ export class CourierFilesService {
     return { ...doc, file: { id: f.id, fileName: f.fileName, mimeType: f.mimeType, sizeBytes: f.sizeBytes } };
   }
 
+  /**
+   * A courier photo (handoff proof, safe-place drop, profile, equipment, trip problem): images only, stored privately.
+   * Returns a `/files/<id>` reference the courier then sends with the action that needs it.
+   */
+  async uploadPhoto(user: JwtPayload, file: IncomingFile | undefined, purpose: string) {
+    const d = await this.delivery.myDriver(user);
+    if (!(COURIER_PHOTO_PURPOSES as readonly string[]).includes(purpose)) throw new BadRequestException('Unknown photo type');
+    if (!file || !file.size) throw new BadRequestException('Take or choose a photo first');
+    const ext = ALLOWED_MIME[file.mimetype];
+    if (!ext || ext === 'pdf') throw new BadRequestException('Upload a photo (JPG, PNG, WEBP, HEIC)');
+    if (file.size > MAX_COURIER_FILE_BYTES) throw new BadRequestException('Photos can be up to 10 MB');
+    if (!looksLike(file.mimetype, file.buffer)) throw new BadRequestException('The file is not a valid photo');
+    const key = `courier-photos/${d.id}/${purpose.toLowerCase()}/${randomUUID()}.${ext}`;
+    await this.storage.driver.put(key, file.buffer, file.mimetype);
+    const [f] = await this.db.insert(storedFiles).values({ purpose: `COURIER_PHOTO_${purpose}`, driver: this.storage.driver.name, storageKey: key, fileName: (file.originalname || `photo.${ext}`).slice(0, 200), mimeType: file.mimetype, sizeBytes: file.size, sha256: StorageService.sha256(file.buffer), ownerUserId: user.sub, driverId: d.id }).returning();
+    await this.audit.log({ actorId: user.sub, action: 'courier.photo_upload', entityType: 'stored_file', entityId: f.id, after: { purpose, sizeBytes: f.sizeBytes, mimeType: f.mimeType } });
+    return { id: f.id, url: `/files/${f.id}`, previewUrl: viewableUrl(`/files/${f.id}`, 900), mimeType: f.mimeType, sizeBytes: f.sizeBytes };
+  }
+
   /** The uploader, or delivery staff (every staff view is audited). */
   async read(user: JwtPayload, fileId: string) {
     const f = await this.authorize(user, fileId);
@@ -67,15 +86,12 @@ export class CourierFilesService {
     return { fileName: f.fileName, mimeType: f.mimeType, content };
   }
 
-  private sign(fileId: string, exp: number) {
-    return createHmac('sha256', `file-link:${loadConfig().JWT_SECRET}`).update(`${fileId}.${exp}`).digest('base64url');
-  }
+  private sign(fileId: string, exp: number) { return signFile(fileId, exp); }
 
   /** A 5-minute link for apps that open files in a browser (no Authorization header there); checked and audited like a view. */
   async link(user: JwtPayload, fileId: string) {
     await this.authorize(user, fileId);
-    const exp = Math.floor(Date.now() / 1000) + 300;
-    return { url: `${loadConfig().PUBLIC_API_URL}/files/${fileId}/signed?exp=${exp}&sig=${this.sign(fileId, exp)}`, expiresAt: new Date(exp * 1000).toISOString() };
+    return { url: viewableUrl(`/files/${fileId}`)!, expiresAt: new Date(Date.now() + 300_000).toISOString() };
   }
 
   async readSigned(fileId: string, exp: string, sig: string) {

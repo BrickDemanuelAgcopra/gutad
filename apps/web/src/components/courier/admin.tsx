@@ -8,7 +8,7 @@ import {
 import { api, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, statusTone, Table } from '@/components/ui';
-import { applicationTone, checkTone, humanize, lifecycleTone, minutes, type Onboarding } from './common';
+import { applicationTone, checkTone, humanize, lifecycleTone, minutes, StoredPhoto, type Onboarding } from './common';
 import { FeedbackSummary, type Feedback } from './money';
 
 interface Pipeline {
@@ -136,13 +136,13 @@ function OnboardingData({ ob }: { ob: Onboarding }) {
   const x = ob.data;
   const rows: [string, React.ReactNode][] = [];
   if (x.location) rows.push(['Location', `${x.location.city || '—'}, ${x.location.country || '—'} · ${x.location.transport ? humanize(x.location.transport) : '—'}${x.location.zoneIds?.length ? ` · ${x.location.zoneIds.length} zone(s)` : ''}`]);
-  if (x.profile) rows.push(['Profile', <span key="p">{x.profile.legalName} · {x.profile.phone}<span className="block text-xs text-ink-500">{x.profile.addressLine1}, {x.profile.city} {x.profile.postalCode}{x.profile.languages?.length ? ` · ${x.profile.languages.join(', ')}` : ''}</span></span>]);
+  if (x.profile) rows.push(['Profile', <span key="p">{x.profile.legalName} · {x.profile.phone}<span className="block text-xs text-ink-500">{x.profile.addressLine1}, {x.profile.city} {x.profile.postalCode}{x.profile.languages?.length ? ` · ${x.profile.languages.join(', ')}` : ''}</span>{x.profile.photoUrl && <StoredPhoto url={x.profile.photoUrl} alt="Profile photo" className="mt-1 h-20 w-20 rounded object-cover" />}</span>]);
   if (x.vehicle) rows.push(['Vehicle', [x.vehicle.color, x.vehicle.year, x.vehicle.make, x.vehicle.model].filter(Boolean).join(' ') + (x.vehicle.plate ? ` · ${x.vehicle.plate}` : '') || '—']);
   if (x.screening) rows.push(['Screening consent', `${when(x.screening.consentedAt)} (${x.screening.consentVersion})`]);
   if (x.payout) rows.push(['Payout', `${humanize(x.payout.method)} •••• ${x.payout.accountLast4}${x.payout.taxFormAcceptedAt ? ' · tax confirmed' : ''}`]);
   if (x.agreement) rows.push(['Agreement', `${x.agreement.version} · ${when(x.agreement.acceptedAt)}`]);
   rows.push(['Training', `${TRAINING_MODULES.filter((m) => x.training?.[m.key]).length}/${TRAINING_MODULES.length} modules`]);
-  if (x.equipment) rows.push(['Equipment', x.equipment.items.map((i: EquipmentItem) => EQUIPMENT_LABELS[i] || i).join(', ') || '—']);
+  if (x.equipment) rows.push(['Equipment', <span key="e">{x.equipment.items.map((i: EquipmentItem) => EQUIPMENT_LABELS[i] || i).join(', ') || '—'}{x.equipment.photoUrl && <StoredPhoto url={x.equipment.photoUrl} alt="Equipment photo" className="mt-1 h-20 w-20 rounded object-cover" />}</span>]);
   return (
     <div>
       <h4 className="mb-1 text-sm font-semibold">Application details</h4>

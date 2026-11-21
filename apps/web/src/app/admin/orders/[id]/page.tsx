@@ -71,7 +71,7 @@ export default function OrderDetail() {
             {manage && d.tickets.some((t) => t.status !== 'DONE') && <Button className="mt-2" size="sm" variant="ghost" onClick={() => { const from = window.prompt('Move tickets from station (code)', d.tickets[0].stationCode); const to = from && window.prompt('To station (code)'); if (from && to) act(() => api.post(`/admin/orders/${id}/reroute`, { fromStation: from, toStation: to })); }}>Re-route station</Button>}
           </Card>
           <Card title="Delivery">
-            {d.delivery ? <div className="text-sm"><Badge tone={statusTone(d.delivery.status)}>{d.delivery.status}</Badge> <span className="text-xs text-ink-500">{d.delivery.fleet.toLowerCase()} fleet · ETA {when(d.delivery.etaAt)}</span>{d.delivery.proofPhotoUrl && <a className="ml-2 text-xs underline" href={d.delivery.proofPhotoUrl} target="_blank" rel="noreferrer">proof of delivery</a>}</div> : <p className="text-sm text-ink-500">{o.fulfillmentType === 'DELIVERY' ? 'No delivery job.' : 'Not a delivery order.'}</p>}
+            {d.delivery ? <div className="text-sm"><Badge tone={statusTone(d.delivery.status)}>{d.delivery.status}</Badge> <span className="text-xs text-ink-500">{d.delivery.fleet.toLowerCase()} fleet · ETA {when(d.delivery.etaAt)}</span>{d.delivery.proofPhotoUrl && <button className="ml-2 text-xs underline" onClick={() => { void api.get<{ proofPhotoUrl: string | null }>(`/delivery-jobs/${d.delivery!.id}/proof`).then((p) => { if (p.proofPhotoUrl) window.open(p.proofPhotoUrl, '_blank'); }); }}>proof of delivery (audited)</button>}</div> : <p className="text-sm text-ink-500">{o.fulfillmentType === 'DELIVERY' ? 'No delivery job.' : 'Not a delivery order.'}</p>}
           </Card>
         </div>
       </div>

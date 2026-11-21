@@ -1,5 +1,6 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api, uploadFile } from '@/lib/api';
 import { GutadApiError, type ApplicationStatus, type CheckStatus, type EligibilityCheck, type EquipmentItem, type LifecycleStatus, type OnboardingStepKey } from '@gutad/shared';
 
 /** `GET /driver/onboarding` (also `onboarding` on the admin courier view). */
@@ -101,3 +102,53 @@ export const minutes = (m: number | null | undefined) => {
 };
 
 export const humanize = (s: string) => s.toLowerCase().replace(/_/g, ' ');
+
+export type PhotoPurpose = 'HANDOFF' | 'SAFE_PLACE' | 'PROFILE' | 'EQUIPMENT' | 'ISSUE';
+export interface UploadedPhoto { id: string; url: string; previewUrl: string | null }
+
+/** Take a photo (phones open the rear camera) or choose one; uploads privately and hands back the `/files/<id>` reference. */
+export function PhotoCapture({ purpose, label = 'Take photo', value, onChange }: { purpose: PhotoPurpose; label?: string; value: UploadedPhoto | null; onChange: (p: UploadedPhoto | null) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pick = async (f: File | undefined) => {
+    if (!f) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('purpose', purpose);
+      fd.append('file', f, f.name || 'photo.jpg');
+      onChange(await uploadFile<UploadedPhoto>('/driver/photos', fd));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      if (input.current) input.current.value = '';
+    }
+  };
+  return (
+    <div className="space-y-1">
+      <input ref={input} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => void pick(e.target.files?.[0])} />
+      <div className="flex flex-wrap items-center gap-2">
+        {value?.previewUrl && <img src={value.previewUrl} alt="Your photo" className="h-16 w-16 rounded object-cover" />}
+        <button type="button" disabled={busy} onClick={() => input.current?.click()} className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm font-medium hover:bg-ink-50 disabled:opacity-50">{busy ? 'Uploading…' : value ? 'Retake photo' : label}</button>
+        {value && !busy && <button type="button" className="text-xs underline" onClick={() => onChange(null)}>Remove</button>}
+      </div>
+      {error && <p className="text-xs text-red-700">{error}</p>}
+    </div>
+  );
+}
+
+/** A stored `/files/<id>` photo shown through a short-lived link; external links are shown as they are. */
+export function StoredPhoto({ url, alt, className = 'h-16 w-16 rounded object-cover' }: { url?: string | null; alt: string; className?: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    const m = url ? /^\/files\/([0-9a-f-]{36})$/i.exec(url) : null;
+    if (!m) { setSrc(url || null); return; }
+    let live = true;
+    api.get<{ url: string }>(`/files/${m[1]}/link`).then((r) => { if (live) setSrc(r.url); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [url]);
+  return src ? <img src={src} alt={alt} className={className} /> : null;
+}

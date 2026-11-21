@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import {
   APPLICATION_STATUS_LABELS, COURIER_AGREEMENT_SUMMARY, COURIER_AGREEMENT_VERSION, COURIER_DOC_LABELS, ELIGIBILITY_LABELS, EQUIPMENT_ITEMS, EQUIPMENT_LABELS, MOTOR_VEHICLES,
@@ -11,6 +11,8 @@ import { Badge, Button, C, Card, ErrorText, Input, Muted, s } from '../ui';
 import { Chips, Choice, pickImage, Toggle } from '../chef-ui';
 import { mimeFor, pickFileOnWeb, uploadMultipart, type PickedFile } from '../upload';
 import { checkTone, errBody, errCode, label, type Onboarding } from './common';
+import { PhotoCapture, StoredPhoto, type UploadedPhoto } from './photo';
+import { useApi } from '../hooks';
 
 const docLabel = (k: string) => COURIER_DOC_LABELS[k as CourierDocKind] || label(k);
 const TRANSPORT: Record<string, string> = { BIKE: 'Bike', EBIKE: 'E-bike', SCOOTER: 'Scooter / moped', CAR: 'Car', VAN: 'Van', WALK: 'On foot' };
@@ -117,15 +119,28 @@ function LocationStep({ ob, post, error, busy }: StepProps) {
   const [country, setCountry] = useState(l.country || 'US');
   const [city, setCity] = useState(l.city || '');
   const [transport, setTransport] = useState<string>(l.transport || ob.driver?.vehicleType || 'BIKE');
+  const [zoneIds, setZoneIds] = useState<string[]>(l.zoneIds || []);
+  const [cityQ, setCityQ] = useState(city.trim());
+  useEffect(() => { const t = setTimeout(() => setCityQ(city.trim()), 500); return () => clearTimeout(t); }, [city]);
+  const zones = useApi<{ id: string; name: string; location: string }[]>(cityQ.length >= 2 ? `/driver/onboarding/zones?city=${encodeURIComponent(cityQ)}` : null);
+  const offered = zones.data || [];
+  const chosen = zoneIds.filter((z) => offered.some((o) => o.id === z));
   return (
     <View>
       <Input label="Country" value={country} onChangeText={setCountry} autoCapitalize="characters" />
       <Input label="City" value={city} onChangeText={setCity} />
       <Text style={s.label}>How you’ll get around</Text>
       <Choice value={transport} onChange={setTransport} options={VEHICLE_TYPES.map((v) => ({ value: v, label: TRANSPORT[v] || label(v), description: MOTOR_VEHICLES.includes(v) ? 'Needs a licence, insurance and registration' : undefined }))} />
+      {cityQ.length >= 2 && <View style={{ marginBottom: 6 }}>
+        <Text style={s.label}>Where you’d like to deliver</Text>
+        {offered.length ? <>
+          <Muted>Pick the areas you know. Leave all unticked to get offers anywhere in {cityQ}.</Muted>
+          {offered.map((z) => <Toggle key={z.id} on={chosen.includes(z.id)} onChange={(on) => setZoneIds(on ? [...chosen, z.id] : chosen.filter((x) => x !== z.id))} title={z.name} text={z.location} />)}
+        </> : <Muted>{zones.loading ? 'Looking up delivery areas…' : `No delivery areas are set up in ${cityQ} yet; you’ll get offers anywhere in the city.`}</Muted>}
+      </View>}
       {ob.availability && <Text style={{ color: ob.availability.serviceable && !ob.availability.waitlist ? C.good : C.warn, marginBottom: 4 }}>{ob.availability.message}</Text>}
       <ErrorText msg={error} />
-      <Button title={busy ? 'Saving…' : 'Save'} disabled={busy || country.trim().length < 2 || city.trim().length < 2} onPress={() => post('location', { country: country.trim(), city: city.trim(), transport })} />
+      <Button title={busy ? 'Saving…' : 'Save'} disabled={busy || zones.loading || country.trim().length < 2 || city.trim().length < 2} onPress={() => post('location', { country: country.trim(), city: city.trim(), transport, zoneIds: chosen })} />
     </View>
   );
 }
@@ -151,6 +166,7 @@ function AccountStep({ ob, onSaved }: { ob: Onboarding; onSaved: (o: Onboarding)
 function ProfileStep({ ob, post, error, busy }: StepProps) {
   const p = ob.data.profile || {};
   const [f, setF] = useState({ legalName: p.legalName || '', addressLine1: p.addressLine1 || '', city: p.city || ob.data.location?.city || '', postalCode: p.postalCode || '', phone: p.phone || '', languages: (p.languages || ['English']).join(', '), photoUrl: p.photoUrl || '' });
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   const ok = f.legalName.trim().length > 2 && f.addressLine1.trim().length > 2 && f.city.trim() && f.postalCode.trim() && f.phone.trim().length > 5 && f.languages.trim();
   return (
@@ -160,7 +176,9 @@ function ProfileStep({ ob, post, error, busy }: StepProps) {
       <View style={{ flexDirection: 'row', gap: 8 }}><View style={{ flex: 1 }}><Input label="City" value={f.city} onChangeText={set('city')} /></View><View style={{ flex: 1 }}><Input label="Postal code" value={f.postalCode} onChangeText={set('postalCode')} /></View></View>
       <Input label="Phone" keyboardType="phone-pad" value={f.phone} onChangeText={set('phone')} />
       <Input label="Languages you speak (comma separated)" value={f.languages} onChangeText={set('languages')} />
-      <Input label="Profile photo link (optional)" autoCapitalize="none" value={f.photoUrl} onChangeText={set('photoUrl')} />
+      <Text style={s.label}>Profile photo (optional)</Text>
+      {f.photoUrl && !photo ? <StoredPhoto url={f.photoUrl} /> : null}
+      <PhotoCapture purpose="PROFILE" label="Take a photo" value={photo} onChange={(p) => { setPhoto(p); setF({ ...f, photoUrl: p?.url || '' }); }} />
       <ErrorText msg={error} />
       <Button title={busy ? 'Saving…' : 'Save'} disabled={busy || !ok} onPress={() => post('profile', { legalName: f.legalName.trim(), addressLine1: f.addressLine1.trim(), city: f.city.trim(), postalCode: f.postalCode.trim(), phone: f.phone.trim(), languages: f.languages.split(',').map((x) => x.trim()).filter(Boolean), photoUrl: f.photoUrl.trim() || undefined })} />
     </View>
@@ -302,12 +320,15 @@ function TrainingStep({ ob, onSaved }: { ob: Onboarding; onSaved: (o: Onboarding
 function EquipmentStep({ ob, post, error, busy }: StepProps) {
   const [items, setItems] = useState<EquipmentItem[]>(ob.data.equipment?.items || []);
   const [photoUrl, setPhotoUrl] = useState(ob.data.equipment?.photoUrl || '');
+  const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
   const missingReq = REQUIRED_EQUIPMENT.filter((r) => !items.includes(r));
   return (
     <View>
       <Muted>Tick what you have. {REQUIRED_EQUIPMENT.map((r) => EQUIPMENT_LABELS[r]).join(', ')} is required.</Muted>
       <Chips values={items} onChange={setItems} options={EQUIPMENT_ITEMS.map((k) => ({ value: k, label: EQUIPMENT_LABELS[k] }))} />
-      <Input label="Photo of your bag (link, optional)" autoCapitalize="none" value={photoUrl} onChangeText={setPhotoUrl} />
+      <Text style={s.label}>Photo of your bag (optional)</Text>
+      {photoUrl && !photo ? <StoredPhoto url={photoUrl} /> : null}
+      <PhotoCapture purpose="EQUIPMENT" label="Take a photo" value={photo} onChange={(p) => { setPhoto(p); setPhotoUrl(p?.url || ''); }} />
       {missingReq.length > 0 && <Text style={{ color: C.warn }}>You need an {EQUIPMENT_LABELS[missingReq[0]].toLowerCase()} to deliver food.</Text>}
       <ErrorText msg={error} />
       <Button title="Save" disabled={busy || missingReq.length > 0} onPress={() => post('equipment', { items, photoUrl: photoUrl.trim() || undefined })} />

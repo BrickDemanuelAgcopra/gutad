@@ -11,6 +11,7 @@ import { OrdersService } from '../orders/orders.service';
 import { ApprovalsService } from '../security/approvals.service';
 import { SettingsService } from '../../core/settings.service';
 import { LedgerService } from '../../core/ledger.service';
+import { viewableUrl } from '../delivery/file-links';
 import { DEFAULT_GOODWILL, DEFAULT_SUPPORT_SLA, SUPPORT_CATEGORIES, type SupportCategory } from '@gutad/shared';
 
 type ResolveInput = { owner: 'MERCHANT' | 'PLATFORM' | 'PROVIDER' | 'DRIVER' | 'CUSTOMER'; remedy: 'REFUND' | 'CREDIT' | 'REMAKE' | 'REDELIVERY' | 'REASSIGN' | 'NONE'; remedyCents?: number; note?: string; evidence?: unknown[] };
@@ -330,7 +331,7 @@ export class SupportService implements OnModuleInit {
     // 17.8 proof is read from the job (staff only) and the access is audited
     const [job] = p.orderId ? await this.db.select({ id: deliveryJobs.id, proof: deliveryJobs.proofPhotoUrl }).from(deliveryJobs).where(eq(deliveryJobs.orderId, p.orderId)).limit(1) : [null];
     if (job?.proof) await this.audit.log({ actorId: user.sub, action: 'delivery.proof_view', entityType: 'delivery_job', entityId: job.id, reason: 'chargeback evidence' });
-    return { paymentId: p.id, disputeId: p.disputeId, amountCents: p.capturedCents, evidence: { orderNumber: order?.order.number, acceptedAt: order?.order.acceptedAt, readyAt: order?.order.readyAt, collectedAt: order?.order.collectedAt, deliveryProof: job?.proof ?? null, events: order?.events, customerEmail: order?.order.guestEmail } };
+    return { paymentId: p.id, disputeId: p.disputeId, amountCents: p.capturedCents, evidence: { orderNumber: order?.order.number, acceptedAt: order?.order.acceptedAt, readyAt: order?.order.readyAt, collectedAt: order?.order.collectedAt, deliveryProof: viewableUrl(job?.proof), events: order?.events, customerEmail: order?.order.guestEmail } };
   }
 
   /** Policy enforcement: strikes accumulate; 3+ high-severity strikes auto-suspend the subject. */

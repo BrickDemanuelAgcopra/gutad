@@ -173,6 +173,37 @@ export async function courierR1({ call, check, A, O, C }) {
   const e4 = (await call('GET', '/driver/earnings', undefined, X)).json.entries.find((e) => e.deliveryJobId === o4.delivery.id);
   check('a closed restaurant cancels the trip with an incident and cancellation pay', closed.job.status === 'CANCELED' && closed.incidentId && e4?.kind === 'CANCEL_COMP' && e4.totalCents > 0, { closed: closed.job?.status, e4 });
 
+  // ── handoff by photo: a real upload (images only, private), proof must be the courier's own photo, staff see a signed link
+  const API = process.env.API_URL || 'http://localhost:4000';
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF smoke photo'), Buffer.from([0xff, 0xd9])]);
+  const upPhoto = async (body, type, purpose = 'HANDOFF', name = 'door.jpg') => {
+    const fd = new FormData();
+    fd.append('purpose', purpose);
+    fd.append('file', new Blob([body], { type }), name);
+    const res = await fetch(`${API}/driver/photos`, { method: 'POST', headers: { Authorization: `Bearer ${X}` }, body: fd });
+    return { status: res.status, json: await res.json().catch(() => ({})) };
+  };
+  const pdfPhoto = await upPhoto(Buffer.from('%PDF-1.4\n%%EOF\n'), 'application/pdf', 'HANDOFF', 'x.pdf');
+  const fakeJpeg = await upPhoto(Buffer.from('not an image at all'), 'image/jpeg');
+  const badPurpose = await upPhoto(jpeg, 'image/jpeg', 'SELFIE');
+  const ph = await upPhoto(jpeg, 'image/jpeg');
+  const o5 = await place();
+  const off5 = (await call('GET', '/driver/offers', undefined, X)).json.find((x) => x.deliveryJobId === o5.delivery.id);
+  await call('POST', `/driver/offers/${off5.id}`, { accept: true }, X);
+  const j5 = (await call('GET', '/driver/jobs', undefined, X)).json.find((j) => j.id === o5.delivery.id);
+  await call('POST', `/driver/jobs/${j5.id}/transition`, { status: 'PICKED_UP', pickupCheck: { orderCode: j5.orderCode, bagCount: 1, sealIntact: true } }, X);
+  const foreign = await call('POST', `/driver/jobs/${j5.id}/transition`, { status: 'DELIVERED', proofPhotoUrl: `/files/${globalThis.crypto.randomUUID()}` }, X);
+  const byPhoto = (await call('POST', `/driver/jobs/${j5.id}/transition`, { status: 'DELIVERED', proofPhotoUrl: ph.json.url }, X)).json;
+  const proof = (await call('GET', `/delivery-jobs/${j5.id}/proof`, undefined, O)).json;
+  const signedRes = proof.proofPhotoUrl ? await fetch(proof.proofPhotoUrl.replace(/^https?:\/\/[^/]+/, API)) : { status: 0 };
+  const custFile = await fetch(`${API}/files/${ph.json.id}`, { headers: { Authorization: `Bearer ${C}` } });
+  check('handoff photos are real private uploads: images only, the proof must be the courier’s own photo, staff and the merchant get a signed link', pdfPhoto.status === 400 && fakeJpeg.status === 400 && badPurpose.status === 400 && ph.status === 201 && /^\/files\/[0-9a-f-]{36}$/.test(ph.json.url) && /\/signed\?exp=/.test(ph.json.previewUrl || '') && foreign.status === 400 && foreign.json.code === 'PHOTO_INVALID' && byPhoto.status === 'DELIVERED' && byPhoto.handoffMethod === 'PHOTO' && byPhoto.proofPhotoUrl === ph.json.url && /\/files\/[0-9a-f-]{36}\/signed\?exp=\d+&sig=/.test(proof.proofPhotoUrl || '') && signedRes.status === 200 && custFile.status === 403, { pdf: pdfPhoto.status, fake: fakeJpeg.status, bp: badPurpose.status, ph: ph.json, foreign: foreign.json, by: byPhoto.handoffMethod, proof: proof.proofPhotoUrl, signed: signedRes.status, cust: custFile.status });
+
+  // ── delivery areas for sign-up: active service zones of locations in the city
+  const zonesNY = (await call('GET', '/driver/onboarding/zones?city=new%20york', undefined, X)).json;
+  const zonesNone = (await call('GET', '/driver/onboarding/zones?city=Atlantis', undefined, X)).json;
+  check('sign-up lists the delivery areas in the courier’s city (case-insensitive) and nothing for a city without service', Array.isArray(zonesNY) && zonesNY.length >= 1 && zonesNY.every((z) => z.id && z.name && z.location) && Array.isArray(zonesNone) && zonesNone.length === 0, { zonesNY, zonesNone });
+
   // ── earnings dispute, payout account change, finish after current, reserved check-in
   const dis = (await call('POST', '/driver/earnings/dispute', { deliveryJobId: j1.id, note: 'Waiting time at the kitchen was not paid' }, X)).json;
   const noPw = await call('POST', '/driver/onboarding/payout', { accountHolder: 'Rae Rider', accountLast4: '1111', taxFormAccepted: true }, X);
