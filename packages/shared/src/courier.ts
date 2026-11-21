@@ -157,7 +157,7 @@ export function waitingPay(policy: CourierPayPolicy, waitedMinutes: number, drop
   return { minutes: paid, cents: paid * policy.waitingPerMinuteCents, pickupMinutes: pickup, dropoffMinutes: dropoff };
 }
 
-export const EARNING_KINDS = ['DELIVERY', 'CANCEL_COMP', 'BONUS', 'DEDUCTION', 'INCENTIVE'] as const;
+export const EARNING_KINDS = ['DELIVERY', 'CANCEL_COMP', 'BONUS', 'DEDUCTION', 'INCENTIVE', 'SPECIAL'] as const;
 
 // ───── pickup, handoff and trip problems ─────
 
@@ -194,5 +194,5 @@ export const REVIEW_STATUSES = ['VISIBLE', 'PENDING_MODERATION', 'HIDDEN'] as co
 export const REVIEW_EDIT_DAYS = 7;
 
 /** Photos a courier uploads (stored privately; referenced as `/files/<id>`). */
-export const COURIER_PHOTO_PURPOSES = ['HANDOFF', 'SAFE_PLACE', 'PROFILE', 'EQUIPMENT', 'ISSUE'] as const;
+export const COURIER_PHOTO_PURPOSES = ['HANDOFF', 'SAFE_PLACE', 'PROFILE', 'EQUIPMENT', 'ISSUE', 'CERTIFICATE'] as const;
 export type CourierPhotoPurpose = (typeof COURIER_PHOTO_PURPOSES)[number];

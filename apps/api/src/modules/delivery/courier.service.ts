@@ -624,7 +624,10 @@ export class CourierService {
         }
         case 'ID_CHECK_FAILED': {
           if (!job.requirements.includes('ALCOHOL')) throw new BadRequestException('This order has no restricted items');
-          await this.delivery.transition(job.id, 'RETURNED', { reason: 'ID check failed: restricted items returned', costOwner: 'CUSTOMER' }, tx);
+          if (job.status !== 'PICKED_UP') throw new ConflictException('Only an order you are carrying can be refused at the door');
+          // Courier R4: same path as a refused handoff (custody stays with the courier until the kitchen confirms receipt)
+          const r = await this.delivery.special.refuseTx(tx, job, d.id, user.sub, 'NO_ID', note);
+          incidentId = (r.special as { refusal?: { incidentId?: string } }).refusal?.incidentId ?? undefined;
           outcome = `Don’t hand over the restricted items. Return the order to the kitchen; you’ll get ${(policy.returnCents / 100).toFixed(2)} return pay.`;
           break;
         }

@@ -22,10 +22,12 @@ import { CourierForecastService } from './courier-forecast.service';
 import { CourierIncentivesService } from './courier-incentives.service';
 import { CourierFraudService } from './courier-fraud.service';
 import { CourierPayoutsService } from './courier-payouts.service';
+import { CourierR4Controller } from './courier-r4.controller';
+import { CourierSpecialService } from './courier-special.service';
 
 @Global()
 @Module({
-  controllers: [CourierController, CourierR3Controller, DeliveryPolicyController, DeliveryController, DeliveryFollowupsController],
+  controllers: [CourierController, CourierR3Controller, CourierR4Controller, DeliveryPolicyController, DeliveryController, DeliveryFollowupsController],
   providers: [
     MockDeliveryProvider,
     DoorDashDriveProvider,
@@ -49,11 +51,12 @@ import { CourierPayoutsService } from './courier-payouts.service';
     CourierFraudService,
     CourierForecastService,
     CourierPayoutsService,
+    CourierSpecialService,
     DeliveryService,
     DeliveryAdminService,
     CourierFilesService,
     CourierService,
   ],
-  exports: [CourierService, CourierIncentivesService, CourierFraudService, CourierForecastService, CourierPayoutsService, DeliveryPolicyService, DeliveryService, DeliveryAdminService, DeliveryProviderRegistry, RoutingService, LiveService, StorageService],
+  exports: [CourierService, CourierSpecialService, CourierIncentivesService, CourierFraudService, CourierForecastService, CourierPayoutsService, DeliveryPolicyService, DeliveryService, DeliveryAdminService, DeliveryProviderRegistry, RoutingService, LiveService, StorageService],
 })
 export class DeliveryModule {}

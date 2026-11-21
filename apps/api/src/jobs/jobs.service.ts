@@ -13,6 +13,7 @@ import { CourierService } from '../modules/delivery/courier.service';
 import { CourierForecastService } from '../modules/delivery/courier-forecast.service';
 import { CourierIncentivesService } from '../modules/delivery/courier-incentives.service';
 import { CourierFraudService } from '../modules/delivery/courier-fraud.service';
+import { CourierSpecialService } from '../modules/delivery/courier-special.service';
 import { CourierPayoutsService } from '../modules/delivery/courier-payouts.service';
 import { ReservationsService } from '../modules/reservations/reservations.service';
 import { EventsService } from '../modules/events/events.service';
@@ -63,6 +64,7 @@ export class JobsService {
     private readonly courierForecast: CourierForecastService,
     private readonly courierIncentives: CourierIncentivesService,
     private readonly courierFraud: CourierFraudService,
+    private readonly courierSpecial: CourierSpecialService,
     private readonly courierPayouts: CourierPayoutsService,
     private readonly reservations: ReservationsService,
     private readonly events: EventsService,
@@ -116,6 +118,8 @@ export class JobsService {
   @Interval(60_000) supportSla() { return this.locked('support-sla', 60_000, () => this.support.slaSweep()); }
   // Courier R3: campaign windows and settlement, hourly fraud patterns, forecast (nightly when stale) + partner fee postings
   @Interval(900_000) courierCampaigns() { return this.locked('courier-campaigns', 600_000, () => this.courierIncentives.sweep()); }
+  // Courier R4: certification expiry and refused orders the kitchen hasn't received
+  @Interval(3_600_000) courierSpecialSweep() { return this.locked('courier-special', 600_000, () => this.courierSpecial.sweep()); }
   @Interval(3_600_000) courierFraudPatterns() { return this.locked('courier-fraud', 600_000, () => this.courierFraud.patternSweep()); }
   @Interval(3_600_000) courierForecastAndRecon() { return this.locked('courier-forecast-recon', 900_000, async () => ({ forecast: await this.courierForecast.rebuildIfStale(), recon: await this.courierPayouts.runRecon() })); }
   @Interval(3_600_000) deliveryHousekeepingDaily() { return this.locked('delivery-docs-proofs', 600_000, async () => ({ docs: await this.delivery.expireCourierDocs(), checks: await this.courier.expireChecks(), proofs: await this.delivery.purgeProofs() })); }

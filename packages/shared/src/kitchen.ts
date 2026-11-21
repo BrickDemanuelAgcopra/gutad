@@ -1,8 +1,8 @@
 /** Kitchen display, packing and handoff contracts shared by API, web and mobile (Phase F). */
 
-export const HANDLING_FLAGS = ['HOT', 'COLD', 'FRAGILE', 'ALLERGEN'] as const;
+export const HANDLING_FLAGS = ['HOT', 'COLD', 'FRAGILE', 'ALLERGEN', 'SENSITIVE', 'TEMP_CONTROLLED'] as const;
 export type HandlingFlag = (typeof HANDLING_FLAGS)[number];
-export const HANDLING_LABELS: Record<HandlingFlag, string> = { HOT: 'Hot', COLD: 'Cold', FRAGILE: 'Fragile', ALLERGEN: 'Allergy order' };
+export const HANDLING_LABELS: Record<HandlingFlag, string> = { HOT: 'Hot', COLD: 'Cold', FRAGILE: 'Fragile', ALLERGEN: 'Allergy order', SENSITIVE: 'Sensitive (sealed, named recipient)', TEMP_CONTROLLED: 'Temperature-controlled' };
 
 /** 13.6 reason codes for remakes, missing items and quality failures. */
 export const KITCHEN_EVENT_KINDS = ['REMAKE', 'MISSING', 'QUALITY_FAIL'] as const;

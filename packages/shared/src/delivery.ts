@@ -2,7 +2,7 @@
 
 export const VEHICLE_TYPES = ['BIKE', 'EBIKE', 'SCOOTER', 'CAR', 'VAN', 'WALK'] as const;
 export type VehicleType = (typeof VEHICLE_TYPES)[number];
-export const COURIER_CAPABILITIES = ['ALCOHOL', 'LARGE_ORDER', 'COLD_BAG', 'HOT_BAG'] as const;
+export const COURIER_CAPABILITIES = ['ALCOHOL', 'LARGE_ORDER', 'COLD_BAG', 'HOT_BAG', 'CATERING', 'SENSITIVE', 'TEMP_CONTROLLED'] as const;
 export type CourierCapability = (typeof COURIER_CAPABILITIES)[number];
 /** Capabilities a job can require outright; COLD_BAG / HOT_BAG only improve a courier's score. */
 export const HARD_REQUIREMENTS: CourierCapability[] = ['ALCOHOL', 'LARGE_ORDER'];

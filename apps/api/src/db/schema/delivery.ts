@@ -129,7 +129,7 @@ export const deliveryJobs = pgTable('delivery_jobs', {
   batchId: uuid('batch_id'),
   /** 17.5 offer rounds so far */
   offerAttempts: integer('offer_attempts').notNull().default(0),
-  /** 16.3 ALCOHOL | LARGE_ORDER | COLD_BAG */
+  /** 16.3 ALCOHOL | LARGE_ORDER | COLD_BAG | HOT_BAG; Courier R4 CATERING | SENSITIVE | TEMP_CONTROLLED | HIGH_VALUE */
   requirements: text('requirements').array().notNull().default([]),
   /** 17.7 { kind, attempts: [{ at, method, note }], waitUntil, resolution, resolvedAt } */
   exception: jsonb('exception'),
@@ -173,6 +173,8 @@ export const deliveryJobs = pgTable('delivery_jobs', {
   /** Courier R3: variance (actual + cancel fee − quoted) booked to the ledger */
   reconciledAt: ts('reconciled_at'),
   reconVarianceCents: integer('recon_variance_cents'),
+  /** Courier R4 specialised-category handoff record: { ageCheck, recipientName, sealIntact, temps, breach, catering, refusal, returnReceived, premium } */
+  special: jsonb('special').notNull().default({}),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index('delivery_jobs_hold_idx').on(t.status, t.holdUntil)]);
@@ -237,7 +239,7 @@ export const driverEarnings = pgTable('driver_earnings', {
   campaignId: uuid('campaign_id'),
   createdAt: createdAt(),
 }, (t) => [
-  uniqueIndex('driver_earnings_job_kind_uq').on(t.deliveryJobId, t.kind).where(sql`delivery_job_id is not null and kind in ('DELIVERY','CANCEL_COMP')`),
+  uniqueIndex('driver_earnings_job_kind_uq').on(t.deliveryJobId, t.kind).where(sql`delivery_job_id is not null and kind in ('DELIVERY','CANCEL_COMP','SPECIAL')`),
   uniqueIndex('driver_earnings_job_campaign_uq').on(t.deliveryJobId, t.campaignId).where(sql`kind = 'INCENTIVE' and delivery_job_id is not null`),
   uniqueIndex('driver_earnings_driver_campaign_uq').on(t.driverId, t.campaignId).where(sql`kind = 'INCENTIVE' and delivery_job_id is null`),
 ]);

@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, inArray, notInArray } from 'drizzle-orm';
-import { bearing, bearingDiff, DEFAULT_BATCHING, DEFAULT_DISPATCH, DEFAULT_PAY_POLICY, DEFAULT_READY_SYNC, type BatchingConfig, type CourierPayPolicy, type DispatchConfig, type Manifest, type ManifestBrand, type ReadySyncConfig } from '@gutad/shared';
+import { bearing, bearingDiff, NO_BATCH_CATEGORIES, DEFAULT_BATCHING, DEFAULT_DISPATCH, DEFAULT_PAY_POLICY, DEFAULT_READY_SYNC, type BatchingConfig, type CourierPayPolicy, type DispatchConfig, type Manifest, type ManifestBrand, type ReadySyncConfig } from '@gutad/shared';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { brands, courierMarketPolicies, deliveryJobs, locations, orderLines, orders, packingTasks, regions } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
@@ -72,6 +72,8 @@ export class DeliveryPolicyService {
     if (carried.status !== 'ASSIGNED') why.push('The first order is already picked up');
     if (carried.kitchenKey !== next.kitchenKey) why.push('Different pickup kitchens');
     for (const r of cfg.excludeRequirements) if (carried.requirements.includes(r) || next.requirements.includes(r)) why.push(`${r} orders are not batched`);
+    // Courier R4: specialised categories ride alone (temperature-controlled may still batch)
+    for (const r of NO_BATCH_CATEGORIES) if (!cfg.excludeRequirements.includes(r) && (carried.requirements.includes(r) || next.requirements.includes(r))) why.push(`${r} orders are not batched`);
     const temp = (j: BatchCandidate) => (j.requirements.includes('COLD_BAG') ? 'COLD' : j.requirements.includes('HOT_BAG') ? 'HOT' : null);
     if (!cfg.allowMixedTemperature && temp(carried) && temp(next) && temp(carried) !== temp(next)) why.push('Hot and cold orders are not mixed');
     const p = carried.pickup, a = carried.dropoff, b = next.dropoff;

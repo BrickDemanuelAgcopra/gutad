@@ -20,6 +20,7 @@ import { RedisService } from '../../core/redis.service';
 import { storedFileId, viewableUrl } from './file-links';
 import { CourierIncentivesService, type OfferIncentive } from './courier-incentives.service';
 import { CourierFraudService } from './courier-fraud.service';
+import { CourierSpecialService, type SpecialPremium } from './courier-special.service';
 
 type Status = (typeof deliveryJobs.status.enumValues)[number];
 
@@ -42,6 +43,7 @@ export class DeliveryService {
     readonly policy: DeliveryPolicyService,
     readonly incentives: CourierIncentivesService,
     readonly fraud: CourierFraudService,
+    readonly special: CourierSpecialService,
   ) {}
 
   // ───── 17.9-M partner providers in priority order ─────
@@ -261,7 +263,8 @@ export class DeliveryService {
     const estReadyAt = o?.status === 'READY' ? (o.readyAt ?? new Date()) : (job.estReadyAt ?? this.estimateReady(o ?? null, eff.readySync));
     const requirements = await this.requirementsFor(job, tx);
     const manifest = await this.policy.manifest([{ ...job, requirements }], tx);
-    await tx.update(deliveryJobs).set({ estReadyAt, readyAt: o?.status === 'READY' ? estReadyAt : job.readyAt, marketId: eff.market?.id ?? null, manifest, requirements }).where(eq(deliveryJobs.id, job.id));
+    const specialSnap = await this.special.snapshot(job, requirements, tx);
+    await tx.update(deliveryJobs).set({ estReadyAt, readyAt: o?.status === 'READY' ? estReadyAt : job.readyAt, marketId: eff.market?.id ?? null, manifest, requirements, ...(specialSnap ? { special: specialSnap } : {}) }).where(eq(deliveryJobs.id, job.id));
     if (job.fleet === 'PARTNER') {
       const provider = this.providers.get(job.provider);
       let result = await provider.findByExternalId(externalId);
@@ -292,7 +295,9 @@ export class DeliveryService {
     if (job.fleet === 'PLATFORM') {
       // Courier R2: offers are held until shortly before the food is due (a courier who must leave now gets it now)
       const ready = o?.status === 'READY';
-      const holdUntil = eff.readySync.enabled && !ready ? new Date(estReadyAt.getTime() - (eff.readySync.pickupTravelMinutes + eff.readySync.offerLeadMinutes) * 60_000) : null;
+      // Courier R4: a scheduled catering order is offered a set time ahead, so a qualified courier is lined up early
+      const cateringHold = await this.special.cateringHold(job, requirements, tx);
+      const holdUntil = cateringHold ?? (eff.readySync.enabled && !ready ? new Date(estReadyAt.getTime() - (eff.readySync.pickupTravelMinutes + eff.readySync.offerLeadMinutes) * 60_000) : null);
       const held = !!holdUntil && holdUntil.getTime() > Date.now();
       // Courier R1: the customer's handoff PIN (accepted as proof of delivery)
       const [u] = await tx.update(deliveryJobs).set({ status: 'REQUESTED', handoffPin: job.handoffPin ?? String(Math.floor(1000 + Math.random() * 9000)), holdUntil: held ? holdUntil : null }).where(eq(deliveryJobs.id, job.id)).returning();
@@ -366,6 +371,7 @@ export class DeliveryService {
     if (u.fleet === 'PLATFORM' && u.driverId && ['DELIVERED', 'RETURNED', 'FAILED', 'CANCELED'].includes(status)) {
       await this.courierPay(u, status, tx);
       if (status === 'DELIVERED') await this.incentives.payBoosts(u, tx);
+      if (status === 'DELIVERED') await this.special.payPremium(u, tx);
       await this.afterJobClosed(u.driverId, tx);
     }
     if (status === 'DELIVERED') {
@@ -810,6 +816,8 @@ export class DeliveryService {
     if (ls.reduce((a, l) => a + l.q, 0) > 10 || (o?.sub ?? 0) >= 15000) req.push('LARGE_ORDER');
     if (ls.some((l) => l.handling?.includes('COLD'))) req.push('COLD_BAG');
     if (ls.some((l) => l.handling?.includes('HOT'))) req.push('HOT_BAG');
+    // Courier R4 specialised categories (catering, sensitive, temperature-controlled, high value)
+    for (const c of await this.special.categoriesFor(job.orderId, tx)) if (!req.includes(c)) req.push(c);
     return req;
   }
 
@@ -854,6 +862,9 @@ export class DeliveryService {
     const locIds = Array.from(new Set(active.map((j) => j.locationId)));
     if (locIds.length) for (const l of await tx.select({ id: locations.id, k: locations.kitchenId }).from(locations).where(inArray(locations.id, locIds))) kitchens.set(l.id, l.k ?? `location:${l.id}`);
     const hard = reqs.filter((r) => (HARD_REQUIREMENTS as string[]).includes(r));
+    // Courier R4: category certifications, vehicle, cold bag + transit limit, high-value tenure
+    const sctx = await this.special.dispatchCtx(reqs, tx);
+    const tripKmEst = job.distanceKm ?? (drop.lat !== undefined && drop.lng !== undefined && pickup.lat !== undefined && pickup.lng !== undefined ? haversineKm(pickup.lat, pickup.lng, drop.lat, drop.lng) : 3);
     const scored: { d: typeof available[number]; score: number; detail: Record<string, unknown> }[] = [];
     for (const d of available) {
       if (expired.has(d.id) || tried.has(d.id) || d.lastLat === null || d.lastLng === null || pickup.lat === undefined || pickup.lng === undefined) continue;
@@ -861,6 +872,7 @@ export class DeliveryService {
       if (d.zoneIds.length && job.zoneId && !d.zoneIds.includes(job.zoneId)) continue;
       const km = haversineKm(d.lastLat, d.lastLng, pickup.lat, pickup.lng);
       if (km > cfg.radiusKm) continue;
+      if (sctx && this.special.ineligible(d, reqs, sctx, (km + tripKmEst) * cfg.travelMinutesPerKm + 5)) continue;
       const mine = active.filter((j) => j.driverId === d.id);
       const trips = mine.length;
       let batchWith: string | null = null;
@@ -901,7 +913,9 @@ export class DeliveryService {
       const pay = offerPay(policy, tripKm, estMinutes);
       const incentives = await this.incentives.offerBoosts({ zoneId: job.zoneId, marketId: job.marketId ?? eff.market?.id ?? null }, r.d, pay.totalCents, tx);
       const incentiveCents = incentives.reduce((t, i) => t + i.cents, 0);
-      rowsOut.push({ driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents + incentiveCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market, incentives }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail });
+      const special = sctx ? this.special.premium(reqs, sctx.cfg) : [];
+      const specialCents = special.reduce((t, p) => t + p.cents, 0);
+      rowsOut.push({ driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents + incentiveCents + specialCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market, incentives, special }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail });
     }
     await tx.insert(driverOffers).values(rowsOut);
     await this.event(job.id, 'OFFERED', { round: attempts, couriers: pick.map((r) => ({ driverId: r.d.id, score: r.score })) }, tx);
@@ -959,21 +973,24 @@ export class DeliveryService {
     // Courier R2: readiness, the multi-brand manifest and the market
     const marketIds = Array.from(new Set(rows.map((r) => r.job.marketId).filter((x): x is string => !!x)));
     const marketNames = new Map(marketIds.length ? (await this.db.select({ id: regions.id, name: regions.name }).from(regions).where(inArray(regions.id, marketIds))).map((m) => [m.id, m.name]) : []);
+    const scfg = await this.special.cfg();
+    const handoffs = new Map(await Promise.all(rows.map(async (r) => [r.job.id, await this.special.handoffFor(r.job, scfg)] as const)));
     return rows.map((r) => {
-      const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number; incentives?: OfferIncentive[] };
+      const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number; incentives?: OfferIncentive[]; special?: SpecialPremium[] };
       const incentives = b.incentives ?? [];
+      const special = b.special ?? [];
       const pu = r.job.pickupAddress as Address;
       const dr = r.job.dropoffAddress as Address;
       const batchWith = (r.offer.scoreDetail as { batchWith?: string } | null)?.batchWith ?? null;
       const equipment = ['INSULATED_BAG', ...(r.job.requirements.includes('COLD_BAG') ? ['COLD_BAG'] : [])];
       return {
         id: r.offer.id, deliveryJobId: r.offer.deliveryJobId, expiresAt: r.offer.expiresAt, payCents: r.offer.payCents,
-        pay: { ...(b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }), incentiveCents: incentives.reduce((t, i) => t + i.cents, 0), incentives }, tipCents: r.job.tipCents,
+        pay: { ...(b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }), incentiveCents: incentives.reduce((t, i) => t + i.cents, 0), incentives, specialCents: special.reduce((t, p) => t + p.cents, 0), special }, tipCents: r.job.tipCents,
         stops: batchWith ? 3 : 2, pickup: { name: pu.contactName ?? null, line1: pu.line1, city: pu.city }, dropoffArea: { city: dr.city, postalCode: dr.postalCode },
         readiness: this.readiness(r.job), manifest: r.job.manifest as Manifest | null,
         market: r.job.marketId ? { id: r.job.marketId, name: marketNames.get(r.job.marketId) ?? null } : null,
         distanceKm: b.distanceKm ?? r.job.distanceKm, toPickupKm: b.toPickupKm ?? null, estMinutes: b.estMinutes ?? null,
-        requirements: r.job.requirements, equipment,
+        requirements: r.job.requirements, equipment, categories: handoffs.get(r.job.id)!.categories, handoff: handoffs.get(r.job.id)!,
         policy: b.policy ? { version: b.policy.version, waitingGraceMinutes: b.policy.waitingGraceMinutes, waitingPerMinuteCents: b.policy.waitingPerMinuteCents, returnCents: b.policy.returnCents, cancelAfterArrivalCents: b.policy.cancelAfterArrivalCents, waitingCapMinutes: b.policy.waitingCapMinutes ?? DEFAULT_PAY_POLICY.waitingCapMinutes, dropoffGraceMinutes: b.policy.dropoffGraceMinutes ?? DEFAULT_PAY_POLICY.dropoffGraceMinutes } : null,
         batchWith, score: r.offer.score, scoreDetail: r.offer.scoreDetail,
       };
@@ -997,8 +1014,8 @@ export class DeliveryService {
       const tripsNow = mineNow.length;
       if (tripsNow && (!mateId || !mineNow.some((j) => j.id === mateId) || tripsNow >= d.maxConcurrent)) throw new ConflictException({ message: 'You already have as many orders as you can carry', code: 'AT_CAPACITY' });
       // first accept wins: the conditional update awards the job to exactly one courier; the accepted pay is kept on the job
-      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number; market?: { id: string; version: number } | null; incentives?: OfferIncentive[] } | null;
-      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, holdUntil: null, acceptedReadyAt: sql`${deliveryJobs.estReadyAt}`, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id, market: b.market ?? null, incentives: b.incentives ?? [] } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
+      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number; market?: { id: string; version: number } | null; incentives?: OfferIncentive[]; special?: SpecialPremium[] } | null;
+      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, holdUntil: null, acceptedReadyAt: sql`${deliveryJobs.estReadyAt}`, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id, market: b.market ?? null, incentives: b.incentives ?? [], special: b.special ?? [] } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
       if (!job) throw new ConflictException('Job already taken');
       await tx.update(driverOffers).set({ status: 'ACCEPTED', respondedAt: new Date() }).where(eq(driverOffers.id, offerId));
       await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.status, 'OFFERED')));
@@ -1024,16 +1041,21 @@ export class DeliveryService {
     const d = await this.myDriver(user);
     const rows = await this.db.select({ j: deliveryJobs, number: orders.number, shelfSlot: orders.shelfSlot }).from(deliveryJobs).leftJoin(orders, eq(orders.id, deliveryJobs.orderId)).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP']))).orderBy(deliveryJobs.batchId, deliveryJobs.createdAt);
     // the PIN itself never goes to the courier; the order code is what the kitchen shows on the bag
-    return rows.map(({ j, number, shelfSlot }) => ({ ...j, handoffPin: undefined, pinAvailable: !!j.handoffPin, orderCode: number ? String(number).slice(-4) : j.id.slice(0, 4).toUpperCase(), requiresIdCheck: j.requirements.includes('ALCOHOL'), readiness: this.readiness(j), shelfSlot: j.readyAt ? shelfSlot : null }));
+    const scfg = await this.special.cfg();
+    return Promise.all(rows.map(async ({ j, number, shelfSlot }) => {
+      const handoff = await this.special.handoffFor(j, scfg);
+      const sp = (j.special ?? {}) as Record<string, unknown>;
+      return { ...j, handoffPin: undefined, special: { temps: sp.temps ?? [], breach: sp.breach ?? null, catering: sp.catering ?? null, refusal: sp.refusal ?? null }, pinAvailable: !!j.handoffPin, orderCode: number ? String(number).slice(-4) : j.id.slice(0, 4).toUpperCase(), requiresIdCheck: j.requirements.includes('ALCOHOL'), categories: handoff.categories, handoff, readiness: this.readiness(j), shelfSlot: j.readyAt ? shelfSlot : null };
+    }));
   }
 
-  async driverTransition(user: JwtPayload, jobId: string, status: 'PICKED_UP' | 'DELIVERED' | 'FAILED', data: { proofPhotoUrl?: string; proofSignature?: string; handoffPin?: string; idChecked?: boolean; pickupCheck?: { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string; brands?: { brandKey: string; bagCount: number; sealIntact: boolean }[] }; reason?: string; lat?: number; lng?: number; clientEventId?: string }) {
+  async driverTransition(user: JwtPayload, jobId: string, status: 'PICKED_UP' | 'DELIVERED' | 'FAILED', data: { proofPhotoUrl?: string; proofSignature?: string; handoffPin?: string; idChecked?: boolean; pickupCheck?: { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string; brands?: { brandKey: string; bagCount: number; sealIntact: boolean }[] }; reason?: string; lat?: number; lng?: number; clientEventId?: string; ageCheck?: { dob: string; idType: string; idLast4?: string }; recipientName?: string; sealIntact?: boolean }) {
     const d = await this.myDriver(user);
     const [job] = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.id, jobId), eq(deliveryJobs.driverId, d.id))).limit(1);
     if (!job) throw new NotFoundException();
     // a retried update from an app that lost its connection: answer with the current state instead of failing
     if (job.status === status) return job;
-    const { pickupCheck, handoffPin, idChecked, ...rest } = data;
+    const { pickupCheck, handoffPin, idChecked, ageCheck, recipientName, sealIntact, ...rest } = data;
     const patch: Partial<typeof deliveryJobs.$inferInsert> = {};
     if (status === 'PICKED_UP') {
       if (job.status !== 'ASSIGNED') throw new ConflictException(`Delivery is ${job.status}`);
@@ -1054,14 +1076,17 @@ export class DeliveryService {
     }
     if (status === 'DELIVERED') {
       if (job.status !== 'PICKED_UP') throw new ConflictException('Pick the order up first');
-      if (job.requirements.includes('ALCOHOL') && !idChecked) throw new BadRequestException({ message: 'Check the customer’s ID before handing over restricted items', code: 'ID_CHECK_REQUIRED' });
+      // Courier R4: age check (DOB -> age, ID type, hours), sensitive (signature, named recipient, seal), high value (PIN), catering checklist
+      const sp = await this.special.checkHandoff(job, { ageCheck, idChecked, recipientName, sealIntact, proofSignature: data.proofSignature, handoffPin });
+      if (sp) patch.special = sp;
+      if (job.requirements.includes('ALCOHOL') && !idChecked && !sp?.ageCheck) throw new BadRequestException({ message: 'Check the customer’s ID before handing over restricted items', code: 'ID_CHECK_REQUIRED' });
       if (handoffPin !== undefined && handoffPin !== '') {
         if (!job.handoffPin || handoffPin.trim() !== job.handoffPin) throw new BadRequestException({ message: 'That PIN doesn’t match. Ask the customer to check their order page.', code: 'PIN_MISMATCH' });
         patch.handoffMethod = 'PIN';
       } else if (data.proofPhotoUrl) { await this.assertOwnPhoto(d.id, data.proofPhotoUrl); patch.handoffMethod = 'PHOTO'; }
       else if (data.proofSignature) patch.handoffMethod = 'SIGNATURE';
       else throw new BadRequestException({ message: 'Proof of handoff required: a photo, the customer’s PIN or a signature', code: 'PROOF_REQUIRED' });
-      if (idChecked) patch.idCheckedAt = new Date();
+      if (idChecked || sp?.ageCheck) patch.idCheckedAt = new Date();
       if (!job.arrivedDropoffAt) patch.arrivedDropoffAt = new Date();
     }
     return this.db.transaction(async (tx) => {
@@ -1069,6 +1094,8 @@ export class DeliveryService {
       const u = await this.transition(jobId, status, { ...rest, handoffMethod: patch.handoffMethod, costOwner: status === 'FAILED' ? 'PLATFORM' : undefined }, tx);
       // Courier R3: handoff far from the drop-off, or a proof photo seen before
       if (status === 'DELIVERED') await this.fraud.onDelivered(u, d.id, { lat: data.lat ?? d.lastLat, lng: data.lng ?? d.lastLng }, tx);
+      // Courier R4: transit-time breach on temperature-controlled orders (support case; never blocks the handoff)
+      if (status === 'DELIVERED') await this.special.onDelivered(u, user.sub, tx);
       return u;
     });
   }
@@ -1128,6 +1155,7 @@ export class DeliveryService {
     if (!ex || ex.resolution) throw new ConflictException('No open exception on this delivery');
     if (!staff && new Date(ex.waitUntil) > new Date()) throw new ConflictException({ message: `Keep trying until ${new Date(ex.waitUntil).toLocaleTimeString()}`, code: 'WAIT_TIMER' });
     if (input.resolution === 'SAFE_PLACE' && !input.proofPhotoUrl) throw new BadRequestException('A photo is required when leaving the order');
+    if (input.resolution === 'SAFE_PLACE') this.special.assertSafePlaceAllowed(job);
     if (!staff && input.proofPhotoUrl && job.driverId) await this.assertOwnPhoto(job.driverId, input.proofPhotoUrl);
     return this.db.transaction(async (tx) => {
       await tx.update(deliveryJobs).set({ exception: { ...ex, resolution: input.resolution, resolvedAt: new Date().toISOString(), note: input.note } }).where(eq(deliveryJobs.id, jobId));

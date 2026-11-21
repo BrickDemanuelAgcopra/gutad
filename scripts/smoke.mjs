@@ -33,6 +33,7 @@ import { chefPhaseI } from './smoke-chef-i.mjs';
 import { courierR1 } from './smoke-courier-r1.mjs';
 import { courierR2 } from './smoke-courier-r2.mjs';
 import { courierR3 } from './smoke-courier-r3.mjs';
+import { courierR4 } from './smoke-courier-r4.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -523,6 +524,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await courierR1({ call, check, A, O, C });
   await courierR2({ call, check, A, O, C });
   await courierR3({ call, check, A, O, C });
+  await courierR4({ call, check, A, O, C });
   const chefA = await chefPhaseA({ call, check, A, O, C, API: FAPI });
   await chefPhaseB({ call, check, A, O, C, API: FAPI, ...chefA });
   await chefPhaseC({ call, check, A, O, C, API: FAPI, ...chefA });

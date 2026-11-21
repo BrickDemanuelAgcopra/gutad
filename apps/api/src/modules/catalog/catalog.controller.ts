@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
+import { HANDLING_FLAGS } from '@gutad/shared';
 import { CurrentUser, JwtPayload, Public } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { CatalogService } from './catalog.service';
@@ -31,7 +32,7 @@ const ItemDto = z.object({
   taxCategory: z.string().optional(),
   maxPerOrder: z.number().int().min(1).nullable().optional(),
   cookMinutes: z.number().int().min(0).max(240).nullable().optional(),
-  handling: z.array(z.enum(['HOT', 'COLD', 'FRAGILE', 'ALLERGEN'])).optional(),
+  handling: z.array(z.enum(HANDLING_FLAGS)).optional(),
   isActive: z.boolean().optional(),
   allergenReviewNeeded: z.boolean().optional(),
   reason: z.string().optional(),
