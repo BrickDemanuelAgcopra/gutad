@@ -38,6 +38,8 @@ const CODE_TEXT: Record<string, string> = {
   SEAL_BROKEN: 'The seal is broken, so you can’t take this order. Report “Damaged packaging or broken seal” below.',
   WRONG_ANSWER: 'Not quite. Read the module again and try another answer.',
   ONBOARDING_INCOMPLETE: 'Some steps still need to be finished.',
+  AT_CAPACITY: 'You already have as many orders as you can carry.',
+  MANIFEST_INCOMPLETE: 'Some brands’ bags are missing. Collect every brand’s bags before you leave.',
 };
 export const errCode = (e: unknown): string | undefined => (e instanceof GutadApiError ? (e.body as unknown as { code?: string } | null)?.code : undefined);
 export const friendlyError = (e: unknown) => {

@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Linking, Text, View } from 'react-native';
-import { EQUIPMENT_LABELS, LIFECYCLE_LABELS, NOT_DISPATCHABLE_LABELS, TRIP_ISSUES, type EquipmentItem, type LifecycleStatus, type TripIssue } from '@gutad/shared';
+import { EQUIPMENT_LABELS, LIFECYCLE_LABELS, NOT_DISPATCHABLE_LABELS, TRIP_ISSUES, type EquipmentItem, type LifecycleStatus, type Manifest, type TripIssue } from '@gutad/shared';
 import { api, money } from '../api';
 import { useAction } from '../hooks';
 import { Badge, Button, C, Card, ErrorText, Input, Muted, s, tone } from '../ui';
 import { Choice, Toggle } from '../chef-ui';
-import { currentPos, errCode, label, mins, useCountdown, type Addr, type DriverStatus, type Job, type Offer } from './common';
+import { currentPos, errBody, errCode, label, mins, readyText, useCountdown, type Addr, type DriverStatus, type Job, type Offer } from './common';
 import { sendOrQueue } from './queue';
 import { PhotoCapture, type UploadedPhoto } from './photo';
 
@@ -68,25 +68,50 @@ export function FirstDeliveryGuide() {
   );
 }
 
+const itemCount = (m: Manifest['brands'][number]) => m.items.reduce((n, i) => n + i.quantity, 0);
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+/** Courier R2: what to collect, brand by brand, with item and bag counts. */
+function ManifestList({ m }: { m: Manifest }) {
+  return (
+    <View style={{ marginTop: 4 }}>
+      {m.brands.map((b) => <Muted key={b.brandKey}>• {b.brandName} #{b.orderNumber}: {plural(itemCount(b), 'item')} · {plural(b.bagCount, 'bag')}</Muted>)}
+      <Text style={{ color: C.ink, fontWeight: '600' }}>Total: {plural(m.totals.bags, 'bag')}{m.brands.length > 1 ? ` from ${m.brands.length} brands` : ''}</Text>
+    </View>
+  );
+}
+
+function ReadyChip({ r }: { r: Offer['readiness'] }) {
+  const x = readyText(r);
+  return x ? <Badge text={x.text} tone={x.tone} /> : null;
+}
+
 export function OfferCard({ o, onDone }: { o: Offer; onDone: () => void }) {
   const left = useCountdown(o.expiresAt);
   const { run, error, busy } = useAction();
+  const [full, setFull] = useState(false);
   if (left <= 0) return null;
-  const reply = (accept: boolean) => run(async () => { await api.post(`/driver/offers/${o.id}`, { accept }); onDone(); });
+  const reply = (accept: boolean) => run(async () => {
+    setFull(false);
+    try { await api.post(`/driver/offers/${o.id}`, { accept }); onDone(); } catch (e) { if (errCode(e) === 'AT_CAPACITY') { setFull(true); return; } throw e; }
+  });
   const p = o.policy;
   return (
     <View style={{ marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.ink1 }}>
       <View style={s.row}><Text style={{ fontSize: 20, fontWeight: '800', color: C.ink }}>{money(o.pay?.totalCents ?? o.payCents)}</Text><Badge text={`${left}s`} tone={left < 20 ? 'bad' : 'warn'} /></View>
       <Muted>Guaranteed: base {money(o.pay?.baseCents || 0)} + distance {money(o.pay?.distanceCents || 0)}{o.pay?.timeCents ? ` + time ${money(o.pay.timeCents)}` : ''}</Muted>
       {o.tipCents > 0 && <Text style={{ color: C.good }}>+ estimated tip {money(o.tipCents)} (100% yours, may change)</Text>}
+      {(o.readiness || o.market) && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><ReadyChip r={o.readiness} />{o.market && <Badge text={o.market.name} tone="info" />}</View>}
       <Text style={{ marginTop: 6, color: C.ink }}><Text style={{ fontWeight: '700' }}>Pick up:</Text> {o.pickup.name} · {o.pickup.line1}, {o.pickup.city}</Text>
+      {o.manifest && o.manifest.brands.length > 0 && <ManifestList m={o.manifest} />}
       <Text style={{ color: C.ink }}><Text style={{ fontWeight: '700' }}>Drop off:</Text> {o.dropoffArea.city} {o.dropoffArea.postalCode} <Text style={{ color: C.ink5 }}>(exact address after you accept)</Text></Text>
       <Muted>{o.stops} stop{o.stops === 1 ? '' : 's'} · {o.distanceKm.toFixed(1)} km trip · {o.toPickupKm.toFixed(1)} km to pickup · about {o.estMinutes} min</Muted>
       {o.batchWith && <Text style={{ color: C.info }}>Adds to your current trip (same pickup)</Text>}
       {o.requirements.includes('ALCOHOL') && <Text style={{ color: C.warn }}>Contains alcohol: check ID at handoff</Text>}
       {o.requirements.filter((r) => r !== 'ALCOHOL').length > 0 && <Muted>Needs: {o.requirements.filter((r) => r !== 'ALCOHOL').map(label).join(', ')}</Muted>}
       {o.equipment.length > 0 && <Muted>Bring: {o.equipment.map((e) => EQUIPMENT_LABELS[e as EquipmentItem] || label(e)).join(', ')}</Muted>}
-      {p && <Muted>Waiting paid after {p.waitingGraceMinutes} min at {money(p.waitingPerMinuteCents)}/min · return {money(p.returnCents)} · canceled after arrival {money(p.cancelAfterArrivalCents)}</Muted>}
+      {p && <Muted>Waiting paid after {p.waitingGraceMinutes} min at pickup{p.dropoffGraceMinutes != null ? ` and ${p.dropoffGraceMinutes} min at drop-off` : ''}, {money(p.waitingPerMinuteCents)}/min{p.waitingCapMinutes ? `, up to ${p.waitingCapMinutes} min` : ''} · return {money(p.returnCents)} · canceled after arrival {money(p.cancelAfterArrivalCents)}</Muted>}
+      {full && <Text style={{ color: C.warn }}>You already have as many orders as you can carry.</Text>}
       <ErrorText msg={error} />
       <View style={{ flexDirection: 'row', gap: 6 }}><Button title="Accept" disabled={busy} onPress={() => reply(true)} /><Button title="Decline" variant="ghost" disabled={busy} onPress={() => reply(false)} /></View>
     </View>
@@ -116,6 +141,11 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
   const [drinks, setDrinks] = useState('0');
   const [seal, setSeal] = useState(true);
   const [pickNote, setPickNote] = useState('');
+  // Courier R2: per-brand check when the order comes from several brands
+  const multi = (j.manifest?.brands.length || 0) > 1 ? j.manifest! : null;
+  const [brandBags, setBrandBags] = useState<Record<string, string>>(() => Object.fromEntries((j.manifest?.brands || []).map((b) => [b.brandKey, String(b.bagCount || 1)])));
+  const [brandSeal, setBrandSeal] = useState<Record<string, boolean>>(() => Object.fromEntries((j.manifest?.brands || []).map((b) => [b.brandKey, true])));
+  const [missing, setMissing] = useState<string[]>([]);
   // handoff
   const [method, setMethod] = useState<'PHOTO' | 'PIN' | 'SIGNATURE'>(j.pinRequired ? 'PIN' : 'PHOTO');
   const [pin, setPin] = useState('');
@@ -139,7 +169,14 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
       return r;
     } catch (e) {
       const c = errCode(e);
-      if (c && FRIENDLY[c]) { setMsg(FRIENDLY[c]); if (c === 'SEAL_BROKEN') { setPanel('issue'); setIssue('DAMAGED_PACKAGING'); } return undefined; }
+      if (c === 'MANIFEST_INCOMPLETE') { setMissing(errBody<{ missing?: string[] }>(e)?.missing || []); setMsg('Collect every brand’s bags before you leave.'); return undefined; }
+      if (c && FRIENDLY[c]) {
+        const broken = c === 'SEAL_BROKEN' ? (errBody<{ broken?: string[] }>(e)?.broken || multi?.brands.filter((x) => brandSeal[x.brandKey] === false).map((x) => x.brandKey) || []) : [];
+        const names = broken.map((k) => j.manifest?.brands.find((b) => b.brandKey === k)?.brandName || k);
+        setMsg(names.length ? `Broken seal: ${names.join(', ')}. ${FRIENDLY[c]}` : FRIENDLY[c]);
+        if (c === 'SEAL_BROKEN') { setPanel('issue'); setIssue('DAMAGED_PACKAGING'); }
+        return undefined;
+      }
       throw e;
     }
   });
@@ -152,6 +189,8 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
       <View style={s.row}><Text style={{ fontWeight: '700', flex: 1, color: C.ink }}>{atPickup ? 'Pick up at' : 'Deliver to'}: {atPickup ? j.pickupAddress.line1 : j.dropoffAddress.line1}</Text><Badge text={j.batchId ? `${label(j.status)} · batch` : label(j.status)} tone={tone(j.status)} /></View>
       <Muted>Pay {money(j.providerCostCents)} + tip {money(j.tipCents)}{!atPickup && j.dropoffAddress.instructions ? ` · ${j.dropoffAddress.instructions}` : ''}</Muted>
       {j.requiresIdCheck && <Text style={{ color: C.warn }}>Restricted items: check the customer’s ID at handoff</Text>}
+      {atPickup && (j.readiness || j.shelfSlot) && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><ReadyChip r={j.readiness} />{j.shelfSlot && <Badge text={`Shelf ${j.shelfSlot}`} tone="info" />}</View>}
+      {atPickup && j.manifest && j.manifest.brands.length > 0 && <ManifestList m={j.manifest} />}
       <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
         <Button title="Navigate" variant="secondary" onPress={() => nav(atPickup ? j.pickupAddress : j.dropoffAddress)} />
         {atPickup && !j.arrivedPickupAt && <Button title="Arrived at pickup" variant="secondary" disabled={busy} onPress={() => send(`/driver/jobs/${j.id}/arrived`, { at: 'PICKUP' }, 'Arrived at pickup')} />}
@@ -162,10 +201,37 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
         <View style={{ marginTop: 8, padding: 10, backgroundColor: C.bg, borderRadius: 10 }}>
           <Text style={{ fontWeight: '700', color: C.ink, marginBottom: 4 }}>Pickup check</Text>
           {j.orderCode ? <Toggle on={codeOk} onChange={setCodeOk} title={`Order code ${j.orderCode} matches the bag`} /> : null}
-          <View style={{ flexDirection: 'row', gap: 8 }}><View style={{ flex: 1 }}><Input label="Bags" keyboardType="number-pad" value={bags} onChangeText={setBags} /></View><View style={{ flex: 1 }}><Input label="Drinks" keyboardType="number-pad" value={drinks} onChangeText={setDrinks} /></View></View>
-          <Toggle on={seal} onChange={setSeal} title="All seals intact" text={seal ? undefined : 'Don’t take a bag with a broken seal; report it instead.'} />
+          {multi ? (
+            <>
+              {multi.brands.map((b) => (
+                <View key={b.brandKey} style={{ marginBottom: 6, paddingBottom: 4, borderBottomWidth: 1, borderColor: C.ink1 }}>
+                  <Text style={{ fontWeight: '600', color: C.ink }}>{b.brandName} #{b.orderNumber}</Text>
+                  {missing.includes(b.brandKey) && <Text style={{ color: C.bad }}>Collect this brand’s bags</Text>}
+                  <Input label="Bags" keyboardType="number-pad" value={brandBags[b.brandKey] ?? ''} onChangeText={(v) => { setBrandBags({ ...brandBags, [b.brandKey]: v }); setMissing(missing.filter((k) => k !== b.brandKey)); }} />
+                  <Toggle on={brandSeal[b.brandKey] !== false} onChange={(v) => setBrandSeal({ ...brandSeal, [b.brandKey]: v })} title="Seal intact" text={brandSeal[b.brandKey] === false ? 'Don’t take it; report damaged packaging.' : undefined} />
+                </View>
+              ))}
+              <Input label="Drinks" keyboardType="number-pad" value={drinks} onChangeText={setDrinks} />
+            </>
+          ) : (
+            <>
+              <View style={{ flexDirection: 'row', gap: 8 }}><View style={{ flex: 1 }}><Input label="Bags" keyboardType="number-pad" value={bags} onChangeText={setBags} /></View><View style={{ flex: 1 }}><Input label="Drinks" keyboardType="number-pad" value={drinks} onChangeText={setDrinks} /></View></View>
+              <Toggle on={seal} onChange={setSeal} title="All seals intact" text={seal ? undefined : 'Don’t take a bag with a broken seal; report it instead.'} />
+            </>
+          )}
           <Input label="Note (optional)" value={pickNote} onChangeText={setPickNote} />
-          <Button title="Picked up" disabled={busy || (!!j.orderCode && !codeOk) || !(Number(bags) >= 1)} onPress={() => send(`/driver/jobs/${j.id}/transition`, { status: 'PICKED_UP', pickupCheck: { orderCode: j.orderCode && codeOk ? j.orderCode : undefined, bagCount: Number(bags), drinkCount: Number(drinks) || 0, sealIntact: seal, note: pickNote.trim() || undefined } }, 'Picked up')} />
+          <Button title="Picked up" disabled={busy || (!!j.orderCode && !codeOk) || (multi ? multi.brands.some((b) => !(Number(brandBags[b.brandKey]) >= 1)) : !(Number(bags) >= 1))} onPress={() => {
+            const brands = multi ? multi.brands.map((b) => ({ brandKey: b.brandKey, bagCount: Number(brandBags[b.brandKey]) || 0, sealIntact: brandSeal[b.brandKey] !== false })) : undefined;
+            setMissing([]);
+            void send(`/driver/jobs/${j.id}/transition`, { status: 'PICKED_UP', pickupCheck: {
+              orderCode: j.orderCode && codeOk ? j.orderCode : undefined,
+              bagCount: brands ? brands.reduce((n, b) => n + b.bagCount, 0) : Number(bags),
+              drinkCount: Number(drinks) || 0,
+              sealIntact: brands ? brands.every((b) => b.sealIntact) : seal,
+              note: pickNote.trim() || undefined,
+              ...(brands ? { brands } : {}),
+            } }, 'Picked up');
+          }} />
         </View>
       )}
 

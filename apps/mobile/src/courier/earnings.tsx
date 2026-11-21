@@ -7,7 +7,7 @@ import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } fro
 import { Pills } from '../ops';
 import { label } from './common';
 
-interface Entry { id: string; kind: string; deliveryJobId: string | null; baseCents: number; distanceCents: number; timeCents: number; waitingCents: number; returnCents: number; tipCents: number; bonusCents: number; totalCents: number; reason: string | null; availableAt: string | null; createdAt: string }
+interface Entry { id: string; kind: string; deliveryJobId: string | null; baseCents: number; distanceCents: number; timeCents: number; waitingCents: number; returnCents: number; tipCents: number; bonusCents: number; totalCents: number; reason: string | null; availableAt: string | null; createdAt: string; detail?: { pickupWaitMinutes?: number; dropoffWaitMinutes?: number; kitchenDelayMinutes?: number } | null }
 interface Earnings {
   payableCents: number; pendingCents: number; availableCents: number;
   entries: Entry[]; days: { date: string; cents: number; deliveries: number }[]; weeks: { weekStart: string; cents: number; deliveries: number }[];
@@ -18,6 +18,13 @@ interface Feedback { ratingAvg: number | null; ratingCount: number; tagCounts: R
 
 const PARTS: [keyof Entry, string][] = [['baseCents', 'Base'], ['distanceCents', 'Distance'], ['timeCents', 'Time'], ['waitingCents', 'Waiting'], ['returnCents', 'Return'], ['bonusCents', 'Bonus'], ['tipCents', 'Tip']];
 const day = (d: string) => new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+/** Courier R2: " (waited 6 min at pickup, 2 min at drop-off)" from the entry's detail. */
+function waited(x: Entry) {
+  const d = x.detail;
+  const parts = [d?.pickupWaitMinutes ? `${d.pickupWaitMinutes} min at pickup` : '', d?.dropoffWaitMinutes ? `${d.dropoffWaitMinutes} min at drop-off` : ''].filter(Boolean);
+  return parts.length ? ` (waited ${parts.join(', ')})` : '';
+}
 
 export function CourierEarnings({ refreshKey }: { refreshKey?: unknown }) {
   const { data: e, reload } = useApi<Earnings>('/driver/earnings', { deps: [refreshKey] });
@@ -46,7 +53,8 @@ export function CourierEarnings({ refreshKey }: { refreshKey?: unknown }) {
               {x.availableAt && new Date(x.availableAt) > new Date() && <Muted>Available {when(x.availableAt)}</Muted>}
               {open === x.id && (
                 <View style={{ marginTop: 4 }}>
-                  {PARTS.filter(([k]) => (x[k] as number) > 0).map(([k, l]) => <View key={k} style={s.row}><Muted>{l}</Muted><Muted>{money(x[k] as number)}</Muted></View>)}
+                  {PARTS.filter(([k]) => (x[k] as number) > 0).map(([k, l]) => <View key={k} style={s.row}><Muted>{k === 'waitingCents' ? `${l}${waited(x)}` : l}</Muted><Muted>{money(x[k] as number)}</Muted></View>)}
+                  {(x.detail?.kitchenDelayMinutes || 0) > 0 && <Muted>Kitchen was {x.detail!.kitchenDelayMinutes} min late</Muted>}
                   {x.reason && <Muted>{x.reason}</Muted>}
                   {x.deliveryJobId && <Button title="Question this payment" variant="ghost" onPress={() => { setDispute({ jobId: x.deliveryJobId!, note: '' }); setSent(false); }} />}
                 </View>

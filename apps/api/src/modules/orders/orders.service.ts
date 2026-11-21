@@ -363,7 +363,11 @@ export class OrdersService {
     const o = await this.requireStaffOrder(user, orderId);
     if (!['ACCEPTED', 'PREPARING'].includes(o.status)) throw new ConflictException('Can only adjust time while preparing');
     const promiseAt = addMinutes(new Date(), prepMinutes);
-    await this.db.update(orders).set({ promiseAt }).where(eq(orders.id, orderId));
+    await this.db.transaction(async (tx) => {
+      await tx.update(orders).set({ promiseAt }).where(eq(orders.id, orderId));
+      // Courier R2: the delivery's ready estimate (held offer, partner pickup time) follows the new promise
+      if (o.fulfillmentType === 'DELIVERY') await this.delivery.onKitchenUpdate(orderId, 'ESTIMATE', tx);
+    });
     await this.event(orderId, 'TIME_ADJUSTED', user.sub, 'MERCHANT', { promiseAt });
     await this.outbox.publish('delivery.late', orderId, { orderId, number: o.number, promiseAt, userId: o.userId, kind: 'order' });
     return this.present(orderId);

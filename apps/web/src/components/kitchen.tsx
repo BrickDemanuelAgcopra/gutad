@@ -7,6 +7,7 @@ import { useAction, useApi } from '@/lib/hooks';
 import { useCachedApi, useOfflineActions } from '@/lib/offline';
 import { Alert, Badge, Button, Card, Input, Modal, Select, statusTone, Table } from '@/components/ui';
 import { PrintButton } from '@/components/capacity-printers';
+import { CourierArrivals } from '@/components/courier-arrivals';
 
 export interface KLine { id: string; menuItemId: string | null; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null; status: string; handling: string[]; brandId?: string | null }
 export interface Ticket { id: string; orderId: string; stationCode: string | null; status: string; kind: string; orderNumber: string; promiseAt: string | null; fireAt: string | null; readyBy: string | null; cookMinutes: number | null; targetMinutes: number; fireState: 'HOLD' | 'FIRE'; minutesInProgress: number; delayed: boolean; fulfillmentType: string; tableNumber: string | null; lines: KLine[] }
@@ -143,6 +144,7 @@ export function PickupBoard({ locationId }: { locationId: string }) {
   return (
     <div className="space-y-4">
       {error && <Alert>{error}</Alert>}
+      <CourierArrivals locationId={locationId} />
       <Card title="Pickup shelves">
         <p className="mb-2 text-xs text-ink-500">Shelves: {board?.shelves.join(' · ') || 'none set (Setup tab)'} · flagged after {board?.policy.waitAlertMinutes} min · customer reminded after {board?.policy.noShowNotifyMinutes} min, {board?.policy.noShowResolution === 'REFUND' ? 'refunded' : 'treated as collected'} after {board?.policy.noShowResolveMinutes} min</p>
         <Table rows={board?.orders || []} empty="Nothing waiting." cols={[

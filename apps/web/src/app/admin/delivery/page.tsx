@@ -7,6 +7,7 @@ import { askReason, SectionTitle } from '@/components/admin-ui';
 import { TileMap } from '@/components/tile-map';
 import { DeliveryAreaEditor } from '@/components/delivery-area';
 import { useDebounced, useLiveDelivery } from '@/lib/live';
+import { BatchingPreview, CourierPolicies, ProviderTests, Reconciliation } from './courier-policies';
 
 interface Live { couriers: { id: string; name: string | null; lat: number | null; lng: number | null; status: string; vehicleType: string; activeJobs: number; lastSeenAt: string }[]; pickups: { id: string; name: string; lat: number | null; lng: number | null; jobs: number }[]; deliveries: { id: string; orderId: string | null; status: string; fleet: string; provider: string; location: string; locationId: string; driverId: string | null; batchId: string | null; etaAt: string | null; late: boolean; dropoff: { lat: number | null; lng: number | null; line1: string }; requirements: string[]; offerAttempts: number; exception: string | null; needsAttention: boolean }[] }
 const courierColor = (s: string) => (s === 'ON_DELIVERY' ? '#d97706' : s === 'ONLINE' ? '#059669' : '#9ca3af');
@@ -15,13 +16,15 @@ export default function AdminDelivery() {
   const [tab, setTab] = useState('live');
   return (
     <div className="space-y-4">
-      <SectionTitle title="Delivery & dispatch" hint="Live couriers and deliveries, manual assignment, delivery areas, disruption restrictions, providers and cost analysis." />
-      <Tabs tabs={[{ id: 'live', label: 'Live dispatch' }, { id: 'zones', label: 'Zones' }, { id: 'restrictions', label: 'Restrictions' }, { id: 'coverage', label: 'Coverage simulation' }, { id: 'providers', label: 'Providers' }, { id: 'analysis', label: 'Analysis' }]} active={tab} onChange={setTab} />
+      <SectionTitle title="Delivery & dispatch" hint="Live couriers and deliveries, manual assignment, delivery areas, disruption restrictions, providers, courier policies, partner reconciliation and cost analysis." />
+      <Tabs tabs={[{ id: 'live', label: 'Live dispatch' }, { id: 'zones', label: 'Zones' }, { id: 'restrictions', label: 'Restrictions' }, { id: 'coverage', label: 'Coverage simulation' }, { id: 'policies', label: 'Courier policies' }, { id: 'providers', label: 'Providers' }, { id: 'reconciliation', label: 'Reconciliation' }, { id: 'analysis', label: 'Analysis' }]} active={tab} onChange={setTab} />
       {tab === 'live' && <LiveDispatch />}
       {tab === 'zones' && <Zones />}
       {tab === 'restrictions' && <Restrictions />}
       {tab === 'coverage' && <Coverage />}
+      {tab === 'policies' && <div className="space-y-4"><CourierPolicies /><BatchingPreview /></div>}
       {tab === 'providers' && <Providers />}
+      {tab === 'reconciliation' && <Reconciliation />}
       {tab === 'analysis' && <Analysis />}
     </div>
   );
@@ -154,6 +157,7 @@ function Providers() {
       <Table rows={data || []} empty="Using the default order." cols={[{ key: 'r', label: 'Region', render: (x) => regions?.find((r) => r.id === x.regionId)?.name || 'All regions' }, { key: 'p', label: 'Provider', render: (x) => x.provider === 'PLATFORM' ? 'Gutad fleet' : x.provider }, { key: 'o', label: 'Order', render: (x) => x.priority }, { key: 'a', label: 'Active', render: (x) => <button className="text-xs underline" onClick={() => run(async () => { await api.post('/admin/delivery/providers', { ...x, isActive: !x.isActive }); await reload(); })}>{x.isActive ? 'on' : 'off'}</button> }]} />
       <div className="flex flex-wrap items-end gap-2"><Select label="Region" value={f.regionId} onChange={(e) => setF({ ...f, regionId: e.target.value })}><option value="">All regions</option>{regions?.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select><Select label="Provider" value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value })}>{(names?.available || ['PLATFORM', 'mock']).map((p) => <option key={p} value={p}>{p === 'PLATFORM' ? 'Gutad fleet' : p}</option>)}</Select><Input label="Order" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} /><Button onClick={() => run(async () => { await api.post('/admin/delivery/providers', { regionId: f.regionId || null, provider: f.provider, priority: Number(f.priority) }); await reload(); })}>Add</Button></div>
       {routing && <p className="text-xs text-ink-500">Travel times: {routing.provider === 'straight' ? 'straight-line distance × minutes per km (set ROUTING_PROVIDER for road times)' : `${routing.provider} road routing · ${routing.calls} calls, ${routing.cacheHits} cached, ${routing.failures} fell back to straight-line`}{!routing.configured ? ` · ${routing.requested} is selected but not configured` : ''}. Default partner: {names?.primary}.</p>}
+      <ProviderTests names={names?.available || []} />
     </div>
   );
 }

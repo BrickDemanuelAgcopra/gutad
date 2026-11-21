@@ -1,14 +1,15 @@
 'use client';
 import { useState } from 'react';
-import { TRIP_ISSUES, type PickupCheck, type TripIssue } from '@gutad/shared';
+import { GutadApiError, TRIP_ISSUES, type Manifest, type PickupCheck, type Readiness, type TripIssue } from '@gutad/shared';
 import { api, money, when } from '@/lib/api';
 import { Alert, Badge, Button, Input, Select, statusTone } from '@/components/ui';
-import { getLoc, humanize, PhotoCapture, useCourierAction, useNow, type UploadedPhoto } from './common';
+import { errCode, friendlyError, getLoc, humanize, PhotoCapture, useCourierAction, useNow, type UploadedPhoto } from './common';
 
 export interface Offer {
   id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number }; tipCents: number;
   stops: number; pickup: { name: string; line1: string; city: string }; dropoffArea: { city: string; postalCode: string }; distanceKm: number; toPickupKm: number; estMinutes: number;
-  requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number }; batchWith: string | null;
+  requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number; waitingCapMinutes?: number; dropoffGraceMinutes?: number }; batchWith: string | null;
+  readiness?: Readiness | null; manifest?: Manifest | null; market?: { id: string; name: string } | null;
 }
 
 export interface Job {
@@ -17,9 +18,31 @@ export interface Job {
   exception: { kind: string; attempts: { at: string; method?: string }[]; waitUntil: string; resolution?: string } | null;
   pickupCheck?: PickupCheck & { at?: string } | null; custody?: unknown; payPolicy?: unknown;
   issues?: { kind: string; note?: string | null; at?: string; outcome?: string }[]; requiresIdCheck?: boolean; pinRequired?: boolean; orderCode?: string | null;
+  readiness?: Readiness | null; manifest?: Manifest | null; shelfSlot?: string | null;
 }
 
 const km = (x: number | null | undefined) => (x == null ? '—' : `${Math.round(x * 10) / 10} km`);
+const hhmm = (d: string) => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const itemCount = (b: Manifest['brands'][number]) => b.items.reduce((t, i) => t + i.quantity, 0);
+
+/** "Ready now" once the kitchen marks it ready, else the kitchen's estimate. */
+export function ReadyChip({ readiness: r }: { readiness?: Readiness | null }) {
+  if (!r) return null;
+  if (r.status === 'READY') return <Badge tone="good">Ready now</Badge>;
+  return <Badge>{r.estReadyAt ? `Ready ~${hhmm(r.estReadyAt)}` : 'Being prepared'}</Badge>;
+}
+
+/** One line per brand in the order ("Smash Society · 1 item · 2 bags") and the total bags. */
+export function ManifestList({ manifest: m }: { manifest?: Manifest | null }) {
+  if (!m || !m.brands.length) return null;
+  return (
+    <div className="mt-1 text-xs">
+      {m.brands.length > 1 && <ul className="space-y-0.5">{m.brands.map((b) => <li key={b.brandKey}>{b.brandName} · {plural(itemCount(b), 'item')} · {plural(b.bagCount, 'bag')}</li>)}</ul>}
+      <div className="text-ink-500">{m.brands.length > 1 ? `${m.brands.length} brands · ` : ''}{plural(m.totals.bags, 'bag')} in total</div>
+    </div>
+  );
+}
 
 export function OfferCard({ offer: o, onAnswer }: { offer: Offer; onAnswer: (accept: boolean) => Promise<unknown> }) {
   const now = useNow();
@@ -40,14 +63,16 @@ export function OfferCard({ offer: o, onAnswer }: { offer: Offer; onAnswer: (acc
       <div className="mt-2 space-y-0.5">
         <div><b>Pickup:</b> {o.pickup.name}, {o.pickup.line1}</div>
         <div><b>Drop-off area:</b> {o.dropoffArea.city} {o.dropoffArea.postalCode}</div>
-        <div className="text-xs text-ink-500">{o.stops} stop{o.stops === 1 ? '' : 's'} · {km(o.toPickupKm)} to pickup · {km(o.distanceKm)} trip · about {o.estMinutes} min</div>
+        <div className="text-xs text-ink-500">{o.stops} stop{o.stops === 1 ? '' : 's'} · {km(o.toPickupKm)} to pickup · {km(o.distanceKm)} trip · about {o.estMinutes} min{o.market ? ` · ${o.market.name}` : ''}</div>
       </div>
+      <ManifestList manifest={o.manifest} />
       <div className="mt-1 flex flex-wrap gap-1">
+        <ReadyChip readiness={o.readiness} />
         {o.batchWith && <Badge tone="info">adds to your current trip</Badge>}
         {o.requirements.map((r) => <Badge key={r} tone="warn">{r === 'ALCOHOL' ? 'ID check' : humanize(r)}</Badge>)}
         {o.equipment.map((e) => <Badge key={e}>{humanize(e)}</Badge>)}
       </div>
-      {p && <p className="mt-1 text-xs text-ink-500">Waiting at pickup paid after {p.waitingGraceMinutes} min ({money(p.waitingPerMinuteCents)}/min) · returning an order {money(p.returnCents)} · canceled after you arrive {money(p.cancelAfterArrivalCents)}</p>}
+      {p && <p className="mt-1 text-xs text-ink-500">Waiting paid after {p.waitingGraceMinutes} min at pickup{p.dropoffGraceMinutes != null ? ` and ${p.dropoffGraceMinutes} min at drop-off` : ''} ({money(p.waitingPerMinuteCents)}/min{p.waitingCapMinutes ? `, up to ${p.waitingCapMinutes} min` : ''}) · returning an order {money(p.returnCents)} · canceled after you arrive {money(p.cancelAfterArrivalCents)}</p>}
       {error && <div className="mt-2"><Alert>{error}</Alert></div>}
       <div className="mt-2 flex gap-2"><Button size="sm" disabled={busy || left <= 0} onClick={() => run(() => onAnswer(true))}>Accept</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => onAnswer(false))}>Decline</Button></div>
     </div>
@@ -62,11 +87,14 @@ export function JobCard({ job: j, onChange }: { job: Job; onChange: () => Promis
   return (
     <div className="space-y-2 border-b border-ink-100 py-3 text-sm last:border-0">
       <div className="flex justify-between gap-2"><span>{j.pickupAddress.name ? `${j.pickupAddress.name}, ` : ''}{j.pickupAddress.line1} → {j.dropoffAddress.line1} · tip {money(j.tipCents)}{j.batchId && <Badge tone="info">batch</Badge>}{j.requiresIdCheck && <Badge tone="warn">ID check</Badge>}</span><Badge tone={statusTone(j.status)}>{humanize(j.status)}</Badge></div>
+      {j.status === 'ASSIGNED' && (j.readiness || j.shelfSlot) && <div className="flex flex-wrap items-center gap-1"><ReadyChip readiness={j.readiness} />{j.shelfSlot && <Badge tone="info">Shelf {j.shelfSlot}</Badge>}</div>}
+      {j.status === 'ASSIGNED' && <ManifestList manifest={j.manifest} />}
       {j.dropoffAddress.instructions && <p className="text-xs text-ink-500">“{j.dropoffAddress.instructions}”</p>}
       {error && <Alert>{error}</Alert>}
       {msg && <Alert tone="info">{msg}</Alert>}
       {j.status === 'ASSIGNED' && !j.arrivedPickupAt && <Button size="sm" variant="secondary" disabled={busy} onClick={() => act(async () => api.post(`/driver/jobs/${j.id}/arrived`, { at: 'PICKUP', ...(await getLoc()) }))}>Arrived at pickup</Button>}
-      {j.status === 'ASSIGNED' && j.arrivedPickupAt && <PickupForm job={j} busy={busy} onSubmit={(pickupCheck) => act(async () => api.post(`/driver/jobs/${j.id}/transition`, { status: 'PICKED_UP', pickupCheck, ...(await getLoc()) }))} />}
+      {j.status === 'ASSIGNED' && j.arrivedPickupAt && j.manifest && j.manifest.brands.length > 1 && <MultiBrandPickupForm job={j} manifest={j.manifest} onSubmit={async (pickupCheck) => { setMsg(null); await api.post(`/driver/jobs/${j.id}/transition`, { status: 'PICKED_UP', pickupCheck, ...(await getLoc()) }); await onChange(); }} />}
+      {j.status === 'ASSIGNED' && j.arrivedPickupAt && !(j.manifest && j.manifest.brands.length > 1) && <PickupForm job={j} busy={busy} onSubmit={(pickupCheck) => act(async () => api.post(`/driver/jobs/${j.id}/transition`, { status: 'PICKED_UP', pickupCheck, ...(await getLoc()) }))} />}
       {j.status === 'PICKED_UP' && !j.arrivedDropoffAt && <Button size="sm" variant="secondary" disabled={busy} onClick={() => act(async () => api.post(`/driver/jobs/${j.id}/arrived`, { at: 'DROPOFF', ...(await getLoc()) }))}>Arrived at drop-off</Button>}
       {j.status === 'PICKED_UP' && j.arrivedDropoffAt && <HandoffForm job={j} busy={busy} onSubmit={(body) => act(async () => api.post(`/driver/jobs/${j.id}/transition`, { status: 'DELIVERED', ...body, ...(await getLoc()) }))} />}
       {j.status === 'PICKED_UP' && <ExceptionBox job={j} onDone={() => void onChange()} />}
@@ -97,6 +125,76 @@ function PickupForm({ job, busy, onSubmit }: { job: Job; busy: boolean; onSubmit
       <Input className="mt-2" label="Note (optional)" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
       <Button className="mt-2" size="sm" disabled={busy || codeMismatch || !(bags >= 1)} onClick={() => onSubmit({ orderCode: f.orderCode.trim() || undefined, bagCount: bags, drinkCount: Number(f.drinkCount) || 0, sealIntact: f.sealIntact, note: f.note.trim() || undefined })}>Picked up</Button>
       {!f.sealIntact && <p className="mt-1 text-xs text-ink-500">If a seal is broken, don’t take the order: use “Report a problem”.</p>}
+    </div>
+  );
+}
+
+/** Courier R2: an order from several brands is checked brand by brand (bags counted, seal intact). */
+function MultiBrandPickupForm({ job, manifest, onSubmit }: { job: Job; manifest: Manifest; onSubmit: (c: PickupCheck) => Promise<void> }) {
+  const [f, setF] = useState({ orderCode: '', drinkCount: '0', note: '' });
+  const [brands, setBrands] = useState<Record<string, { bags: string; sealIntact: boolean }>>(() => Object.fromEntries(manifest.brands.map((b) => [b.brandKey, { bags: String(b.bagCount), sealIntact: false }])));
+  const [flags, setFlags] = useState<Record<string, 'missing' | 'broken'>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const codeMismatch = !!job.orderCode && f.orderCode.length > 0 && f.orderCode.trim().toUpperCase() !== job.orderCode.toUpperCase();
+  const seen = manifest.brands.map((b) => ({ brandKey: b.brandKey, bagCount: Math.max(0, Math.floor(Number(brands[b.brandKey]?.bags) || 0)), sealIntact: !!brands[b.brandKey]?.sealIntact }));
+  const total = seen.reduce((t, b) => t + b.bagCount, 0);
+  const setBrand = (key: string, patch: Partial<{ bags: string; sealIntact: boolean }>) => {
+    setBrands({ ...brands, [key]: { ...brands[key], ...patch } });
+    if (flags[key]) setFlags(Object.fromEntries(Object.entries(flags).filter(([k]) => k !== key)));
+  };
+  const submit = async () => {
+    setBusy(true); setError(null); setFlags({});
+    try {
+      await onSubmit({ orderCode: f.orderCode.trim() || undefined, bagCount: total, drinkCount: Number(f.drinkCount) || 0, sealIntact: seen.every((b) => b.sealIntact), note: f.note.trim() || undefined, brands: seen });
+    } catch (e) {
+      const code = errCode(e);
+      const body = (e instanceof GutadApiError ? e.body : null) as unknown as { missing?: string[]; broken?: string[] } | null;
+      if (code === 'MANIFEST_INCOMPLETE') {
+        setFlags(Object.fromEntries((body?.missing ?? []).map((k) => [k, 'missing' as const])));
+        setError('Some bags are missing. Collect every brand’s bags before you leave.');
+      } else if (code === 'SEAL_BROKEN') {
+        const broken = body?.broken?.length ? body.broken : seen.filter((b) => !b.sealIntact).map((b) => b.brandKey);
+        setFlags(Object.fromEntries(broken.map((k) => [k, 'broken' as const])));
+        setError('A seal is broken, so you can’t take this order. Report “Damaged packaging or broken seal” below.');
+      } else setError(friendlyError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="rounded-lg bg-ink-50 p-3">
+      <p className="mb-1 font-medium">Pickup check</p>
+      <p className="mb-2 text-xs text-ink-500">This order comes from {manifest.brands.length} brands. Count each brand’s bags and check its seal.</p>
+      {job.orderCode && <p className="mb-2 text-xs text-ink-500">The order code on the bag should end in <b className="text-ink-900">{job.orderCode}</b>.</p>}
+      <div className="space-y-2">
+        {manifest.brands.map((b) => {
+          const v = brands[b.brandKey] || { bags: '0', sealIntact: false };
+          const flag = flags[b.brandKey];
+          return (
+            <div key={b.brandKey} className={`rounded-lg border bg-white p-2 ${flag ? 'border-red-300 ring-1 ring-red-200' : 'border-ink-100'}`}>
+              <div className="flex flex-wrap items-baseline justify-between gap-1"><b>{b.brandName}</b><span className="text-xs text-ink-500">#{b.orderNumber} · {plural(itemCount(b), 'item')} · {plural(b.bagCount, 'bag')}</span></div>
+              {b.bagCodes.length > 0 && <p className="text-xs text-ink-500">Bag labels: {b.bagCodes.join(', ')}</p>}
+              <div className="mt-1 flex flex-wrap items-end gap-3">
+                <Input className="w-24" label="Bags counted" type="number" min={0} value={v.bags} onChange={(e) => setBrand(b.brandKey, { bags: e.target.value })} />
+                <label className="flex items-center gap-2 pb-2"><input type="checkbox" checked={v.sealIntact} onChange={(e) => setBrand(b.brandKey, { sealIntact: e.target.checked })} /> Seal intact</label>
+              </div>
+              {flag === 'missing' && <p className="mt-1 text-xs font-medium text-red-700">Collect this brand’s bags.</p>}
+              {flag === 'broken' && <p className="mt-1 text-xs font-medium text-red-700">Seal broken: don’t take it. Report damaged packaging below.</p>}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <Input label="Order code" value={f.orderCode} onChange={(e) => setF({ ...f, orderCode: e.target.value })} />
+        <Input label="Drinks" type="number" min={0} value={f.drinkCount} onChange={(e) => setF({ ...f, drinkCount: e.target.value })} />
+      </div>
+      {codeMismatch && <p className="mt-1 text-xs text-red-700">That code doesn’t match this order. Check you have the right bag.</p>}
+      <Input className="mt-2" label="Note (optional)" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
+      <p className="mt-2 text-xs text-ink-500">{plural(total, 'bag')} counted of {manifest.totals.bags}.</p>
+      {error && <div className="mt-2"><Alert>{error}</Alert></div>}
+      <Button className="mt-2" size="sm" disabled={busy || codeMismatch || total < 1} onClick={() => void submit()}>Picked up</Button>
+      {seen.some((b) => !b.sealIntact) && <p className="mt-1 text-xs text-ink-500">Tick “Seal intact” for each brand. If a seal is broken, don’t take the order: use “Report a problem”.</p>}
     </div>
   );
 }

@@ -8,7 +8,8 @@ import { humanize, useCourierAction } from './common';
 
 interface Earnings {
   payableCents: number; pendingCents: number; availableCents: number; policy?: unknown;
-  entries: { id: string; kind: string; deliveryJobId: string | null; baseCents: number; distanceCents: number; timeCents: number; waitingCents: number; returnCents: number; tipCents: number; bonusCents: number; totalCents: number; reason: string | null; availableAt: string | null; createdAt: string }[];
+  entries: { id: string; kind: string; deliveryJobId: string | null; baseCents: number; distanceCents: number; timeCents: number; waitingCents: number; returnCents: number; tipCents: number; bonusCents: number; totalCents: number; reason: string | null; availableAt: string | null; createdAt: string;
+    detail?: { pickupWaitMinutes: number; dropoffWaitMinutes: number; kitchenDelayMinutes: number; marketId: string | null; marketVersion: number | null } | null }[];
   days: { date: string; cents: number; deliveries: number }[];
   weeks: { weekStart: string; cents: number; deliveries: number }[];
   payouts: { id: string; amountCents: number; status: string; failureReason: string | null; periodStart: string | null; periodEnd: string | null; paidAt: string | null }[];
@@ -18,8 +19,9 @@ interface Earnings {
 const day = (d: string) => new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
 function breakdown(e: Earnings['entries'][number]) {
+  const waited = (e.detail?.pickupWaitMinutes || 0) + (e.detail?.dropoffWaitMinutes || 0);
   const parts: [string, number][] = [['base', e.baseCents], ['distance', e.distanceCents], ['time', e.timeCents], ['waiting', e.waitingCents], ['return', e.returnCents], ['tip', e.tipCents], ['bonus', e.bonusCents]];
-  return parts.filter(([, c]) => c).map(([l, c]) => `${l} ${money(c)}`).join(' · ');
+  return parts.filter(([, c]) => c).map(([l, c]) => `${l} ${money(c)}${l === 'waiting' && waited > 0 ? ` (${waited} min)` : ''}`).join(' · ');
 }
 
 export function EarningsSection() {
@@ -41,7 +43,7 @@ export function EarningsSection() {
         <Table rows={e.entries.slice(0, 50)} empty="No earnings yet." cols={[
           { key: 'w', label: 'When', render: (r) => <span className="text-xs">{when(r.createdAt)}</span> },
           { key: 'k', label: 'Kind', render: (r) => <span className="text-xs">{humanize(r.kind)}{r.reason ? <span className="block text-ink-500">{r.reason}</span> : null}</span> },
-          { key: 'b', label: 'Breakdown', render: (r) => <span className="text-xs">{breakdown(r)}</span> },
+          { key: 'b', label: 'Breakdown', render: (r) => <span className="text-xs">{breakdown(r)}{(r.detail?.kitchenDelayMinutes || 0) > 0 && <span className="block text-ink-500">Kitchen was {r.detail!.kitchenDelayMinutes} min late</span>}</span> },
           { key: 't', label: 'Total', render: (r) => <b>{money(r.totalCents)}</b> },
           { key: 'a', label: '', render: (r) => r.availableAt && new Date(r.availableAt).getTime() > now ? <span className="text-xs text-ink-500">available {when(r.availableAt)}</span> : <span className="text-xs text-emerald-700">available</span> },
         ]} />

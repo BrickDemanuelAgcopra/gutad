@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as Location from 'expo-location';
-import { GutadApiError, type CheckStatus, type EligibilityCheck, type EquipmentItem, type OnboardingStepKey } from '@gutad/shared';
+import { GutadApiError, type CheckStatus, type EligibilityCheck, type EquipmentItem, type Manifest, type OnboardingStepKey, type Readiness } from '@gutad/shared';
 
 /** Courier Release 1 shapes, as in docs/COURIER-R1-PLAN.md. */
 export interface Onboarding {
@@ -32,7 +32,9 @@ export interface DriverStatus {
 export interface Offer {
   id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number }; tipCents: number;
   stops: number; pickup: { name: string; line1: string; city: string }; dropoffArea: { city: string; postalCode: string }; distanceKm: number; toPickupKm: number; estMinutes: number;
-  requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number }; batchWith: string | null;
+  requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number; waitingCapMinutes?: number; dropoffGraceMinutes?: number }; batchWith: string | null;
+  /** Courier R2 */
+  readiness?: Readiness | null; manifest?: Manifest | null; market?: { id: string; name: string } | null;
 }
 
 export interface Addr { line1: string; city: string; lat?: number; lng?: number; instructions?: string }
@@ -42,6 +44,8 @@ export interface Job {
   pickupCheck?: { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string } | null;
   custody?: unknown; payPolicy?: unknown; issues?: { kind: string; note?: string; at?: string; createdAt?: string; outcome?: string }[] | null;
   requiresIdCheck?: boolean; pinRequired?: boolean; orderCode?: string | null;
+  /** Courier R2 */
+  readiness?: Readiness | null; manifest?: Manifest | null; shelfSlot?: string | null;
 }
 
 /** The API's machine-readable error code (e.g. PIN_MISMATCH), if any. */
@@ -56,6 +60,13 @@ export function errBody<T>(e: unknown): T | null {
 export const isNetworkError = (e: unknown) => !(e instanceof GutadApiError) && (e instanceof TypeError || /network|fetch|timeout|offline/i.test(String((e as Error)?.message || '')));
 
 export const mins = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} h ${Math.round(m % 60)} min` : `${Math.round(m)} min`);
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+/** "Ready now" / "Ready ~18:40" / "Being prepared" for the readiness chip. */
+export function readyText(r: Readiness | null | undefined): { text: string; tone: 'good' | 'warn' | 'neutral' } | null {
+  if (!r) return null;
+  if (r.status === 'READY') return { text: 'Ready now', tone: 'good' };
+  return r.estReadyAt ? { text: `Ready ~${hhmm(r.estReadyAt)}`, tone: 'warn' } : { text: 'Being prepared', tone: 'neutral' };
+}
 export const label = (k: string) => k.charAt(0) + k.slice(1).toLowerCase().replace(/_/g, ' ');
 
 export async function currentPos(): Promise<{ lat: number; lng: number } | null> {
