@@ -6,10 +6,11 @@ import { useAction, useApi } from '../hooks';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '../ui';
 import { Pills } from '../ops';
 import { label } from './common';
+import { CashOut } from './incentives';
 
-interface Entry { id: string; kind: string; deliveryJobId: string | null; baseCents: number; distanceCents: number; timeCents: number; waitingCents: number; returnCents: number; tipCents: number; bonusCents: number; totalCents: number; reason: string | null; availableAt: string | null; createdAt: string; detail?: { pickupWaitMinutes?: number; dropoffWaitMinutes?: number; kitchenDelayMinutes?: number } | null }
+interface Entry { id: string; kind: string; deliveryJobId: string | null; baseCents: number; distanceCents: number; timeCents: number; waitingCents: number; returnCents: number; tipCents: number; bonusCents: number; totalCents: number; reason: string | null; availableAt: string | null; createdAt: string; detail?: { pickupWaitMinutes?: number; dropoffWaitMinutes?: number; kitchenDelayMinutes?: number; campaign?: string } | null }
 interface Earnings {
-  payableCents: number; pendingCents: number; availableCents: number;
+  payableCents: number; pendingCents: number; availableCents: number; hold?: { active: boolean; message: string | null };
   entries: Entry[]; days: { date: string; cents: number; deliveries: number }[]; weeks: { weekStart: string; cents: number; deliveries: number }[];
   payouts: { id: string; amountCents: number; status: string; failureReason: string | null; periodStart: string; periodEnd: string; paidAt: string | null }[];
   payoutAccount: { method: string; accountLast4: string } | null;
@@ -42,7 +43,9 @@ export function CourierEarnings({ refreshKey }: { refreshKey?: unknown }) {
           <View style={{ flex: 1 }}><Muted>Pending</Muted><Text style={{ fontSize: 20, fontWeight: '800', color: C.ink5 }}>{money(e.pendingCents)}</Text></View>
         </View>
         <Muted>Pending earnings become available after a short hold and are paid out weekly{e.payoutAccount ? ` to the account ending ${e.payoutAccount.accountLast4}` : ''}.</Muted>
+        {e.hold?.active && <Text style={{ color: C.warn, marginTop: 4 }}>{e.hold.message}</Text>}
       </Card>
+      <CashOut onDone={() => void reload()} />
       <Pills value={view} onChange={setView} options={[{ id: 'trips', label: 'Trips' }, { id: 'days', label: 'Days' }, { id: 'weeks', label: 'Weeks' }, { id: 'payouts', label: 'Payouts' }]} />
       {view === 'trips' && (
         <Card>
@@ -53,7 +56,7 @@ export function CourierEarnings({ refreshKey }: { refreshKey?: unknown }) {
               {x.availableAt && new Date(x.availableAt) > new Date() && <Muted>Available {when(x.availableAt)}</Muted>}
               {open === x.id && (
                 <View style={{ marginTop: 4 }}>
-                  {PARTS.filter(([k]) => (x[k] as number) > 0).map(([k, l]) => <View key={k} style={s.row}><Muted>{k === 'waitingCents' ? `${l}${waited(x)}` : l}</Muted><Muted>{money(x[k] as number)}</Muted></View>)}
+                  {PARTS.filter(([k]) => (x[k] as number) > 0).map(([k, l]) => <View key={k} style={s.row}><Muted>{k === 'waitingCents' ? `${l}${waited(x)}` : k === 'bonusCents' && x.kind === 'INCENTIVE' ? (x.detail?.campaign ?? 'Incentive') : l}</Muted><Muted>{money(x[k] as number)}</Muted></View>)}
                   {(x.detail?.kitchenDelayMinutes || 0) > 0 && <Muted>Kitchen was {x.detail!.kitchenDelayMinutes} min late</Muted>}
                   {x.reason && <Muted>{x.reason}</Muted>}
                   {x.deliveryJobId && <Button title="Question this payment" variant="ghost" onPress={() => { setDispute({ jobId: x.deliveryJobId!, note: '' }); setSent(false); }} />}

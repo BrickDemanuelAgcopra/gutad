@@ -6,7 +6,7 @@ import { Alert, Badge, Button, Input, Select, statusTone } from '@/components/ui
 import { errCode, friendlyError, getLoc, humanize, PhotoCapture, useCourierAction, useNow, type UploadedPhoto } from './common';
 
 export interface Offer {
-  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number }; tipCents: number;
+  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number; incentiveCents?: number; incentives?: { campaignId: string; name: string; cents: number }[] }; tipCents: number;
   stops: number; pickup: { name: string; line1: string; city: string }; dropoffArea: { city: string; postalCode: string }; distanceKm: number; toPickupKm: number; estMinutes: number;
   requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number; waitingCapMinutes?: number; dropoffGraceMinutes?: number }; batchWith: string | null;
   readiness?: Readiness | null; manifest?: Manifest | null; market?: { id: string; name: string } | null;
@@ -56,6 +56,7 @@ export function OfferCard({ offer: o, onAnswer }: { offer: Offer; onAnswer: (acc
         <div>
           <div className="text-xl font-bold">{money(pay.totalCents)} <span className="text-xs font-normal text-ink-500">guaranteed</span></div>
           <div className="text-xs text-ink-500">base {money(pay.baseCents)} + distance {money(pay.distanceCents)}{pay.timeCents ? ` + time ${money(pay.timeCents)}` : ''}</div>
+          {(pay.incentiveCents ?? 0) > 0 && <div className="text-xs font-semibold text-brand-700">+ {money(pay.incentiveCents!)} {pay.incentives?.map((i) => i.name).join(', ') || 'boost'}</div>}
           {o.tipCents > 0 && <div className="text-xs text-emerald-700">+ estimated tip {money(o.tipCents)}</div>}
         </div>
         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${left <= 15 ? 'bg-red-100 text-red-800' : 'bg-ink-100 text-ink-700'}`}>{left > 0 ? `${left}s` : 'expired'}</span>

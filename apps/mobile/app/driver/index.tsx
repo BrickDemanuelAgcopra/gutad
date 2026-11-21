@@ -11,6 +11,7 @@ import { currentPos, type DriverStatus, type Job, type Offer, type Onboarding } 
 import { CourierOnboarding } from '@/courier/onboarding';
 import { FirstDeliveryGuide, JobCard, LifecycleNotice, OfferCard, StatusPanel } from '@/courier/work';
 import { CourierEarnings, CourierFeedback } from '@/courier/earnings';
+import { BusyTimes, Incentives, ReviewNotices } from '@/courier/incentives';
 import { useQueue } from '@/courier/queue';
 
 interface Standing { status: string; suspendedReason: string | null; appealStatus: string; appealDecisionNote: string | null; missingDocs: string[]; metrics?: { acceptanceRate: number | null; completionRate: number | null; onTimeRate: number | null; delivered: number } }
@@ -32,7 +33,7 @@ export default function Driver() {
 }
 
 function Work({ onboarding }: { onboarding: Onboarding }) {
-  const [tab, setTab] = useState<'work' | 'earnings' | 'feedback' | 'docs' | 'shifts'>('work');
+  const [tab, setTab] = useState<'work' | 'incentives' | 'earnings' | 'feedback' | 'docs' | 'shifts'>('work');
   const { data: st, reload: reloadSt } = useApi<DriverStatus>('/driver/status', { poll: 15000 });
   const { data: standing, reload: reloadStanding } = useApi<Standing>('/driver/standing', { deps: [st?.lifecycleStatus] });
   const { data: offers, reload: reloadOffers } = useApi<Offer[]>('/driver/offers', { poll: 5000 });
@@ -55,10 +56,11 @@ function Work({ onboarding }: { onboarding: Onboarding }) {
       {queue.refused.length > 0 && <Card><Text style={{ color: C.bad, fontWeight: '600' }}>Some offline actions weren’t accepted</Text>{queue.refused.map((r, i) => <Muted key={i}>{r}</Muted>)}<Button title="OK" variant="ghost" onPress={queue.clearRefused} /></Card>}
       {st ? <StatusPanel st={st} onChange={refresh} /> : <Loading />}
       {st && <LifecycleNotice st={st} onChange={() => void reloadSt()} />}
+      <ReviewNotices />
       {standing?.status === 'SUSPENDED' && <Card title="Appeal">{standing.suspendedReason && <Muted>{standing.suspendedReason}</Muted>}{standing.appealStatus === 'PENDING' ? <Muted>Your appeal is being reviewed by someone who wasn’t involved in the suspension.</Muted> : <>{standing.appealDecisionNote && <Muted>Decision: {standing.appealDecisionNote}</Muted>}<Input label="Appeal" multiline value={appeal} onChangeText={setAppeal} /><ErrorText msg={error} /><Button title="Send appeal" disabled={appeal.length < 10} onPress={() => run(async () => { await api.post('/driver/appeal', { note: appeal }); setAppeal(''); await reloadStanding(); })} /></>}</Card>}
       {!!standing?.missingDocs.length && <Card><Text style={{ color: C.warn }}>Needed: {standing.missingDocs.map((d) => COURIER_DOC_LABELS[d as CourierDocKind] || d).join(', ')}</Text></Card>}
       {standing?.metrics && <Muted>30 days: accept {standing.metrics.acceptanceRate ?? '—'}% · complete {standing.metrics.completionRate ?? '—'}% · on time {standing.metrics.onTimeRate ?? '—'}% · {standing.metrics.delivered} delivered</Muted>}
-      <Pills value={tab} onChange={setTab} options={[{ id: 'work', label: 'Deliveries' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'docs', label: 'Documents' }, { id: 'shifts', label: 'Shifts' }]} />
+      <Pills value={tab} onChange={setTab} options={[{ id: 'work', label: 'Deliveries' }, { id: 'incentives', label: 'Incentives' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'docs', label: 'Documents' }, { id: 'shifts', label: 'Shifts' }]} />
       {tab === 'work' && (
         <>
           {!firstDeliveryAt && <FirstDeliveryGuide />}
@@ -67,10 +69,11 @@ function Work({ onboarding }: { onboarding: Onboarding }) {
           <ResponsibilityDisputes role="DRIVER" />
         </>
       )}
+      {tab === 'incentives' && <><Incentives /><BusyTimes /></>}
       {tab === 'earnings' && <CourierEarnings refreshKey={jobs?.length} />}
       {tab === 'feedback' && <CourierFeedback />}
       {tab === 'docs' && <Docs />}
-      {tab === 'shifts' && <Shifts onChange={() => void reloadSt()} />}
+      {tab === 'shifts' && <><BusyTimes /><Shifts onChange={() => void reloadSt()} /></>}
     </ScrollView>
   );
 }

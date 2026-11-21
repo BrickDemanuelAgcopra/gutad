@@ -30,7 +30,7 @@ export interface DriverStatus {
 }
 
 export interface Offer {
-  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number }; tipCents: number;
+  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number; incentiveCents?: number; incentives?: { campaignId: string; name: string; cents: number }[] }; tipCents: number;
   stops: number; pickup: { name: string; line1: string; city: string }; dropoffArea: { city: string; postalCode: string }; distanceKm: number; toPickupKm: number; estMinutes: number;
   requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number; waitingCapMinutes?: number; dropoffGraceMinutes?: number }; batchWith: string | null;
   /** Courier R2 */

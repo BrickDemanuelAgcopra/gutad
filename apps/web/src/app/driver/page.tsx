@@ -10,6 +10,7 @@ import { OnboardingWizard } from '@/components/courier/onboarding';
 import { Documents, FirstDeliveryGuide, ShiftsCard, StatusCard, type CourierStatus, type Standing } from '@/components/courier/work';
 import { JobCard, OfferCard, type Job, type Offer } from '@/components/courier/trips';
 import { EarningsSection, FeedbackSection } from '@/components/courier/money';
+import { BusyTimesCard, CampaignsCard, ReviewNotices } from '@/components/courier/incentives';
 
 /** Web console for Gutad-fleet couriers (the mobile app is the primary surface): sign-up, then work. */
 export default function DriverPage() {
@@ -33,9 +34,10 @@ function CourierConsole() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <StatusCard status={status} standing={standing} onChange={refresh} />
+      <ReviewNotices />
       {!status.firstDeliveryAt && <FirstDeliveryGuide />}
       {standing && standing.missingDocs.length > 0 && <Alert tone="info">Upload and get approved: {standing.missingDocs.map((d) => COURIER_DOC_LABELS[d as CourierDocKind] || d).join(', ')}.</Alert>}
-      <Tabs tabs={[{ id: 'work', label: 'Deliveries' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'account', label: 'Documents & shifts' }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ id: 'work', label: 'Deliveries' }, { id: 'incentives', label: 'Incentives' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'account', label: 'Documents & shifts' }]} active={tab} onChange={setTab} />
       {tab === 'work' && (
         <>
           <Card title="Offers">
@@ -46,11 +48,13 @@ function CourierConsole() {
           </Card>
         </>
       )}
+      {tab === 'incentives' && <><CampaignsCard /><BusyTimesCard /></>}
       {tab === 'earnings' && <EarningsSection />}
       {tab === 'feedback' && <FeedbackSection />}
       {tab === 'account' && (
         <>
           <Documents />
+          <BusyTimesCard />
           <ShiftsCard onCheckedIn={() => void refresh()} />
         </>
       )}

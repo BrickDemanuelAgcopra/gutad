@@ -223,7 +223,7 @@ export function BatchingPreview() {
   );
 }
 
-interface Recon { rows: { jobId: string; orderNumber: string | null; provider: string; quotedCents: number; actualCents: number | null; cancelFeeCents: number; varianceCents: number | null; status: string; createdAt: string }[]; totals: { jobs: number; quotedCents: number; actualCents: number; varianceCents: number; unreported: number } }
+interface Recon { rows: { jobId: string; orderNumber: string | null; provider: string; quotedCents: number; actualCents: number | null; cancelFeeCents: number; varianceCents: number | null; postedCents: number | null; reconciledAt: string | null; status: string; createdAt: string }[]; totals: { jobs: number; quotedCents: number; actualCents: number; varianceCents: number; postedCents: number; unreported: number; unposted: number }; exceptions: { driverId: string; name: string; earningsCents: number; payoutsCents: number; ledgerCents: number; diffCents: number }[] }
 const dayStr = (d: Date) => d.toISOString().slice(0, 10);
 const signed = (c: number) => `${c > 0 ? '+' : c < 0 ? '−' : ''}${money(Math.abs(c))}`;
 
@@ -234,23 +234,30 @@ export function Reconciliation() {
   if (f.provider) qs.set('provider', f.provider);
   if (f.from) qs.set('from', new Date(`${f.from}T00:00:00`).toISOString());
   if (f.to) qs.set('to', new Date(`${f.to}T23:59:59`).toISOString());
-  const { data, error } = useApi<Recon>(`/admin/delivery/reconciliation?${qs.toString()}`, { deps: [f.provider, f.from, f.to] });
+  const { data, error, reload } = useApi<Recon>(`/admin/delivery/reconciliation?${qs.toString()}`, { deps: [f.provider, f.from, f.to] });
+  const { can } = useSession();
+  const act = useAction();
+  const [ran, setRan] = useState<{ posted: number; varianceCents: number; exceptions: number } | null>(null);
   return (
     <div className="space-y-3">
       {error && <Alert>{error}</Alert>}
-      <p className="text-sm text-ink-500">Partner deliveries: what the partner quoted versus what it charged (including cancellation fees).</p>
+      {act.error && <Alert>{act.error}</Alert>}
+      <p className="text-sm text-ink-500">Partner deliveries: what the partner quoted versus what it charged (including cancellation fees). Each night the difference is booked to the ledger once per delivery; partner invoices match within a small tolerance.</p>
       <div className="flex flex-wrap items-end gap-2">
         <Select label="Provider" value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value })}><option value="">All partners</option>{names?.available.filter((p) => p !== 'PLATFORM').map((p) => <option key={p} value={p}>{p}</option>)}</Select>
         <Input type="date" label="From" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} />
         <Input type="date" label="To" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} />
+        {(can('finance.manage') || can('delivery.manage')) && <Button size="sm" variant="secondary" disabled={act.busy} onClick={() => act.run(async () => { setRan(await api.post('/admin/delivery/reconciliation/run', {})); await reload(); })}>Post variances now</Button>}
       </div>
+      {ran && <Alert tone="good">Posted {ran.posted} deliver{ran.posted === 1 ? 'y' : 'ies'} ({signed(ran.varianceCents)}). {ran.exceptions ? `${ran.exceptions} courier ledger exception(s) below.` : 'Courier ledgers agree.'}</Alert>}
       {data && <>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
           <Stat label="Jobs" value={data.totals.jobs} />
           <Stat label="Quoted" value={money(data.totals.quotedCents)} />
           <Stat label="Actual" value={money(data.totals.actualCents)} hint="reported jobs, with cancel fees" />
           <Stat label="Variance" value={<span className={data.totals.varianceCents ? 'text-red-700' : ''}>{signed(data.totals.varianceCents)}</span>} />
           <Stat label="Not reported" value={data.totals.unreported} />
+          <Stat label="Booked" value={signed(data.totals.postedCents ?? 0)} hint={`${data.totals.unposted ?? 0} not booked yet`} />
         </div>
         <Table rows={data.rows} empty="No partner deliveries in this period." cols={[
           { key: 'n', label: 'Order', render: (r) => r.orderNumber ? `#${r.orderNumber}` : <span className="text-xs text-ink-500">{r.jobId.slice(0, 8)}</span> },
@@ -259,9 +266,20 @@ export function Reconciliation() {
           { key: 'a', label: 'Actual', render: (r) => (r.actualCents === null ? <span className="text-xs text-ink-500">not reported</span> : money(r.actualCents)) },
           { key: 'c', label: 'Cancel fee', render: (r) => (r.cancelFeeCents ? money(r.cancelFeeCents) : '—') },
           { key: 'v', label: 'Variance', render: (r) => (r.varianceCents === null ? '—' : r.varianceCents === 0 ? money(0) : <Badge tone={r.varianceCents > 0 ? 'bad' : 'warn'}>{signed(r.varianceCents)}</Badge>) },
+          { key: 'b', label: 'Booked', render: (r) => (r.reconciledAt ? <span className="text-xs" title={when(r.reconciledAt)}>{signed(r.postedCents ?? 0)}</span> : <span className="text-xs text-ink-500">pending</span>) },
           { key: 's', label: 'Status', render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },
           { key: 'd', label: 'Date', render: (r) => <span className="text-xs">{when(r.createdAt)}</span> },
         ]} />
+        <Card title="Courier ledger check">
+          <p className="mb-2 text-sm text-ink-500">For every courier, earnings minus payouts (weekly and instant, with fees) must equal what we owe them in the ledger.</p>
+          {data.exceptions?.length ? <Table rows={data.exceptions} cols={[
+            { key: 'n', label: 'Courier', render: (x) => <a className="underline" href={`/admin/couriers/${x.driverId}`}>{x.name}</a> },
+            { key: 'e', label: 'Earnings', render: (x) => money(x.earningsCents) },
+            { key: 'p', label: 'Paid out', render: (x) => money(x.payoutsCents) },
+            { key: 'l', label: 'Ledger balance', render: (x) => money(x.ledgerCents) },
+            { key: 'd', label: 'Difference', render: (x) => <Badge tone="bad">{signed(x.diffCents)}</Badge> },
+          ]} /> : <p className="text-sm text-emerald-700">All courier ledgers agree.</p>}
+        </Card>
       </>}
     </div>
   );

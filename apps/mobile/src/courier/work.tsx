@@ -100,6 +100,7 @@ export function OfferCard({ o, onDone }: { o: Offer; onDone: () => void }) {
     <View style={{ marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.ink1 }}>
       <View style={s.row}><Text style={{ fontSize: 20, fontWeight: '800', color: C.ink }}>{money(o.pay?.totalCents ?? o.payCents)}</Text><Badge text={`${left}s`} tone={left < 20 ? 'bad' : 'warn'} /></View>
       <Muted>Guaranteed: base {money(o.pay?.baseCents || 0)} + distance {money(o.pay?.distanceCents || 0)}{o.pay?.timeCents ? ` + time ${money(o.pay.timeCents)}` : ''}</Muted>
+      {(o.pay?.incentiveCents ?? 0) > 0 && <Text style={{ color: C.brand, fontWeight: '700' }}>+ {money(o.pay.incentiveCents!)} {o.pay.incentives?.map((i) => i.name).join(', ') || 'boost'}</Text>}
       {o.tipCents > 0 && <Text style={{ color: C.good }}>+ estimated tip {money(o.tipCents)} (100% yours, may change)</Text>}
       {(o.readiness || o.market) && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><ReadyChip r={o.readiness} />{o.market && <Badge text={o.market.name} tone="info" />}</View>}
       <Text style={{ marginTop: 6, color: C.ink }}><Text style={{ fontWeight: '700' }}>Pick up:</Text> {o.pickup.name} · {o.pickup.line1}, {o.pickup.city}</Text>

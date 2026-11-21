@@ -5,11 +5,12 @@ import { api, money, when } from '@/lib/api';
 import { useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, statusTone, Table } from '@/components/ui';
 import { humanize, useCourierAction } from './common';
+import { InstantCashOut } from './incentives';
 
 interface Earnings {
-  payableCents: number; pendingCents: number; availableCents: number; policy?: unknown;
+  payableCents: number; pendingCents: number; availableCents: number; policy?: unknown; hold?: { active: boolean; message: string | null };
   entries: { id: string; kind: string; deliveryJobId: string | null; baseCents: number; distanceCents: number; timeCents: number; waitingCents: number; returnCents: number; tipCents: number; bonusCents: number; totalCents: number; reason: string | null; availableAt: string | null; createdAt: string;
-    detail?: { pickupWaitMinutes: number; dropoffWaitMinutes: number; kitchenDelayMinutes: number; marketId: string | null; marketVersion: number | null } | null }[];
+    detail?: { pickupWaitMinutes?: number; dropoffWaitMinutes?: number; kitchenDelayMinutes?: number; marketId?: string | null; marketVersion?: number | null; campaign?: string; deliveries?: number; onlineMinutes?: number | null } | null }[];
   days: { date: string; cents: number; deliveries: number }[];
   weeks: { weekStart: string; cents: number; deliveries: number }[];
   payouts: { id: string; amountCents: number; status: string; failureReason: string | null; periodStart: string | null; periodEnd: string | null; paidAt: string | null }[];
@@ -20,7 +21,7 @@ const day = (d: string) => new Date(d.length === 10 ? `${d}T12:00:00` : d).toLoc
 
 function breakdown(e: Earnings['entries'][number]) {
   const waited = (e.detail?.pickupWaitMinutes || 0) + (e.detail?.dropoffWaitMinutes || 0);
-  const parts: [string, number][] = [['base', e.baseCents], ['distance', e.distanceCents], ['time', e.timeCents], ['waiting', e.waitingCents], ['return', e.returnCents], ['tip', e.tipCents], ['bonus', e.bonusCents]];
+  const parts: [string, number][] = [['base', e.baseCents], ['distance', e.distanceCents], ['time', e.timeCents], ['waiting', e.waitingCents], ['return', e.returnCents], ['tip', e.tipCents], [e.kind === 'INCENTIVE' ? (e.detail?.campaign ?? 'incentive') : 'bonus', e.bonusCents]];
   return parts.filter(([, c]) => c).map(([l, c]) => `${l} ${money(c)}${l === 'waiting' && waited > 0 ? ` (${waited} min)` : ''}`).join(' · ');
 }
 
@@ -31,9 +32,11 @@ export function EarningsSection() {
   const now = Date.now();
   return (
     <div className="space-y-4">
+      {e.hold?.active && <Alert tone="info">{e.hold.message}</Alert>}
       <div className="grid gap-2 sm:grid-cols-3">
         {([['Pending', e.pendingCents, 'Held briefly after each delivery'], ['Available', e.availableCents, 'Ready for your next payout'], ['Payable', e.payableCents, 'Total not yet paid out']] as const).map(([l, c, h]) => <div key={l} className="rounded-xl border border-ink-100 bg-white p-3"><div className="text-xs text-ink-500">{l}</div><div className="text-lg font-bold">{money(c)}</div><div className="text-[11px] text-ink-500">{h}</div></div>)}
       </div>
+      <InstantCashOut onDone={() => void reload()} />
       <Card title="Statements" action={<Select value={view} onChange={(x) => setView(x.target.value as 'days' | 'weeks')}><option value="days">By day</option><option value="weeks">By week</option></Select>}>
         {view === 'days'
           ? <Table rows={e.days} empty="No earnings yet." cols={[{ key: 'd', label: 'Day', render: (r) => day(r.date) }, { key: 'n', label: 'Deliveries', render: (r) => r.deliveries }, { key: 'c', label: 'Earned', render: (r) => money(r.cents) }]} />

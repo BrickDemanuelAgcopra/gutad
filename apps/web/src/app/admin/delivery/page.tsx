@@ -8,6 +8,7 @@ import { TileMap } from '@/components/tile-map';
 import { DeliveryAreaEditor } from '@/components/delivery-area';
 import { useDebounced, useLiveDelivery } from '@/lib/live';
 import { BatchingPreview, CourierPolicies, ProviderTests, Reconciliation } from './courier-policies';
+import { CampaignsTab, ForecastTab } from './courier-r3';
 
 interface Live { couriers: { id: string; name: string | null; lat: number | null; lng: number | null; status: string; vehicleType: string; activeJobs: number; lastSeenAt: string }[]; pickups: { id: string; name: string; lat: number | null; lng: number | null; jobs: number }[]; deliveries: { id: string; orderId: string | null; status: string; fleet: string; provider: string; location: string; locationId: string; driverId: string | null; batchId: string | null; etaAt: string | null; late: boolean; dropoff: { lat: number | null; lng: number | null; line1: string }; requirements: string[]; offerAttempts: number; exception: string | null; needsAttention: boolean }[] }
 const courierColor = (s: string) => (s === 'ON_DELIVERY' ? '#d97706' : s === 'ONLINE' ? '#059669' : '#9ca3af');
@@ -16,12 +17,14 @@ export default function AdminDelivery() {
   const [tab, setTab] = useState('live');
   return (
     <div className="space-y-4">
-      <SectionTitle title="Delivery & dispatch" hint="Live couriers and deliveries, manual assignment, delivery areas, disruption restrictions, providers, courier policies, partner reconciliation and cost analysis." />
-      <Tabs tabs={[{ id: 'live', label: 'Live dispatch' }, { id: 'zones', label: 'Zones' }, { id: 'restrictions', label: 'Restrictions' }, { id: 'coverage', label: 'Coverage simulation' }, { id: 'policies', label: 'Courier policies' }, { id: 'providers', label: 'Providers' }, { id: 'reconciliation', label: 'Reconciliation' }, { id: 'analysis', label: 'Analysis' }]} active={tab} onChange={setTab} />
+      <SectionTitle title="Delivery & dispatch" hint="Live couriers and deliveries, manual assignment, delivery areas, disruption restrictions, providers, demand forecast, courier campaigns, courier policies, partner reconciliation and cost analysis." />
+      <Tabs tabs={[{ id: 'live', label: 'Live dispatch' }, { id: 'zones', label: 'Zones' }, { id: 'restrictions', label: 'Restrictions' }, { id: 'coverage', label: 'Coverage simulation' }, { id: 'forecast', label: 'Forecast' }, { id: 'campaigns', label: 'Campaigns' }, { id: 'policies', label: 'Courier policies' }, { id: 'providers', label: 'Providers' }, { id: 'reconciliation', label: 'Reconciliation' }, { id: 'analysis', label: 'Analysis' }]} active={tab} onChange={setTab} />
       {tab === 'live' && <LiveDispatch />}
       {tab === 'zones' && <Zones />}
       {tab === 'restrictions' && <Restrictions />}
       {tab === 'coverage' && <Coverage />}
+      {tab === 'forecast' && <ForecastTab />}
+      {tab === 'campaigns' && <CampaignsTab />}
       {tab === 'policies' && <div className="space-y-4"><CourierPolicies /><BatchingPreview /></div>}
       {tab === 'providers' && <Providers />}
       {tab === 'reconciliation' && <Reconciliation />}
