@@ -23,3 +23,4 @@ export * from './followups-c';
 export * from './iam';
 export * from './chef';
 export * from './customization';
+export * from './courier-r3';

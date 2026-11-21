@@ -4,19 +4,20 @@ import { ApprovalsService } from '../security/approvals.service';
 import { computeRoyalty, type RoyaltyRule } from '../merchant-admin/brands-admin.service';
 import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
-import { deliveryJobs, drivers, invoices, journalEntries, legalSellers, locations, merchantStatements, organizations, payments, payoutBatches, payouts, providerInvoices, refunds, reservations, statementDisputes, unmatchedItems, orders } from '../../db/schema';
+import { courierFraudCases, deliveryJobs, drivers, invoices, journalEntries, legalSellers, locations, merchantStatements, organizations, payments, payoutBatches, payouts, providerInvoices, refunds, reservations, statementDisputes, unmatchedItems, orders } from '../../db/schema';
 import { assertCan, assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
 import { LedgerService } from '../../core/ledger.service';
 import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
 import { PaymentsService } from '../payments/payments.service';
 import { loadConfig } from '../../config/config';
+import { SettingsService } from '../../core/settings.service';
 
 @Injectable()
 export class SettlementService implements OnModuleInit {
   private readonly log = new Logger(SettlementService.name);
 
-  constructor(@Inject(DB) private readonly db: Db, private readonly ledger: LedgerService, private readonly outbox: OutboxService, private readonly audit: AuditService, private readonly payments: PaymentsService, private readonly approvals: ApprovalsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly ledger: LedgerService, private readonly outbox: OutboxService, private readonly audit: AuditService, private readonly payments: PaymentsService, private readonly approvals: ApprovalsService, private readonly settings: SettingsService) {}
 
   /** Live merchant balance: what the platform owes (or is owed by) the merchant right now. */
   async merchantBalance(user: JwtPayload, orgId: string) {
@@ -133,8 +134,11 @@ export class SettlementService implements OnModuleInit {
   /** Driver payouts: accrue DRIVER_PAYABLE balances into payouts (16.7-P: released through the same batches). */
   async closeDriverPeriod(periodStart: Date, periodEnd: Date) {
     const ds = await this.db.select().from(drivers);
+    // Courier R3: a courier under fraud review with a payout hold is paid after the decision
+    const held = new Set((await this.db.select({ d: courierFraudCases.driverId }).from(courierFraudCases).where(and(eq(courierFraudCases.status, 'OPEN'), eq(courierFraudCases.holdActive, true)))).map((x) => x.d));
     const out: string[] = [];
     for (const d of ds) {
+      if (held.has(d.id)) continue;
       const entries = await this.db.select().from(journalEntries).where(and(eq(journalEntries.account, 'DRIVER_PAYABLE'), eq(journalEntries.partyId, d.id), isNull(journalEntries.reconciledAt), isNull(journalEntries.payoutId)));
       const net = entries.reduce((a, e) => a + e.creditCents - e.debitCents, 0);
       if (net <= 0) continue;
@@ -377,13 +381,25 @@ export class SettlementService implements OnModuleInit {
     const [inv] = await this.db.insert(providerInvoices).values({ provider: input.provider, externalId: input.externalId, periodStart: new Date(input.periodStart), periodEnd: new Date(input.periodEnd), totalCents: total, lines: input.lines }).onConflictDoNothing().returning();
     if (!inv) throw new BadRequestException('Invoice already ingested');
     let matchedCents = 0;
+    // Courier R3: match against what we expect to owe (the partner's actual fee once known, else the quote, plus tip and
+    // any cancellation fee) within a tolerance; the actual fee is learned from the invoice when the partner never sent it
+    const tol = (await this.settings.getObject<{ toleranceCents: number }>('delivery.recon', { toleranceCents: 50 })).toleranceCents;
     for (const l of input.lines) {
       const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.providerJobId, l.providerJobId)).limit(1);
-      if (job && job.providerCostCents + job.tipCents === l.cents) {
-        await this.db.update(deliveryJobs).set({ providerInvoiceId: inv.id }).where(eq(deliveryJobs.id, job.id));
+      const expected = job ? (job.providerFeeCents ?? (job.status === 'DELIVERED' ? job.providerCostCents : 0)) + job.tipCents + (job.providerCancelFeeCents ?? 0) : null;
+      if (job && expected !== null && Math.abs(l.cents - expected) <= tol) {
+        const diff = l.cents - expected;
+        await this.db.update(deliveryJobs).set({ providerInvoiceId: inv.id, ...(job.providerFeeCents === null && !job.reconciledAt && job.status === 'DELIVERED' ? { providerFeeCents: l.cents - job.tipCents - (job.providerCancelFeeCents ?? 0) } : {}) }).where(eq(deliveryJobs.id, job.id));
+        if (diff !== 0 && (job.reconciledAt || job.providerFeeCents !== null)) {
+          // the job's variance is (or will be) booked against its known fee; the small invoice difference is booked here
+          const amt = Math.abs(diff);
+          await this.ledger.post({ orderId: job.orderId, currency: loadConfig().DEFAULT_CURRENCY }, diff > 0
+            ? [{ account: 'PLATFORM_EXPENSE_DELIVERY_VARIANCE', debitCents: amt, memo: `Invoice ${input.externalId} difference` }, { account: 'PROVIDER_PAYABLE', partyId: 'delivery-provider', creditCents: amt, memo: `Invoice difference job ${job.id}` }]
+            : [{ account: 'PROVIDER_PAYABLE', partyId: 'delivery-provider', debitCents: amt, memo: `Invoice difference job ${job.id}` }, { account: 'PLATFORM_EXPENSE_DELIVERY_VARIANCE', creditCents: amt, memo: `Invoice ${input.externalId} difference` }]);
+        }
         matchedCents += l.cents;
       } else {
-        await this.db.insert(unmatchedItems).values({ source: 'PROVIDER', externalId: l.providerJobId, amountCents: l.cents, currency: loadConfig().DEFAULT_CURRENCY, description: job ? `Expected ${job.providerCostCents + job.tipCents}` : 'Unknown job' });
+        await this.db.insert(unmatchedItems).values({ source: 'PROVIDER', externalId: l.providerJobId, amountCents: l.cents, currency: loadConfig().DEFAULT_CURRENCY, description: job ? `Expected ${expected} (±${tol})` : 'Unknown job' });
       }
     }
     const status = matchedCents === total ? 'MATCHED' : 'DISPUTED';

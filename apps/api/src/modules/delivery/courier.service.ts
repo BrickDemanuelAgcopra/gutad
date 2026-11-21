@@ -209,6 +209,7 @@ export class CourierService {
       case 'profile': {
         this.assertEditable(d);
         await save({ profile: { legalName: String(b.legalName), addressLine1: String(b.addressLine1), city: String(b.city), postalCode: String(b.postalCode), phone: String(b.phone), languages: (b.languages as string[]) ?? [], photoUrl: b.photoUrl as string | undefined, at: now } });
+        await this.delivery.fraud.checkShared(d.id);
         break;
       }
       case 'vehicle': {
@@ -240,6 +241,8 @@ export class CourierService {
         await this.setCheck(d.id, 'PAYOUT', 'PASSED', { note: `Account ending ${payout.accountLast4}`, provider: 'mock' });
         await this.audit.log({ actorId: user.sub, action: ob.payout ? 'courier.payout_change' : 'courier.payout_setup', entityType: 'driver', entityId: d.id, after: { accountLast4: payout.accountLast4 } });
         if (ob.payout) await this.db.insert(courierRecords).values({ driverId: d.id, kind: 'SUPPORT_NOTE', title: 'Payout account changed', detail: `Now ending ${payout.accountLast4} (confirmed with password)` });
+        // Courier R3: the same payout account on another courier is a fraud signal
+        await this.delivery.fraud.checkShared(d.id);
         break;
       }
       case 'agreement': {
@@ -526,7 +529,7 @@ export class CourierService {
   private async releaseJob(tx: DbOrTx, job: Job, driverId: string, reason: string) {
     await tx.update(deliveryJobs).set({ driverId: null, status: 'REQUESTED', batchId: null, payPolicy: null, arrivedPickupAt: null, assignedAt: null }).where(eq(deliveryJobs.id, job.id));
     await tx.update(driverOffers).set({ status: 'RELEASED', respondedAt: new Date() }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.driverId, driverId), eq(driverOffers.status, 'ACCEPTED')));
-    await this.delivery.event(job.id, 'DRIVER_RELEASED', { driverId, reason }, tx);
+    await this.delivery.event(job.id, 'DRIVER_RELEASED', { driverId, reason, arrived: !!job.arrivedPickupAt }, tx);
     await tx.insert(courierRecords).values({ driverId, kind: 'SUPPORT_NOTE', title: 'Released a delivery before pickup', detail: reason });
     await this.delivery.afterJobClosed(driverId, tx);
     const [fresh] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.id, job.id));
@@ -653,8 +656,11 @@ export class CourierService {
     };
     const pays = await this.db.select().from(payouts).where(and(eq(payouts.partyType, 'DRIVER'), eq(payouts.partyId, d.id))).orderBy(desc(payouts.createdAt)).limit(30);
     const ob = d.onboarding as Onb;
+    // Courier R3: payout hold during a fraud review, campaign names on incentive rows
+    const hold = await this.delivery.fraud.notices(d.id);
     return {
       payableCents: payable, pendingCents: pending, availableCents: Math.max(0, payable - pending),
+      hold: { active: hold.hold, message: hold.holdMessage },
       policy,
       entries: rows.map((e) => ({ id: e.id, kind: e.kind, deliveryJobId: e.deliveryJobId, baseCents: e.baseCents, distanceCents: e.distanceCents, timeCents: e.timeCents, waitingCents: e.waitingCents, returnCents: e.returnCents, tipCents: e.tipCents, bonusCents: e.bonusCents, detail: e.detail ?? null, totalCents: total(e), reason: e.reason, policyVersion: e.policyVersion, availableAt: e.availableAt, createdAt: e.createdAt })),
       days: group(day, 14).map(([date, g]) => ({ date, ...g })),

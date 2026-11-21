@@ -170,6 +170,9 @@ export const deliveryJobs = pgTable('delivery_jobs', {
   providerCancelFeeCents: integer('provider_cancel_fee_cents'),
   /** last ready time sent to the partner */
   providerSyncedReadyAt: ts('provider_synced_ready_at'),
+  /** Courier R3: variance (actual + cancel fee − quoted) booked to the ledger */
+  reconciledAt: ts('reconciled_at'),
+  reconVarianceCents: integer('recon_variance_cents'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index('delivery_jobs_hold_idx').on(t.status, t.holdUntil)]);
@@ -230,8 +233,14 @@ export const driverEarnings = pgTable('driver_earnings', {
   reason: text('reason'),
   createdById: uuid('created_by_id'),
   payoutId: uuid('payout_id'),
+  /** Courier R3: incentive campaign (kind INCENTIVE) */
+  campaignId: uuid('campaign_id'),
   createdAt: createdAt(),
-}, (t) => [uniqueIndex('driver_earnings_job_kind_uq').on(t.deliveryJobId, t.kind).where(sql`delivery_job_id is not null and kind in ('DELIVERY','CANCEL_COMP')`)]);
+}, (t) => [
+  uniqueIndex('driver_earnings_job_kind_uq').on(t.deliveryJobId, t.kind).where(sql`delivery_job_id is not null and kind in ('DELIVERY','CANCEL_COMP')`),
+  uniqueIndex('driver_earnings_job_campaign_uq').on(t.deliveryJobId, t.campaignId).where(sql`kind = 'INCENTIVE' and delivery_job_id is not null`),
+  uniqueIndex('driver_earnings_driver_campaign_uq').on(t.driverId, t.campaignId).where(sql`kind = 'INCENTIVE' and delivery_job_id is null`),
+]);
 
 /** Courier R2: per-market overrides of `delivery.pay` and `delivery.batching`. A market is an operating region. */
 export const courierMarketPolicies = pgTable('courier_market_policies', {

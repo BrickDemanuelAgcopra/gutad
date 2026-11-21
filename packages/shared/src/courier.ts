@@ -157,7 +157,7 @@ export function waitingPay(policy: CourierPayPolicy, waitedMinutes: number, drop
   return { minutes: paid, cents: paid * policy.waitingPerMinuteCents, pickupMinutes: pickup, dropoffMinutes: dropoff };
 }
 
-export const EARNING_KINDS = ['DELIVERY', 'CANCEL_COMP', 'BONUS', 'DEDUCTION'] as const;
+export const EARNING_KINDS = ['DELIVERY', 'CANCEL_COMP', 'BONUS', 'DEDUCTION', 'INCENTIVE'] as const;
 
 // ───── pickup, handoff and trip problems ─────
 

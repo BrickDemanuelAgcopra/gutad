@@ -206,6 +206,9 @@ export const payouts = pgTable('payouts', {
   submittedAt: ts('submitted_at'),
   paidAt: ts('paid_at'),
   reconciledAt: ts('reconciled_at'),
+  /** Courier R3: SCHEDULED (weekly) | INSTANT (courier cash-out) */
+  kind: text('kind').notNull().default('SCHEDULED'),
+  feeCents: integer('fee_cents').notNull().default(0),
   createdAt: createdAt(),
 });
 

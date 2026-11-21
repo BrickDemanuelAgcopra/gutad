@@ -10,6 +10,10 @@ import { KitchenService } from '../modules/kitchen/kitchen.service';
 import { OrdersService } from '../modules/orders/orders.service';
 import { DeliveryService } from '../modules/delivery/delivery.service';
 import { CourierService } from '../modules/delivery/courier.service';
+import { CourierForecastService } from '../modules/delivery/courier-forecast.service';
+import { CourierIncentivesService } from '../modules/delivery/courier-incentives.service';
+import { CourierFraudService } from '../modules/delivery/courier-fraud.service';
+import { CourierPayoutsService } from '../modules/delivery/courier-payouts.service';
 import { ReservationsService } from '../modules/reservations/reservations.service';
 import { EventsService } from '../modules/events/events.service';
 import { GrowthService } from '../modules/growth/growth.service';
@@ -56,6 +60,10 @@ export class JobsService {
     private readonly workforce: WorkforceService,
     private readonly delivery: DeliveryService,
     private readonly courier: CourierService,
+    private readonly courierForecast: CourierForecastService,
+    private readonly courierIncentives: CourierIncentivesService,
+    private readonly courierFraud: CourierFraudService,
+    private readonly courierPayouts: CourierPayoutsService,
     private readonly reservations: ReservationsService,
     private readonly events: EventsService,
     private readonly growth: GrowthService,
@@ -106,6 +114,10 @@ export class JobsService {
   @Interval(900_000) brandRights() { return this.locked('brand-rights', 300_000, () => this.brandsAdmin.expireRights()); }
   @Interval(60_000) priceChanges() { return this.locked('price-changes', 60_000, () => this.menuAdmin.applyDue()); }
   @Interval(60_000) supportSla() { return this.locked('support-sla', 60_000, () => this.support.slaSweep()); }
+  // Courier R3: campaign windows and settlement, hourly fraud patterns, forecast (nightly when stale) + partner fee postings
+  @Interval(900_000) courierCampaigns() { return this.locked('courier-campaigns', 600_000, () => this.courierIncentives.sweep()); }
+  @Interval(3_600_000) courierFraudPatterns() { return this.locked('courier-fraud', 600_000, () => this.courierFraud.patternSweep()); }
+  @Interval(3_600_000) courierForecastAndRecon() { return this.locked('courier-forecast-recon', 900_000, async () => ({ forecast: await this.courierForecast.rebuildIfStale(), recon: await this.courierPayouts.runRecon() })); }
   @Interval(3_600_000) deliveryHousekeepingDaily() { return this.locked('delivery-docs-proofs', 600_000, async () => ({ docs: await this.delivery.expireCourierDocs(), checks: await this.courier.expireChecks(), proofs: await this.delivery.purgeProofs() })); }
   @Interval(3_600_000) inventoryExpiry() { return this.locked('lot-expiry', 600_000, () => this.inventory.expireLots()); }
   @Interval(900_000) foodSafetyClusters() { return this.locked('fs-clusters', 300_000, () => this.safety.clusterSweep()); }

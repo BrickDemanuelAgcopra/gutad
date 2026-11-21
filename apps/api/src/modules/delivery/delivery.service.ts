@@ -18,6 +18,8 @@ import { RoutingService } from './routing.service';
 import { LiveService } from './live.service';
 import { RedisService } from '../../core/redis.service';
 import { storedFileId, viewableUrl } from './file-links';
+import { CourierIncentivesService, type OfferIncentive } from './courier-incentives.service';
+import { CourierFraudService } from './courier-fraud.service';
 
 type Status = (typeof deliveryJobs.status.enumValues)[number];
 
@@ -38,6 +40,8 @@ export class DeliveryService {
     private readonly live: LiveService,
     private readonly redis: RedisService,
     readonly policy: DeliveryPolicyService,
+    readonly incentives: CourierIncentivesService,
+    readonly fraud: CourierFraudService,
   ) {}
 
   // ───── 17.9-M partner providers in priority order ─────
@@ -361,6 +365,7 @@ export class DeliveryService {
     // Courier R1: own-fleet pay for the outcome (unique per job and kind, so a replayed update never pays twice)
     if (u.fleet === 'PLATFORM' && u.driverId && ['DELIVERED', 'RETURNED', 'FAILED', 'CANCELED'].includes(status)) {
       await this.courierPay(u, status, tx);
+      if (status === 'DELIVERED') await this.incentives.payBoosts(u, tx);
       await this.afterJobClosed(u.driverId, tx);
     }
     if (status === 'DELIVERED') {
@@ -647,7 +652,7 @@ export class DeliveryService {
     });
   }
 
-  /** Partner fees: quoted at checkout vs. reported by the provider (variance only; nothing is posted). */
+  /** Partner fees: quoted at checkout vs. reported by the provider. Courier R3: posted variance and courier ledger exceptions. */
   async reconciliation(user: JwtPayload, q: { provider?: string; from?: string; to?: string }) {
     assertCan(user, 'delivery.read', 'finance.read');
     const from = q.from ? new Date(q.from) : new Date(Date.now() - 30 * 86_400_000);
@@ -658,10 +663,12 @@ export class DeliveryService {
     const out = rows.map(({ j, number }) => {
       const actual = j.providerFeeCents;
       const cancelFee = j.providerCancelFeeCents ?? 0;
-      return { jobId: j.id, orderNumber: number, provider: j.provider, quotedCents: j.providerCostCents, actualCents: actual, cancelFeeCents: cancelFee, varianceCents: actual === null ? null : actual + cancelFee - j.providerCostCents, status: j.status, createdAt: j.createdAt };
+      return { jobId: j.id, orderNumber: number, provider: j.provider, providerJobId: j.providerJobId, tipCents: j.tipCents, quotedCents: j.providerCostCents, actualCents: actual, cancelFeeCents: cancelFee, varianceCents: actual === null ? null : actual + cancelFee - j.providerCostCents, postedCents: j.reconVarianceCents, reconciledAt: j.reconciledAt, status: j.status, createdAt: j.createdAt };
     });
     const known = out.filter((r) => r.actualCents !== null);
-    return { rows: out, totals: { jobs: out.length, quotedCents: out.reduce((t, r) => t + r.quotedCents, 0), actualCents: known.reduce((t, r) => t + (r.actualCents ?? 0) + r.cancelFeeCents, 0), varianceCents: known.reduce((t, r) => t + (r.varianceCents ?? 0), 0), unreported: out.length - known.length } };
+    const { CourierPayoutsService } = await import('./courier-payouts.service');
+    const exceptions = await this.moduleRef.get(CourierPayoutsService, { strict: false }).integrity();
+    return { rows: out, totals: { jobs: out.length, quotedCents: out.reduce((t, r) => t + r.quotedCents, 0), actualCents: known.reduce((t, r) => t + (r.actualCents ?? 0) + r.cancelFeeCents, 0), varianceCents: known.reduce((t, r) => t + (r.varianceCents ?? 0), 0), postedCents: out.reduce((t, r) => t + (r.postedCents ?? 0), 0), unreported: out.length - known.length, unposted: out.filter((r) => !r.reconciledAt).length }, exceptions };
   }
 
   /** Connectivity check for a partner: one quote between a location and a nearby point. Nothing is created. */
@@ -772,6 +779,8 @@ export class DeliveryService {
 
   async updateLocation(user: JwtPayload, lat: number, lng: number) {
     const d = await this.myDriver(user);
+    // Courier R3: an impossible jump since the last ping is a fraud signal (the move itself is still recorded)
+    await this.fraud.onLocation(d, lat, lng).catch((e) => this.log.warn(`gps check: ${(e as Error).message}`));
     await this.db.update(drivers).set({ lastLat: lat, lastLng: lng, lastSeenAt: new Date() }).where(eq(drivers.id, d.id));
     const active = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP'])));
     const cfg = await this.dispatchCfg();
@@ -884,12 +893,17 @@ export class DeliveryService {
     // Courier R1 guaranteed pay from the versioned policy (distance and time are inside it, never added again later)
     const tripKm = job.distanceKm ?? (drop.lat !== undefined && drop.lng !== undefined && pickup.lat !== undefined && pickup.lng !== undefined ? haversineKm(pickup.lat, pickup.lng, drop.lat, drop.lng) : 3);
     const market = eff.market ? { id: eff.market.id, version: eff.market.version } : null;
-    await tx.insert(driverOffers).values(pick.map((r) => {
+    // Courier R3: running BOOST campaigns for this zone/market and courier are shown on the offer and kept at accept
+    const rowsOut = [];
+    for (const r of pick) {
       const toPickupKm = Number(r.detail.km) || 0;
       const estMinutes = Math.round((toPickupKm + tripKm) * cfg.travelMinutesPerKm + 5);
       const pay = offerPay(policy, tripKm, estMinutes);
-      return { driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail };
-    }));
+      const incentives = await this.incentives.offerBoosts({ zoneId: job.zoneId, marketId: job.marketId ?? eff.market?.id ?? null }, r.d, pay.totalCents, tx);
+      const incentiveCents = incentives.reduce((t, i) => t + i.cents, 0);
+      rowsOut.push({ driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents + incentiveCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market, incentives }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail });
+    }
+    await tx.insert(driverOffers).values(rowsOut);
     await this.event(job.id, 'OFFERED', { round: attempts, couriers: pick.map((r) => ({ driverId: r.d.id, score: r.score })) }, tx);
     return pick;
   }
@@ -946,14 +960,15 @@ export class DeliveryService {
     const marketIds = Array.from(new Set(rows.map((r) => r.job.marketId).filter((x): x is string => !!x)));
     const marketNames = new Map(marketIds.length ? (await this.db.select({ id: regions.id, name: regions.name }).from(regions).where(inArray(regions.id, marketIds))).map((m) => [m.id, m.name]) : []);
     return rows.map((r) => {
-      const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number };
+      const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number; incentives?: OfferIncentive[] };
+      const incentives = b.incentives ?? [];
       const pu = r.job.pickupAddress as Address;
       const dr = r.job.dropoffAddress as Address;
       const batchWith = (r.offer.scoreDetail as { batchWith?: string } | null)?.batchWith ?? null;
       const equipment = ['INSULATED_BAG', ...(r.job.requirements.includes('COLD_BAG') ? ['COLD_BAG'] : [])];
       return {
         id: r.offer.id, deliveryJobId: r.offer.deliveryJobId, expiresAt: r.offer.expiresAt, payCents: r.offer.payCents,
-        pay: b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }, tipCents: r.job.tipCents,
+        pay: { ...(b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }), incentiveCents: incentives.reduce((t, i) => t + i.cents, 0), incentives }, tipCents: r.job.tipCents,
         stops: batchWith ? 3 : 2, pickup: { name: pu.contactName ?? null, line1: pu.line1, city: pu.city }, dropoffArea: { city: dr.city, postalCode: dr.postalCode },
         readiness: this.readiness(r.job), manifest: r.job.manifest as Manifest | null,
         market: r.job.marketId ? { id: r.job.marketId, name: marketNames.get(r.job.marketId) ?? null } : null,
@@ -982,8 +997,8 @@ export class DeliveryService {
       const tripsNow = mineNow.length;
       if (tripsNow && (!mateId || !mineNow.some((j) => j.id === mateId) || tripsNow >= d.maxConcurrent)) throw new ConflictException({ message: 'You already have as many orders as you can carry', code: 'AT_CAPACITY' });
       // first accept wins: the conditional update awards the job to exactly one courier; the accepted pay is kept on the job
-      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number; market?: { id: string; version: number } | null } | null;
-      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, holdUntil: null, acceptedReadyAt: sql`${deliveryJobs.estReadyAt}`, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id, market: b.market ?? null } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
+      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number; market?: { id: string; version: number } | null; incentives?: OfferIncentive[] } | null;
+      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, holdUntil: null, acceptedReadyAt: sql`${deliveryJobs.estReadyAt}`, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id, market: b.market ?? null, incentives: b.incentives ?? [] } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
       if (!job) throw new ConflictException('Job already taken');
       await tx.update(driverOffers).set({ status: 'ACCEPTED', respondedAt: new Date() }).where(eq(driverOffers.id, offerId));
       await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.status, 'OFFERED')));
@@ -1051,7 +1066,10 @@ export class DeliveryService {
     }
     return this.db.transaction(async (tx) => {
       if (Object.keys(patch).length) await tx.update(deliveryJobs).set(patch).where(eq(deliveryJobs.id, jobId));
-      return this.transition(jobId, status, { ...rest, handoffMethod: patch.handoffMethod, costOwner: status === 'FAILED' ? 'PLATFORM' : undefined }, tx);
+      const u = await this.transition(jobId, status, { ...rest, handoffMethod: patch.handoffMethod, costOwner: status === 'FAILED' ? 'PLATFORM' : undefined }, tx);
+      // Courier R3: handoff far from the drop-off, or a proof photo seen before
+      if (status === 'DELIVERED') await this.fraud.onDelivered(u, d.id, { lat: data.lat ?? d.lastLat, lng: data.lng ?? d.lastLng }, tx);
+      return u;
     });
   }
 

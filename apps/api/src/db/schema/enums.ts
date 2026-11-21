@@ -137,6 +137,9 @@ export const ledgerAccountEnum = pgEnum('ledger_account', [
   'INVENTORY',
   'PLATFORM_ADJUSTMENTS',
   'GIFT_CARD_LIABILITY',
+  'PLATFORM_EXPENSE_COURIER_INCENTIVE',
+  'PLATFORM_EXPENSE_DELIVERY_VARIANCE',
+  'PLATFORM_REVENUE_INSTANT_FEE',
 ]);
 
 export const waitlistStatusEnum = pgEnum('waitlist_status', [

@@ -17,10 +17,15 @@ import { CourierService } from './courier.service';
 import { DeliveryPolicyService } from './delivery-policy.service';
 import { DeliveryPolicyController } from './delivery-policy.controller';
 import { StorageService } from '../../core/storage.service';
+import { CourierR3Controller } from './courier-r3.controller';
+import { CourierForecastService } from './courier-forecast.service';
+import { CourierIncentivesService } from './courier-incentives.service';
+import { CourierFraudService } from './courier-fraud.service';
+import { CourierPayoutsService } from './courier-payouts.service';
 
 @Global()
 @Module({
-  controllers: [CourierController, DeliveryPolicyController, DeliveryController, DeliveryFollowupsController],
+  controllers: [CourierController, CourierR3Controller, DeliveryPolicyController, DeliveryController, DeliveryFollowupsController],
   providers: [
     MockDeliveryProvider,
     DoorDashDriveProvider,
@@ -40,11 +45,15 @@ import { StorageService } from '../../core/storage.service';
     LiveService,
     StorageService,
     DeliveryPolicyService,
+    CourierIncentivesService,
+    CourierFraudService,
+    CourierForecastService,
+    CourierPayoutsService,
     DeliveryService,
     DeliveryAdminService,
     CourierFilesService,
     CourierService,
   ],
-  exports: [CourierService, DeliveryPolicyService, DeliveryService, DeliveryAdminService, DeliveryProviderRegistry, RoutingService, LiveService, StorageService],
+  exports: [CourierService, CourierIncentivesService, CourierFraudService, CourierForecastService, CourierPayoutsService, DeliveryPolicyService, DeliveryService, DeliveryAdminService, DeliveryProviderRegistry, RoutingService, LiveService, StorageService],
 })
 export class DeliveryModule {}
