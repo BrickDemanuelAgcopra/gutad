@@ -6,6 +6,8 @@ import { assertCan, CurrentUser, JwtPayload, Public, Roles } from '../../common/
 import { zod } from '../../common/zod.pipe';
 import { DeliveryService } from './delivery.service';
 import { DeliveryAdminService } from './delivery-admin.service';
+import { CourierService } from './courier.service';
+import { can } from '../../common/auth';
 import type { Address } from './providers/delivery-provider';
 
 const AddressDto = z.object({ line1: z.string(), line2: z.string().optional(), city: z.string(), region: z.string(), postalCode: z.string(), country: z.string().optional(), lat: z.number().optional(), lng: z.number().optional(), instructions: z.string().optional(), contactName: z.string().optional(), contactPhone: z.string().optional() });
@@ -16,12 +18,12 @@ const ResolveExDto = z.object({ resolution: z.enum(['RETURN', 'DISPOSE', 'SAFE_P
 const ExternalDto = z.object({ externalOrderId: z.string(), dropoff: AddressDto, orderValueCents: z.number().int().min(0), tipCents: z.number().int().min(0).optional() });
 const TransitionDto = z.object({ status: z.enum(['ASSIGNED', 'PICKED_UP', 'DELIVERED', 'FAILED', 'RETURNED']), proofPhotoUrl: z.string().optional(), proofSignature: z.string().optional(), reason: z.string().optional(), costOwner: z.enum(['CUSTOMER', 'MERCHANT', 'PLATFORM', 'PROVIDER', 'DRIVER']).optional(), lat: z.number().optional(), lng: z.number().optional() });
 const CancelDto = z.object({ reason: z.string(), costOwner: z.enum(['CUSTOMER', 'MERCHANT', 'PLATFORM', 'PROVIDER', 'DRIVER']).optional() });
-const DriverTransitionDto = z.object({ status: z.enum(['PICKED_UP', 'DELIVERED', 'FAILED']), proofPhotoUrl: z.string().optional(), proofSignature: z.string().optional(), reason: z.string().optional(), lat: z.number().optional(), lng: z.number().optional() });
+const DriverTransitionDto = z.object({ status: z.enum(['PICKED_UP', 'DELIVERED', 'FAILED']), proofPhotoUrl: z.string().optional(), proofSignature: z.string().optional(), handoffPin: z.string().max(8).optional(), idChecked: z.boolean().optional(), pickupCheck: z.object({ orderCode: z.string().max(12).optional(), bagCount: z.number().int().min(1).max(30), drinkCount: z.number().int().min(0).max(30).optional(), sealIntact: z.boolean(), note: z.string().max(500).optional() }).optional(), reason: z.string().optional(), lat: z.number().optional(), lng: z.number().optional() });
 
 @ApiTags('12/13 Delivery & drivers')
 @Controller()
 export class DeliveryController {
-  constructor(private readonly svc: DeliveryService, private readonly admin: DeliveryAdminService) {}
+  constructor(private readonly svc: DeliveryService, private readonly admin: DeliveryAdminService, private readonly courierSvc: CourierService) {}
 
   @Public() @Post('webhooks/delivery') webhook(@Req() req: Request & { rawBody?: Buffer }) {
     return this.svc.ingestWebhook(req.rawBody || Buffer.from(JSON.stringify(req.body)), req.headers as Record<string, string | undefined>);
@@ -55,9 +57,15 @@ export class DeliveryController {
   @ApiBearerAuth() @Get('admin/couriers') couriers(@CurrentUser() u: JwtPayload, @Query() q: Record<string, string>) { return this.admin.couriers(u, q); }
   @ApiBearerAuth() @Get('admin/couriers/documents') docQueue(@CurrentUser() u: JwtPayload) { return this.admin.documentQueue(u); }
   @ApiBearerAuth() @Get('admin/couriers/shifts') shiftBoard(@CurrentUser() u: JwtPayload, @Query('days') days?: string) { return this.admin.shiftBoard(u, Number(days) || 2); }
-  @ApiBearerAuth() @Get('admin/couriers/:id') courier(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.admin.courier(u, id); }
+  @ApiBearerAuth() @Get('admin/couriers/:id') async courier(@CurrentUser() u: JwtPayload, @Param('id') id: string) {
+    const r = await this.admin.courier(u, id);
+    const extras = await this.courierSvc.adminExtras(u, id);
+    // payout details are finance data: masked for everyone else
+    const courier = can(u, 'finance.read') ? r.courier : { ...r.courier, payoutAccountId: r.courier.payoutAccountId ? `••••${r.courier.payoutAccountId.slice(-4)}` : null };
+    return { ...r, courier, ...extras };
+  }
   @ApiBearerAuth() @Patch('admin/couriers/:id') updCourier(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ vehicleType: z.enum(['BIKE', 'EBIKE', 'SCOOTER', 'CAR', 'VAN', 'WALK']).optional(), capabilities: z.array(z.enum(['ALCOHOL', 'LARGE_ORDER', 'COLD_BAG', 'HOT_BAG'])).optional(), regionId: z.string().uuid().nullable().optional(), zoneIds: z.array(z.string().uuid()).optional(), maxConcurrent: z.number().int().min(1).max(4).optional() }))) b: { vehicleType?: string; capabilities?: string[]; regionId?: string | null; zoneIds?: string[]; maxConcurrent?: number }) { return this.admin.updateCourier(u, id, b); }
-  @ApiBearerAuth() @Post('admin/courier-documents/:id/review') review(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ approve: z.boolean(), note: z.string().optional(), expiresAt: z.string().datetime().optional() }))) b: { approve: boolean; note?: string; expiresAt?: string }) { return this.admin.reviewDocument(u, id, b.approve, b.note, b.expiresAt); }
+  @ApiBearerAuth() @Post('admin/courier-documents/:id/review') async review(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ approve: z.boolean(), note: z.string().optional(), expiresAt: z.string().datetime().optional() }))) b: { approve: boolean; note?: string; expiresAt?: string }) { const doc = await this.admin.reviewDocument(u, id, b.approve, b.note, b.expiresAt); await this.courierSvc.syncDocChecks(doc.driverId); return doc; }
   @ApiBearerAuth() @Post('admin/couriers/:id/records') record(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ kind: z.enum(['INCIDENT', 'TRAINING', 'SUPPORT_NOTE']), title: z.string().min(2), detail: z.string().optional(), severity: z.number().int().min(1).max(3).optional() }))) b: { kind: 'INCIDENT' | 'TRAINING' | 'SUPPORT_NOTE'; title: string; detail?: string; severity?: number }) { return this.admin.addRecord(u, id, b); }
   @ApiBearerAuth() @Post('admin/couriers/:id/adjustments') adjust(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ cents: z.number().int().min(-50000).max(50000), reason: z.string().min(5), deliveryJobId: z.string().uuid().optional() }))) b: { cents: number; reason: string; deliveryJobId?: string }) { return this.admin.adjust(u, id, b); }
   @ApiBearerAuth() @Post('admin/couriers/:id/suspend') suspend(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ reason: z.string().min(5) }))) b: { reason: string }) { return this.admin.suspend(u, id, b.reason); }
@@ -68,7 +76,7 @@ export class DeliveryController {
   // courier app (Phase G)
   @ApiBearerAuth() @Get('driver/standing') standing(@CurrentUser() u: JwtPayload) { return this.admin.myStanding(u); }
   @ApiBearerAuth() @Get('driver/documents') myDocs(@CurrentUser() u: JwtPayload) { return this.admin.myDocuments(u); }
-  @ApiBearerAuth() @Post('driver/documents') upload(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ kind: z.string(), fileUrl: z.string().min(4), expiresAt: z.string().datetime().optional() }))) b: { kind: string; fileUrl: string; expiresAt?: string }) { return this.admin.uploadDocument(u, b); }
+  @ApiBearerAuth() @Post('driver/documents') async upload(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ kind: z.string(), fileUrl: z.string().min(4), expiresAt: z.string().datetime().optional() }))) b: { kind: string; fileUrl: string; expiresAt?: string }) { const doc = await this.admin.uploadDocument(u, b); await this.courierSvc.syncDocChecks(doc.driverId); return doc; }
   @ApiBearerAuth() @Get('driver/shifts') myShifts(@CurrentUser() u: JwtPayload) { return this.admin.myShifts(u); }
   @ApiBearerAuth() @Post('driver/shifts') addShift(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ startsAt: z.string().datetime(), endsAt: z.string().datetime(), zoneId: z.string().uuid().optional() }))) b: { startsAt: string; endsAt: string; zoneId?: string }) { return this.admin.addShift(u, b); }
   @ApiBearerAuth() @Delete('driver/shifts/:id') cancelShift(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.admin.cancelShift(u, id); }
@@ -79,13 +87,12 @@ export class DeliveryController {
 
   // driver app
   @ApiBearerAuth() @Post('driver/apply') apply(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ vehicle: z.string() }))) b: { vehicle: string }) { return this.svc.applyAsDriver(u, b); }
-  @ApiBearerAuth() @Roles('PLATFORM_ADMIN', 'SUPPORT') @Post('drivers/:id/approve') approve(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ approved: z.boolean() }))) b: { approved: boolean }) { return this.svc.approveDriver(u, id, b.approved); }
+  @ApiBearerAuth() @Roles('PLATFORM_ADMIN', 'SUPPORT') @Post('drivers/:id/approve') async approve(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ approved: z.boolean() }))) b: { approved: boolean }) { const d = await this.svc.approveDriver(u, id, b.approved); await this.courierSvc.legacyDecision(u, id, b.approved); return d; }
   @ApiBearerAuth() @Get('driver/me') me(@CurrentUser() u: JwtPayload) { return this.svc.myDriver(u); }
-  @ApiBearerAuth() @Post('driver/availability') availability(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ isAvailable: z.boolean(), lat: z.number().optional(), lng: z.number().optional() }))) b: { isAvailable: boolean; lat?: number; lng?: number }) { return this.svc.setAvailability(u, b.isAvailable, b.lat, b.lng); }
+  @ApiBearerAuth() @Post('driver/availability') availability(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ isAvailable: z.boolean(), lat: z.number().optional(), lng: z.number().optional(), mode: z.enum(['ON_DEMAND', 'RESERVED']).optional() }))) b: { isAvailable: boolean; lat?: number; lng?: number; mode?: 'ON_DEMAND' | 'RESERVED' }) { return this.svc.setAvailability(u, b.isAvailable, b.lat, b.lng, b.mode === 'RESERVED' ? 'RESERVED' : 'ON_DEMAND'); }
   @ApiBearerAuth() @Post('driver/location') location(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ lat: z.number(), lng: z.number() }))) b: { lat: number; lng: number }) { return this.svc.updateLocation(u, b.lat, b.lng); }
   @ApiBearerAuth() @Get('driver/offers') offers(@CurrentUser() u: JwtPayload) { return this.svc.myOffers(u); }
   @ApiBearerAuth() @Post('driver/offers/:id') respond(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ accept: z.boolean() }))) b: { accept: boolean }) { return this.svc.respondOffer(u, id, b.accept); }
   @ApiBearerAuth() @Get('driver/jobs') jobs(@CurrentUser() u: JwtPayload) { return this.svc.myActiveJobs(u); }
   @ApiBearerAuth() @Post('driver/jobs/:id/transition') driverTransition(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(DriverTransitionDto)) b: z.infer<typeof DriverTransitionDto>) { const { status, ...data } = b; return this.svc.driverTransition(u, id, status, data); }
-  @ApiBearerAuth() @Get('driver/earnings') earnings(@CurrentUser() u: JwtPayload) { return this.svc.myEarnings(u); }
 }

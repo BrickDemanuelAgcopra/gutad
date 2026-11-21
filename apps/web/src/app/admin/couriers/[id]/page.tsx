@@ -8,6 +8,9 @@ import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, statusTone, Table } from '@/components/ui';
 import { askReason } from '@/components/admin-ui';
 import { DocLink } from '@/components/courier-docs';
+import { CourierFeedbackTime, OnboardingPanel } from '@/components/courier/admin';
+import type { Onboarding } from '@/components/courier/common';
+import type { Feedback } from '@/components/courier/money';
 
 interface P {
   courier: { id: string; name: string | null; email: string; phone: string | null; status: string; vehicleType: string; capabilities: string[]; zoneIds: string[]; maxConcurrent: number; isAvailable: boolean; lastSeenAt: string | null; suspendedReason: string | null; suspendedAt: string | null; appealStatus: string; appealNote: string | null; appealDecisionNote: string | null };
@@ -18,6 +21,9 @@ interface P {
   support: { id: string; category: string; status: string; owner: string | null; remedyCents: number; createdAt: string }[];
   earnings: { id: string; kind: string; baseCents: number; tipCents: number; bonusCents: number; reason: string | null; payoutId: string | null; createdAt: string }[];
   payableCents: number;
+  onboarding?: Onboarding | null;
+  time?: Record<string, number> | null;
+  feedback?: Feedback | null;
   metrics?: { offers: number; acceptanceRate: number | null; completionRate: number | null; cancellationRate: number | null; onTimeRate: number | null; avgPickupWaitMinutes: number | null; delivered: number };
 }
 const pct = (x: number | null | undefined) => (x == null ? '—' : `${x}%`);
@@ -44,6 +50,7 @@ export default function Courier() {
       <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {[['Offers (30d)', p.metrics?.offers ?? 0], ['Acceptance', pct(p.metrics?.acceptanceRate)], ['Completion', pct(p.metrics?.completionRate)], ['Cancellations', pct(p.metrics?.cancellationRate)], ['On time', pct(p.metrics?.onTimeRate)], ['Payable', money(p.payableCents)]].map(([l, x]) => <div key={l as string} className="rounded-xl border border-ink-100 bg-white p-3"><div className="text-xs text-ink-500">{l}</div><div className="text-lg font-bold">{x}</div></div>)}
       </div>
+      {p.onboarding && <OnboardingPanel courierId={id} ob={p.onboarding} manage={manage} onChange={reload} />}
       {c.status === 'SUSPENDED' && (
         <Card title="Suspension">
           <p className="text-sm">Since {when(c.suspendedAt)}: {c.suspendedReason}</p>
@@ -60,7 +67,7 @@ export default function Courier() {
         </Card>
         <Card title="Documents">
           <Table rows={p.documents} empty="No documents uploaded." cols={[{ key: 'k', label: 'Document', render: (d) => <DocLink doc={d} label={COURIER_DOC_LABELS[d.kind as CourierDocKind] || d.kind} /> }, { key: 's', label: 'Status', render: (d) => <Badge tone={statusTone(d.status)}>{d.status}</Badge> }, { key: 'e', label: 'Expires', render: (d) => when(d.expiresAt) }, { key: 'n', label: 'Note', render: (d) => <span className="text-xs">{d.reviewNote}</span> }]} />
-          {c.status === 'PENDING' && manage && <Button className="mt-2" size="sm" onClick={() => act(() => api.post(`/drivers/${id}/approve`, { approved: true }), 'Courier approved.')}>Approve courier</Button>}
+          {c.status === 'PENDING' && manage && !p.onboarding && <Button className="mt-2" size="sm" onClick={() => act(() => api.post(`/drivers/${id}/approve`, { approved: true }), 'Courier approved.')}>Approve courier</Button>}
         </Card>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
@@ -74,6 +81,7 @@ export default function Courier() {
           {p.support.length > 0 && <><div className="mt-3 text-xs font-semibold text-ink-500">Support tickets on their deliveries</div>{p.support.map((s) => <div key={s.id} className="text-xs">{s.category.toLowerCase().replace(/_/g, ' ')} · {s.status.toLowerCase()} · owner {s.owner?.toLowerCase() || '—'}{s.remedyCents ? ` · ${money(s.remedyCents)}` : ''} · {when(s.createdAt)}</div>)}</>}
         </Card>
       </div>
+      {(p.feedback !== undefined || p.time !== undefined) && <CourierFeedbackTime feedback={p.feedback} time={p.time} />}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Recent deliveries">
           <Table rows={p.jobs.slice(0, 15)} empty="None." cols={[{ key: 'd', label: 'Created', render: (j) => <span className="text-xs">{when(j.createdAt)}</span> }, { key: 's', label: 'Status', render: (j) => <span><Badge tone={statusTone(j.status)}>{j.status}</Badge>{j.batchId && <Badge tone="info">batch</Badge>}</span> }, { key: 'o', label: 'On time', render: (j) => j.deliveredAt && j.etaAt ? (new Date(j.deliveredAt) <= new Date(new Date(j.etaAt).getTime() + 300000) ? 'yes' : 'late') : '—' }, { key: 'x', label: '', render: (j) => j.orderId ? <Link className="text-xs underline" href={`/admin/orders/${j.orderId}`}>order</Link> : null }]} />

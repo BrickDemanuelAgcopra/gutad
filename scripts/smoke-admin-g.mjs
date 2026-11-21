@@ -89,7 +89,7 @@ export async function adminPhaseG({ call, check, A, O, C }) {
 
   // 17.6 arrival + 17.7 exception with wait timer + 17.8 proof
   await call('POST', `/driver/jobs/${jA.id}/arrived`, { at: 'PICKUP' }, D);
-  await call('POST', `/driver/jobs/${jA.id}/transition`, { status: 'PICKED_UP', lat: 40.742, lng: -74.006 }, D);
+  await call('POST', `/driver/jobs/${jA.id}/transition`, { status: 'PICKED_UP', pickupCheck: { bagCount: 1, sealIntact: true }, lat: 40.742, lng: -74.006 }, D);
   await call('POST', '/driver/location', { lat: 40.7423, lng: -74.0052 }, D);
   await call('POST', `/driver/jobs/${jA.id}/arrived`, { at: 'DROPOFF' }, D);
   await call('POST', `/driver/jobs/${jA.id}/exception`, { kind: 'CUSTOMER_UNREACHABLE', method: 'CALL' }, D);
@@ -106,7 +106,7 @@ export async function adminPhaseG({ call, check, A, O, C }) {
   const purge = (await call('POST', '/admin/jobs/delivery-housekeeping', { at: new Date(Date.now() + 120 * 86400_000).toISOString() }, A)).json;
   const purged = (await call('GET', `/delivery-jobs/${jA.id}/proof`, undefined, A)).json;
   check('proof is removed after the retention period', purge.proofs.purged >= 1 && !purged.proofPhotoUrl && purged.purgedAt, purge);
-  await call('POST', `/driver/jobs/${oB.delivery.id}/transition`, { status: 'PICKED_UP' }, D);
+  await call('POST', `/driver/jobs/${oB.delivery.id}/transition`, { status: 'PICKED_UP', pickupCheck: { bagCount: 1, sealIntact: true } }, D);
   await call('POST', `/driver/jobs/${oB.delivery.id}/transition`, { status: 'DELIVERED', proofSignature: 'B. Customer' }, D);
 
   // 17.3 manual assignment with reason

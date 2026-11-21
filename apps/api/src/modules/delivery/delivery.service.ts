@@ -1,9 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { bearing, bearingDiff, DEFAULT_BATCHING, DEFAULT_DISPATCH, HARD_REQUIREMENTS, REQUIRED_COURIER_DOCS, type BatchingConfig, type DispatchConfig } from '@gutad/shared';
+import { bearing, bearingDiff, DEFAULT_AVAILABILITY, DEFAULT_BATCHING, DEFAULT_DISPATCH, DEFAULT_PAY_POLICY, HARD_REQUIREMENTS, offerPay, REQUIRED_COURIER_DOCS, waitingPay, type AvailabilityConfig, type BatchingConfig, type CourierPayPolicy, type DispatchConfig, type OfferPay } from '@gutad/shared';
 import { ModuleRef } from '@nestjs/core';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { courierDocuments, courierRecords, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, users } from '../../db/schema';
+import { courierDocuments, courierEligibility, courierRecords, courierTimeEntries, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, users } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
 import { assertCan, assertOrgAccess, hasAnyRole, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { LedgerService } from '../../core/ledger.service';
@@ -86,6 +86,8 @@ export class DeliveryService {
 
   async dispatchCfg() { return this.settings.getObject<DispatchConfig>('delivery.dispatch', DEFAULT_DISPATCH); }
   async batchingCfg() { return this.settings.getObject<BatchingConfig>('delivery.batching', DEFAULT_BATCHING); }
+  async payPolicy() { return this.settings.getObject<CourierPayPolicy>('delivery.pay', DEFAULT_PAY_POLICY); }
+  async availabilityCfg() { return this.settings.getObject<AvailabilityConfig>('delivery.availability', DEFAULT_AVAILABILITY); }
 
   private unavailable(message: string, code = 'DELIVERY_UNAVAILABLE'): never { throw new BadRequestException({ message, code }); }
 
@@ -274,7 +276,8 @@ export class DeliveryService {
       return u;
     }
     if (job.fleet === 'PLATFORM') {
-      const [u] = await tx.update(deliveryJobs).set({ status: 'REQUESTED', requirements: await this.requirementsFor(job, tx) }).where(eq(deliveryJobs.id, job.id)).returning();
+      // Courier R1: the customer's handoff PIN (accepted as proof of delivery)
+      const [u] = await tx.update(deliveryJobs).set({ status: 'REQUESTED', requirements: await this.requirementsFor(job, tx), handoffPin: job.handoffPin ?? String(Math.floor(1000 + Math.random() * 9000)) }).where(eq(deliveryJobs.id, job.id)).returning();
       await this.event(job.id, 'REQUESTED', { fleet: 'PLATFORM' }, tx);
       await this.offerRound(u, tx);
       return (await tx.select().from(deliveryJobs).where(eq(deliveryJobs.id, job.id)))[0];
@@ -319,8 +322,10 @@ export class DeliveryService {
     const patch: Partial<typeof deliveryJobs.$inferInsert> = { status };
     const now = new Date();
     if (status === 'ASSIGNED') patch.assignedAt = now;
-    if (status === 'PICKED_UP') patch.pickedUpAt = now;
-    if (status === 'DELIVERED') patch.deliveredAt = now;
+    if (status === 'PICKED_UP') { patch.pickedUpAt = now; patch.custody = 'COURIER'; }
+    if (status === 'DELIVERED') { patch.deliveredAt = now; patch.custody = 'CUSTOMER'; }
+    if (status === 'RETURNED') patch.custody = 'RETURNED';
+    if (status === 'FAILED' && job.pickedUpAt) patch.custody = 'DISPOSED';
     if (status === 'CANCELED' || status === 'FAILED') {
       patch.canceledAt = now;
       patch.cancelReason = (data.reason as string) || null;
@@ -335,6 +340,11 @@ export class DeliveryService {
     this.pushJob(u);
     const topic = status === 'ASSIGNED' ? 'delivery.assigned' : status === 'PICKED_UP' ? 'delivery.picked_up' : status === 'DELIVERED' ? 'delivery.delivered' : status === 'FAILED' || status === 'CANCELED' ? 'delivery.failed' : null;
     if (topic) await this.outbox.publish(topic, jobId, { orderId: job.orderId, status, ...data }, tx);
+    // Courier R1: own-fleet pay for the outcome (unique per job and kind, so a replayed update never pays twice)
+    if (u.fleet === 'PLATFORM' && u.driverId && ['DELIVERED', 'RETURNED', 'FAILED', 'CANCELED'].includes(status)) {
+      await this.courierPay(u, status, tx);
+      await this.afterJobClosed(u.driverId, tx);
+    }
     if (status === 'DELIVERED') {
       await this.settleJob(u, tx);
       if (job.orderId) {
@@ -370,11 +380,7 @@ export class DeliveryService {
         ], tx);
       }
     } else if (job.fleet === 'PLATFORM' && job.driverId) {
-      await tx.insert(driverEarnings).values({ driverId: job.driverId, deliveryJobId: job.id, baseCents: job.providerCostCents, tipCents: job.tipCents });
-      await this.ledger.post({ orderId: job.orderId, currency }, [
-        { account: 'PLATFORM_EXPENSE_DELIVERY_SUBSIDY', debitCents: job.providerCostCents, memo: `Driver base pay job ${job.id}` },
-        { account: 'DRIVER_PAYABLE', partyId: job.driverId, creditCents: job.providerCostCents, memo: 'Base pay' },
-      ], tx);
+      // base, distance, time and waiting pay were posted by courierPay; the tip moves to the courier here
       if (job.tipCents) {
         await this.ledger.post({ orderId: job.orderId, currency }, [
           { account: 'DRIVER_PAYABLE', partyId: `order:${job.orderId}`, debitCents: job.tipCents, memo: 'Tip reassigned to driver' },
@@ -391,6 +397,59 @@ export class DeliveryService {
         { account: 'MERCHANT_PAYABLE', partyId: loc!.organizationId, organizationId: loc!.organizationId, locationId: job.locationId, creditCents: amt, memo: 'Delivery fee + tip (merchant fleet)' },
       ], tx);
     }
+  }
+
+  /** Guaranteed pay recorded for a job: the accepted offer's snapshot, else the current policy (manual assignment). */
+  async jobPay(job: typeof deliveryJobs.$inferSelect): Promise<{ policy: CourierPayPolicy; pay: OfferPay; estMinutes: number }> {
+    const snap = job.payPolicy as { policy: CourierPayPolicy; pay: OfferPay; estMinutes: number } | null;
+    if (snap?.pay && snap.policy) return snap;
+    const policy = await this.payPolicy();
+    const cfg = await this.dispatchCfg();
+    const km = job.distanceKm ?? 3;
+    const estMinutes = Math.round(km * cfg.travelMinutesPerKm + 5);
+    return { policy, pay: offerPay(policy, km, estMinutes), estMinutes };
+  }
+
+  /**
+   * Courier R1 itemized earnings for an own-fleet job. DELIVERED / RETURNED / FAILED after pickup earn the guaranteed pay
+   * (+ waiting beyond the grace period, + return pay); a cancellation after the courier reached the pickup earns the
+   * cancellation pay. Each (job, kind) is written once, and the ledger is posted only when the row is new.
+   */
+  async courierPay(job: typeof deliveryJobs.$inferSelect, outcome: Status, tx: DbOrTx) {
+    if (!job.driverId) return null;
+    const { policy, pay } = await this.jobPay(job);
+    const waited = job.arrivedPickupAt ? ((job.pickedUpAt ?? new Date()).getTime() - job.arrivedPickupAt.getTime()) / 60_000 : 0;
+    const wait = waitingPay(policy, waited);
+    let row: Omit<typeof driverEarnings.$inferInsert, 'driverId'>;
+    if (outcome === 'CANCELED' || (outcome === 'FAILED' && !job.pickedUpAt)) {
+      if (!job.arrivedPickupAt) return null; // released or canceled before arriving: nothing earned
+      row = { kind: 'CANCEL_COMP', baseCents: policy.cancelAfterArrivalCents, waitingCents: wait.cents, reason: `Canceled after arrival${job.cancelReason ? `: ${job.cancelReason}` : ''}` };
+    } else {
+      row = { kind: 'DELIVERY', baseCents: pay.baseCents, distanceCents: pay.distanceCents, timeCents: pay.timeCents, waitingCents: wait.cents, returnCents: outcome === 'RETURNED' ? policy.returnCents : 0, tipCents: outcome === 'DELIVERED' ? job.tipCents : 0, reason: outcome === 'DELIVERED' ? null : `${outcome.toLowerCase()}${job.cancelReason ? `: ${job.cancelReason}` : ''}` };
+    }
+    const total = (row.baseCents || 0) + (row.distanceCents || 0) + (row.timeCents || 0) + (row.waitingCents || 0) + (row.returnCents || 0);
+    const availableAt = new Date(Date.now() + policy.holdHours * 3600_000);
+    const [e] = await tx.insert(driverEarnings).values({ ...row, driverId: job.driverId, deliveryJobId: job.id, policyVersion: policy.version, availableAt }).onConflictDoNothing().returning();
+    if (!e) return null;
+    const [loc] = await tx.select({ currency: locations.currency }).from(locations).where(eq(locations.id, job.locationId)).limit(1);
+    if (total > 0) {
+      await this.ledger.post({ orderId: job.orderId, currency: loc?.currency || 'USD' }, [
+        { account: 'PLATFORM_EXPENSE_DELIVERY_SUBSIDY', debitCents: total, memo: `Courier pay job ${job.id} (${row.kind})` },
+        { account: 'DRIVER_PAYABLE', partyId: job.driverId, creditCents: total, memo: row.kind === 'DELIVERY' ? 'Delivery pay' : 'Cancellation pay' },
+      ], tx);
+    }
+    if (outcome === 'DELIVERED') await tx.update(drivers).set({ firstDeliveryAt: sql`coalesce(${drivers.firstDeliveryAt}, now())` }).where(eq(drivers.id, job.driverId));
+    return e;
+  }
+
+  /** Courier R1: after the last active job, a courier who asked to finish goes offline. */
+  async afterJobClosed(driverId: string, tx: DbOrTx) {
+    const [d] = await tx.select().from(drivers).where(eq(drivers.id, driverId)).limit(1);
+    if (!d?.finishAfterCurrent) return;
+    const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(deliveryJobs).where(and(eq(deliveryJobs.driverId, driverId), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP'])));
+    if (n > 0) return;
+    await tx.update(drivers).set({ isAvailable: false, finishAfterCurrent: false, onBreak: false }).where(eq(drivers.id, driverId));
+    await tx.update(courierTimeEntries).set({ endedAt: new Date() }).where(and(eq(courierTimeEntries.driverId, driverId), isNull(courierTimeEntries.endedAt)));
   }
 
   async cancel(user: JwtPayload | null, jobId: string, reason: string, costOwner?: string) {
@@ -528,11 +587,19 @@ export class DeliveryService {
     return d;
   }
 
-  async setAvailability(user: JwtPayload, isAvailable: boolean, lat?: number, lng?: number) {
+  async setAvailability(user: JwtPayload, isAvailable: boolean, lat?: number, lng?: number, mode: 'ON_DEMAND' | 'RESERVED' = 'ON_DEMAND', shiftId: string | null = null) {
     const d = await this.myDriver(user);
     if (d.status !== 'APPROVED') throw new ForbiddenException(d.status === 'SUSPENDED' ? `Account suspended: ${d.suspendedReason || 'see your messages'}` : 'Driver not approved');
+    if (isAvailable && d.applicationStatus !== 'APPROVED') throw new ForbiddenException({ message: 'Your application is not approved yet', code: 'NOT_APPROVED' });
+    if (isAvailable && !['ACTIVE', 'RESTRICTED'].includes(d.lifecycleStatus ?? '')) throw new ForbiddenException({ message: 'Your account is not active', code: 'LIFECYCLE' });
     if (isAvailable && (await this.driversWithExpiredDocs(this.db)).has(d.id)) throw new ForbiddenException({ message: 'A required document has expired. Upload a current one to go online.', code: 'DOCS_EXPIRED' });
-    const [u] = await this.db.update(drivers).set({ isAvailable, lastLat: lat ?? d.lastLat, lastLng: lng ?? d.lastLng, lastSeenAt: new Date() }).where(eq(drivers.id, d.id)).returning();
+    if (isAvailable && (await this.driversWithBadChecks(this.db)).has(d.id)) throw new ForbiddenException({ message: 'An eligibility check has expired or failed. See your account to fix it.', code: 'CHECK_EXPIRED' });
+    if (isAvailable && (lat ?? d.lastLat) === null) throw new BadRequestException({ message: 'Share your location to go online', code: 'NO_LOCATION' });
+    const [u] = await this.db.update(drivers).set({ isAvailable, lastLat: lat ?? d.lastLat, lastLng: lng ?? d.lastLng, lastSeenAt: lat !== undefined ? new Date() : d.lastSeenAt, ...(isAvailable ? { availabilityMode: mode } : { onBreak: false, finishAfterCurrent: false }) }).where(eq(drivers.id, d.id)).returning();
+    // Courier R1 time tracking: one open ONLINE entry while online (breaks are separate entries)
+    const open = await this.db.select().from(courierTimeEntries).where(and(eq(courierTimeEntries.driverId, d.id), isNull(courierTimeEntries.endedAt)));
+    if (isAvailable && !open.some((e) => e.kind === 'ONLINE')) await this.db.insert(courierTimeEntries).values({ driverId: d.id, kind: 'ONLINE', mode, shiftId, startedAt: new Date() });
+    if (!isAvailable && open.length) await this.db.update(courierTimeEntries).set({ endedAt: new Date() }).where(inArray(courierTimeEntries.id, open.map((e) => e.id)));
     if (u.lastLat !== null && u.lastLng !== null) this.live.publish({ type: 'courier', driverId: u.id, lat: u.lastLat, lng: u.lastLng, isAvailable, jobIds: [], locationIds: [], at: new Date().toISOString() });
     return u;
   }
@@ -570,8 +637,14 @@ export class DeliveryService {
     return req;
   }
 
+  /** Courier R1: couriers with an expired, failed or reopened eligibility check cannot take work. */
+  async driversWithBadChecks(tx: DbOrTx) {
+    const rows = await tx.select({ driverId: courierEligibility.driverId }).from(courierEligibility).where(or(inArray(courierEligibility.status, ['EXPIRED', 'FAILED', 'NEEDS_ACTION']), and(eq(courierEligibility.status, 'PASSED'), lt(courierEligibility.expiresAt, new Date()))));
+    return new Set(rows.map((r) => r.driverId));
+  }
+
   /** Drivers whose required documents have expired cannot take work (16.2). */
-  private async driversWithExpiredDocs(tx: DbOrTx) {
+  async driversWithExpiredDocs(tx: DbOrTx) {
     const rows = await tx.select({ driverId: courierDocuments.driverId }).from(courierDocuments).where(and(inArray(courierDocuments.kind, REQUIRED_COURIER_DOCS as string[]), or(eq(courierDocuments.status, 'EXPIRED'), and(eq(courierDocuments.status, 'APPROVED'), lt(courierDocuments.expiresAt, new Date())))));
     return new Set(rows.map((r) => r.driverId));
   }
@@ -590,8 +663,12 @@ export class DeliveryService {
     const reqs = job.requirements.length ? job.requirements : await this.requirementsFor(job, tx);
     const [o] = job.orderId ? await tx.select().from(orders).where(eq(orders.id, job.orderId)).limit(1) : [null];
     const readyIn = o?.promiseAt ? Math.max(0, (o.promiseAt.getTime() - Date.now()) / 60_000 - (o.fulfillmentType === 'DELIVERY' ? 15 : 0)) : 0;
-    const available = await tx.select().from(drivers).where(and(eq(drivers.isAvailable, true), eq(drivers.status, 'APPROVED')));
-    const expired = await this.driversWithExpiredDocs(tx);
+    // Courier R1 dispatchability: approved, active lifecycle, not on a break or finishing, recent location
+    const acfg = await this.availabilityCfg();
+    const policy = await this.payPolicy();
+    const fresh = new Date(Date.now() - acfg.locationFreshMinutes * 60_000);
+    const available = (await tx.select().from(drivers).where(and(eq(drivers.isAvailable, true), eq(drivers.status, 'APPROVED'), eq(drivers.applicationStatus, 'APPROVED'), inArray(drivers.lifecycleStatus, ['ACTIVE', 'RESTRICTED']), eq(drivers.onBreak, false), eq(drivers.finishAfterCurrent, false)))).filter((d) => !d.lastSeenAt || d.lastSeenAt >= fresh);
+    const expired = new Set([...(await this.driversWithExpiredDocs(tx)), ...(await this.driversWithBadChecks(tx))]);
     const tried = new Set((await tx.select({ d: driverOffers.driverId }).from(driverOffers).where(eq(driverOffers.deliveryJobId, job.id))).map((x) => x.d));
     const active = await tx.select().from(deliveryJobs).where(and(inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP']), sql`${deliveryJobs.driverId} is not null`));
     const scored: { d: typeof available[number]; score: number; detail: Record<string, unknown> }[] = [];
@@ -625,6 +702,8 @@ export class DeliveryService {
       const vehicle = (d.vehicleType === 'CAR' || d.vehicleType === 'VAN') && (job.distanceKm ?? 3) < 2 ? 2 : d.vehicleType === 'WALK' && (job.distanceKm ?? 3) > 2 ? 6 : 0;
       const cold = reqs.includes('COLD_BAG') && d.capabilities.includes('COLD_BAG') ? -3 : 0;
       const score = Math.round((km * 2 + readiness * 0.5 + mine.length * 5 + vehicle + cold - (batchWith ? 10 : 0)) * 100) / 100;
+      // RESTRICTED couriers take single, unrestricted orders only
+      if (d.lifecycleStatus === 'RESTRICTED' && (batchWith || reqs.length)) continue;
       scored.push({ d, score, detail: { km: Math.round(km * 100) / 100, readinessGap: Math.round(readiness), load: mine.length, vehicle: d.vehicleType, batchWith } });
     }
     scored.sort((a, b) => a.score - b.score);
@@ -636,7 +715,14 @@ export class DeliveryService {
       if (attempts >= cfg.maxOfferRounds) await this.failover({ ...job, offerAttempts: attempts }, tx, 'No courier accepted');
       return [];
     }
-    await tx.insert(driverOffers).values(pick.map((r) => ({ driverId: r.d.id, deliveryJobId: job.id, payCents: job.providerCostCents, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail })));
+    // Courier R1 guaranteed pay from the versioned policy (distance and time are inside it, never added again later)
+    const tripKm = job.distanceKm ?? (drop.lat !== undefined && drop.lng !== undefined && pickup.lat !== undefined && pickup.lng !== undefined ? haversineKm(pickup.lat, pickup.lng, drop.lat, drop.lng) : 3);
+    await tx.insert(driverOffers).values(pick.map((r) => {
+      const toPickupKm = Number(r.detail.km) || 0;
+      const estMinutes = Math.round((toPickupKm + tripKm) * cfg.travelMinutesPerKm + 5);
+      const pay = offerPay(policy, tripKm, estMinutes);
+      return { driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100 }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail };
+    }));
     await this.event(job.id, 'OFFERED', { round: attempts, couriers: pick.map((r) => ({ driverId: r.d.id, score: r.score })) }, tx);
     return pick;
   }
@@ -679,7 +765,23 @@ export class DeliveryService {
       .from(driverOffers)
       .innerJoin(deliveryJobs, eq(deliveryJobs.id, driverOffers.deliveryJobId))
       .where(and(eq(driverOffers.driverId, d.id), eq(driverOffers.status, 'OFFERED'), sql`${driverOffers.expiresAt} > now()`));
-    return rows.map((r) => ({ ...r.offer, pickupAddress: r.job.pickupAddress, dropoffAddress: r.job.dropoffAddress, tipCents: r.job.tipCents, requirements: r.job.requirements, batchWith: (r.offer.scoreDetail as { batchWith?: string } | null)?.batchWith ?? null }));
+    // Courier R1: full pickup, drop-off area only (street and contact after accepting), pay breakdown with the tip apart
+    return rows.map((r) => {
+      const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number };
+      const pu = r.job.pickupAddress as Address;
+      const dr = r.job.dropoffAddress as Address;
+      const batchWith = (r.offer.scoreDetail as { batchWith?: string } | null)?.batchWith ?? null;
+      const equipment = ['INSULATED_BAG', ...(r.job.requirements.includes('COLD_BAG') ? ['COLD_BAG'] : [])];
+      return {
+        id: r.offer.id, deliveryJobId: r.offer.deliveryJobId, expiresAt: r.offer.expiresAt, payCents: r.offer.payCents,
+        pay: b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }, tipCents: r.job.tipCents,
+        stops: batchWith ? 3 : 2, pickup: { name: pu.contactName ?? null, line1: pu.line1, city: pu.city }, dropoffArea: { city: dr.city, postalCode: dr.postalCode },
+        distanceKm: b.distanceKm ?? r.job.distanceKm, toPickupKm: b.toPickupKm ?? null, estMinutes: b.estMinutes ?? null,
+        requirements: r.job.requirements, equipment,
+        policy: b.policy ? { version: b.policy.version, waitingGraceMinutes: b.policy.waitingGraceMinutes, waitingPerMinuteCents: b.policy.waitingPerMinuteCents, returnCents: b.policy.returnCents, cancelAfterArrivalCents: b.policy.cancelAfterArrivalCents } : null,
+        batchWith, score: r.offer.score, scoreDetail: r.offer.scoreDetail,
+      };
+    });
   }
 
   async respondOffer(user: JwtPayload, offerId: string, accept: boolean) {
@@ -694,7 +796,9 @@ export class DeliveryService {
         return { ok: true };
       }
       // first accept wins
-      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId))).returning();
+      // first accept wins: the conditional update awards the job to exactly one courier; the accepted pay is kept on the job
+      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number } | null;
+      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
       if (!job) throw new ConflictException('Job already taken');
       await tx.update(driverOffers).set({ status: 'ACCEPTED', respondedAt: new Date() }).where(eq(driverOffers.id, offerId));
       await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.status, 'OFFERED')));
@@ -714,18 +818,44 @@ export class DeliveryService {
 
   async myActiveJobs(user: JwtPayload) {
     const d = await this.myDriver(user);
-    return this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP']))).orderBy(deliveryJobs.batchId, deliveryJobs.createdAt);
+    const rows = await this.db.select({ j: deliveryJobs, number: orders.number }).from(deliveryJobs).leftJoin(orders, eq(orders.id, deliveryJobs.orderId)).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP']))).orderBy(deliveryJobs.batchId, deliveryJobs.createdAt);
+    // the PIN itself never goes to the courier; the order code is what the kitchen shows on the bag
+    return rows.map(({ j, number }) => ({ ...j, handoffPin: undefined, pinAvailable: !!j.handoffPin, orderCode: number ? String(number).slice(-4) : j.id.slice(0, 4).toUpperCase(), requiresIdCheck: j.requirements.includes('ALCOHOL') }));
   }
 
-  async driverTransition(user: JwtPayload, jobId: string, status: 'PICKED_UP' | 'DELIVERED' | 'FAILED', data: { proofPhotoUrl?: string; proofSignature?: string; reason?: string; lat?: number; lng?: number }) {
+  async driverTransition(user: JwtPayload, jobId: string, status: 'PICKED_UP' | 'DELIVERED' | 'FAILED', data: { proofPhotoUrl?: string; proofSignature?: string; handoffPin?: string; idChecked?: boolean; pickupCheck?: { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string }; reason?: string; lat?: number; lng?: number; clientEventId?: string }) {
     const d = await this.myDriver(user);
     const [job] = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.id, jobId), eq(deliveryJobs.driverId, d.id))).limit(1);
     if (!job) throw new NotFoundException();
-    if (status === 'DELIVERED' && !data.proofPhotoUrl && !data.proofSignature) throw new BadRequestException('Proof of handoff required');
+    // a retried update from an app that lost its connection: answer with the current state instead of failing
+    if (job.status === status) return job;
+    const { pickupCheck, handoffPin, idChecked, ...rest } = data;
+    const patch: Partial<typeof deliveryJobs.$inferInsert> = {};
+    if (status === 'PICKED_UP') {
+      if (job.status !== 'ASSIGNED') throw new ConflictException(`Delivery is ${job.status}`);
+      if (!pickupCheck) throw new BadRequestException({ message: 'Confirm the pickup check: bag count and seals', code: 'PICKUP_CHECK_REQUIRED' });
+      if (!pickupCheck.sealIntact) throw new ConflictException({ message: 'A broken seal must be reported (damaged packaging) before you leave', code: 'SEAL_BROKEN' });
+      const [o] = job.orderId ? await this.db.select({ number: orders.number }).from(orders).where(eq(orders.id, job.orderId)).limit(1) : [null];
+      const code = o?.number ? String(o.number).slice(-4) : job.id.slice(0, 4).toUpperCase();
+      if (pickupCheck.orderCode && pickupCheck.orderCode.trim().toUpperCase() !== code.toUpperCase()) throw new BadRequestException({ message: 'That order code doesn’t match this delivery. Check the bag label.', code: 'ORDER_CODE_MISMATCH' });
+      patch.pickupCheck = { ...pickupCheck, orderCodeMatched: !!pickupCheck.orderCode, at: new Date().toISOString() };
+      if (!job.arrivedPickupAt) patch.arrivedPickupAt = new Date();
+    }
+    if (status === 'DELIVERED') {
+      if (job.status !== 'PICKED_UP') throw new ConflictException('Pick the order up first');
+      if (job.requirements.includes('ALCOHOL') && !idChecked) throw new BadRequestException({ message: 'Check the customer’s ID before handing over restricted items', code: 'ID_CHECK_REQUIRED' });
+      if (handoffPin !== undefined && handoffPin !== '') {
+        if (!job.handoffPin || handoffPin.trim() !== job.handoffPin) throw new BadRequestException({ message: 'That PIN doesn’t match. Ask the customer to check their order page.', code: 'PIN_MISMATCH' });
+        patch.handoffMethod = 'PIN';
+      } else if (data.proofPhotoUrl) patch.handoffMethod = 'PHOTO';
+      else if (data.proofSignature) patch.handoffMethod = 'SIGNATURE';
+      else throw new BadRequestException({ message: 'Proof of handoff required: a photo, the customer’s PIN or a signature', code: 'PROOF_REQUIRED' });
+      if (idChecked) patch.idCheckedAt = new Date();
+      if (!job.arrivedDropoffAt) patch.arrivedDropoffAt = new Date();
+    }
     return this.db.transaction(async (tx) => {
-      if (status === 'PICKED_UP' && !job.arrivedPickupAt) await tx.update(deliveryJobs).set({ arrivedPickupAt: new Date() }).where(eq(deliveryJobs.id, jobId));
-      if (status === 'DELIVERED' && !job.arrivedDropoffAt) await tx.update(deliveryJobs).set({ arrivedDropoffAt: new Date() }).where(eq(deliveryJobs.id, jobId));
-      return this.transition(jobId, status, { ...data, costOwner: status === 'FAILED' ? 'PLATFORM' : undefined }, tx);
+      if (Object.keys(patch).length) await tx.update(deliveryJobs).set(patch).where(eq(deliveryJobs.id, jobId));
+      return this.transition(jobId, status, { ...rest, handoffMethod: patch.handoffMethod, costOwner: status === 'FAILED' ? 'PLATFORM' : undefined }, tx);
     });
   }
 

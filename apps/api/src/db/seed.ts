@@ -80,7 +80,9 @@ async function main() {
   const [host] = await db.insert(s.users).values({ email: 'host@demo.gutad.io', passwordHash: ownerPw, name: 'Hal Host', roles: ['CUSTOMER'] }).returning();
   const [customer] = await db.insert(s.users).values({ email: 'customer@demo.gutad.io', passwordHash: await argon2.hash('customer12345'), name: 'Casey Customer', phone: '+15550100', roles: ['CUSTOMER'], marketingConsent: true, emailVerifiedAt: new Date() }).returning();
   const [driverUser] = await db.insert(s.users).values({ email: 'driver@demo.gutad.io', passwordHash: await argon2.hash('driver12345'), name: 'Drew Driver', roles: ['CUSTOMER', 'DRIVER'] }).returning();
-  await db.insert(s.drivers).values({ userId: driverUser.id, status: 'APPROVED', vehicle: 'Bike', licenseVerified: true, isAvailable: true, lastLat: 40.7306, lastLng: -73.9866, lastSeenAt: new Date(), payoutAccountId: 'mock_acct_driver' });
+  const [demoDriver] = await db.insert(s.drivers).values({ userId: driverUser.id, status: 'APPROVED', applicationStatus: 'APPROVED', lifecycleStatus: 'ACTIVE', city: 'New York', vehicle: 'Bike', licenseVerified: true, isAvailable: true, lastLat: 40.7306, lastLng: -73.9866, lastSeenAt: new Date(), payoutAccountId: 'mock_acct_driver', onboarding: { payout: { method: 'BANK', accountHolder: 'Drew Driver', accountLast4: '4242', taxFormAcceptedAt: new Date().toISOString() } } }).returning();
+  // Courier R1: the demo courier has passed every eligibility check
+  await db.insert(s.courierEligibility).values(['IDENTITY', 'VEHICLE', 'SCREENING', 'PAYOUT', 'AGREEMENT', 'TRAINING', 'EQUIPMENT'].map((check) => ({ driverId: demoDriver.id, check, status: 'PASSED', note: 'Demo courier' })));
 
   const [org] = await db.insert(s.organizations).values({ name: 'Demo Bistro Group', slug: 'demo-bistro', kind: 'MERCHANT', billingEmail: owner.email, status: 'LIVE', featureFlags: {} }).returning();
   await db.insert(s.orgMemberships).values([

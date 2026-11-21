@@ -9,6 +9,7 @@ import { AccountingService } from '../modules/finance/accounting.service';
 import { KitchenService } from '../modules/kitchen/kitchen.service';
 import { OrdersService } from '../modules/orders/orders.service';
 import { DeliveryService } from '../modules/delivery/delivery.service';
+import { CourierService } from '../modules/delivery/courier.service';
 import { ReservationsService } from '../modules/reservations/reservations.service';
 import { EventsService } from '../modules/events/events.service';
 import { GrowthService } from '../modules/growth/growth.service';
@@ -54,6 +55,7 @@ export class JobsService {
     private readonly safety: SafetyService,
     private readonly workforce: WorkforceService,
     private readonly delivery: DeliveryService,
+    private readonly courier: CourierService,
     private readonly reservations: ReservationsService,
     private readonly events: EventsService,
     private readonly growth: GrowthService,
@@ -104,7 +106,7 @@ export class JobsService {
   @Interval(900_000) brandRights() { return this.locked('brand-rights', 300_000, () => this.brandsAdmin.expireRights()); }
   @Interval(60_000) priceChanges() { return this.locked('price-changes', 60_000, () => this.menuAdmin.applyDue()); }
   @Interval(60_000) supportSla() { return this.locked('support-sla', 60_000, () => this.support.slaSweep()); }
-  @Interval(3_600_000) deliveryHousekeepingDaily() { return this.locked('delivery-docs-proofs', 600_000, async () => ({ docs: await this.delivery.expireCourierDocs(), proofs: await this.delivery.purgeProofs() })); }
+  @Interval(3_600_000) deliveryHousekeepingDaily() { return this.locked('delivery-docs-proofs', 600_000, async () => ({ docs: await this.delivery.expireCourierDocs(), checks: await this.courier.expireChecks(), proofs: await this.delivery.purgeProofs() })); }
   @Interval(3_600_000) inventoryExpiry() { return this.locked('lot-expiry', 600_000, () => this.inventory.expireLots()); }
   @Interval(900_000) foodSafetyClusters() { return this.locked('fs-clusters', 300_000, () => this.safety.clusterSweep()); }
   @Interval(300_000) deviceHealth() { return this.locked('device-health', 120_000, () => this.workforce.deviceSweep()); }
@@ -122,7 +124,7 @@ export class JobsService {
   @Interval(60_000) chefOrderDeadlines() { return this.locked('chef-order-deadlines', 60_000, async () => ({ ...(await this.orders.expireUnacceptedChefOrders()), ...(await this.orders.recognizeCompletedChefOrders()) })); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {
-    return this.locked('delivery', 60_000, async () => ({ expiredQuotes: await this.delivery.expireQuotes(), expiredOffers: await this.delivery.expireOffers(), late: await this.delivery.flagLate(), simulated: await this.delivery.simulateMock() }));
+    return this.locked('delivery', 60_000, async () => ({ expiredQuotes: await this.delivery.expireQuotes(), expiredOffers: await this.delivery.expireOffers(), late: await this.delivery.flagLate(), simulated: await this.delivery.simulateMock(), noShows: await this.courier.markNoShows() }));
   }
   @Interval(30_000) reservationHousekeeping() {
     return this.locked('reservations', 60_000, async () => ({ holds: await this.reservations.expireHolds(), waitlist: await this.reservations.expireWaitlistOffers(), ticketHolds: await this.events.expireTicketHolds(), groupLocks: await this.groupOrders.lockPastCutoff() }));

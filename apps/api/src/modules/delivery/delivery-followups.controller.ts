@@ -16,6 +16,7 @@ import { DeliveryService } from './delivery.service';
 import { LiveService } from './live.service';
 import { DeliveryProviderRegistry } from './providers/provider-registry';
 import { RoutingService } from './routing.service';
+import { CourierService } from './courier.service';
 
 const Pt = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
 
@@ -32,6 +33,7 @@ export class DeliveryFollowupsController {
     private readonly routing: RoutingService,
     private readonly registry: DeliveryProviderRegistry,
     private readonly delivery: DeliveryService,
+    private readonly courier: CourierService,
   ) {}
 
   /**
@@ -83,8 +85,10 @@ export class DeliveryFollowupsController {
   // 16.2-U
   @ApiBearerAuth() @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_COURIER_FILE_BYTES, files: 1 } }))
-  @Post('driver/documents/upload') upload(@CurrentUser() u: JwtPayload, @UploadedFile() file: IncomingFile | undefined, @Body(zod(z.object({ kind: z.string(), expiresAt: z.string().datetime().optional().or(z.literal('').transform(() => undefined)) }))) b: { kind: string; expiresAt?: string }) {
-    return this.files.upload(u, file, b);
+  @Post('driver/documents/upload') async upload(@CurrentUser() u: JwtPayload, @UploadedFile() file: IncomingFile | undefined, @Body(zod(z.object({ kind: z.string(), expiresAt: z.string().datetime().optional().or(z.literal('').transform(() => undefined)) }))) b: { kind: string; expiresAt?: string }) {
+    const doc = await this.files.upload(u, file, b);
+    await this.courier.syncDocChecks(doc.driverId);
+    return doc;
   }
   @ApiBearerAuth() @Get('files/:id/link') fileLink(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.files.link(u, id); }
   @Public() @Get('files/:id/signed') async signed(@Param('id') id: string, @Query('exp') exp: string, @Query('sig') sig: string, @Res() res: Response) {

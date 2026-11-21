@@ -291,7 +291,7 @@ export class DeliveryAdminService {
     if (d.status === 'SUSPENDED') throw new ConflictException('Already suspended');
     const active = await this.db.select({ id: deliveryJobs.id }).from(deliveryJobs).where(and(eq(deliveryJobs.driverId, id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP'])));
     if (active.length) throw new ConflictException(`Reassign the courier’s ${active.length} active deliver${active.length > 1 ? 'ies' : 'y'} first`);
-    const [u] = await this.db.update(drivers).set({ status: 'SUSPENDED', isAvailable: false, suspendedReason: reason, suspendedAt: new Date(), suspendedById: user.sub, appealStatus: 'NONE', appealNote: null, appealDecisionNote: null, reviewedById: null }).where(eq(drivers.id, id)).returning();
+    const [u] = await this.db.update(drivers).set({ status: 'SUSPENDED', lifecycleStatus: 'SUSPENDED', lifecycleReason: reason, isAvailable: false, suspendedReason: reason, suspendedAt: new Date(), suspendedById: user.sub, appealStatus: 'NONE', appealNote: null, appealDecisionNote: null, reviewedById: null }).where(eq(drivers.id, id)).returning();
     await this.db.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.driverId, id), eq(driverOffers.status, 'OFFERED')));
     await this.db.insert(courierRecords).values({ driverId: id, kind: 'INCIDENT', title: 'Suspended', detail: reason, createdById: user.sub });
     await this.audit.log({ actorId: user.sub, action: 'courier.suspend', entityType: 'driver', entityId: id, reason });
@@ -312,7 +312,7 @@ export class DeliveryAdminService {
     const { d } = await this.requireDriver(id);
     if (d.appealStatus !== 'PENDING') throw new ConflictException('No appeal waiting');
     if (d.suspendedById === user.sub) throw new ForbiddenException('Someone other than the person who suspended the courier must review the appeal');
-    const [u] = await this.db.update(drivers).set(reinstate ? { status: 'APPROVED', appealStatus: 'REINSTATED', appealDecisionNote: note, reviewedById: user.sub, suspendedReason: null } : { appealStatus: 'UPHELD', appealDecisionNote: note, reviewedById: user.sub }).where(eq(drivers.id, id)).returning();
+    const [u] = await this.db.update(drivers).set(reinstate ? { status: 'APPROVED', lifecycleStatus: 'ACTIVE', lifecycleReason: note, appealStatus: 'REINSTATED', appealDecisionNote: note, reviewedById: user.sub, suspendedReason: null } : { appealStatus: 'UPHELD', appealDecisionNote: note, reviewedById: user.sub }).where(eq(drivers.id, id)).returning();
     await this.db.insert(courierRecords).values({ driverId: id, kind: 'SUPPORT_NOTE', title: reinstate ? 'Appeal accepted: reinstated' : 'Appeal reviewed: suspension upheld', detail: note, createdById: user.sub });
     await this.audit.log({ actorId: user.sub, action: reinstate ? 'courier.reinstate' : 'courier.appeal_upheld', entityType: 'driver', entityId: id, reason: note });
     return u;

@@ -24,6 +24,8 @@ export type DomainTopic =
   | 'delivery.late'
   | 'delivery.arrived'
   | 'delivery.attempt'
+  | 'delivery.issue'
+  | 'courier.decision'
   | 'reservation.held'
   | 'reservation.confirmed'
   | 'reservation.reminder'

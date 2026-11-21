@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { CUSTOMER_CATEGORIES, SUPPORT_CATEGORIES, trackingStages } from '@gutad/shared';
+import { DeliveryReviewCard } from '@/components/delivery-review';
 import { CaseThread } from '@/components/case-thread';
 import { api, money, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
@@ -16,7 +17,7 @@ interface Order {
   payment: { status: string; capturedCents: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null;
   prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null; amendable?: boolean; amendedFromOrderId?: string | null;
   chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null;
-  delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
+  delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; handoffPin?: string | null; courierFirstName?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
 
 
@@ -154,6 +155,8 @@ export default function OrderPage() {
       {o.delivery && (
         <Card title="Delivery">
           <div className="flex items-center justify-between text-sm"><span>Courier</span><Badge tone={statusTone(track?.status || o.delivery.status)}>{courierLabel(track?.status || o.delivery.status)}</Badge></div>
+          {o.delivery.courierFirstName && ['ASSIGNED', 'PICKED_UP'].includes(track?.status || o.delivery.status) && <p className="mt-1 text-sm">Your courier is {o.delivery.courierFirstName}.</p>}
+          {o.delivery.handoffPin && ['ASSIGNED', 'PICKED_UP'].includes(track?.status || o.delivery.status) && <div className="mt-2"><Alert tone="info">Your handoff PIN: <b className="text-lg tracking-widest">{o.delivery.handoffPin}</b> — give it to your courier.</Alert></div>}
           {track?.etaAt && <p className="mt-1 text-sm">ETA {when(track.etaAt)}</p>}
           {track?.courierLocation && <p className="text-xs text-ink-500">Courier at {track.courierLocation.lat.toFixed(4)}, {track.courierLocation.lng.toFixed(4)}</p>}
           {o.delivery.exception && !o.delivery.exception.resolution && <div className="mt-2"><Alert>Your courier is at the address and trying to reach you{o.delivery.exception.waitUntil ? ` until ${new Date(o.delivery.exception.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}. Please answer your phone or call {o.locationPhone || 'the restaurant'}.</Alert></div>}
@@ -199,6 +202,7 @@ export default function OrderPage() {
           ))}
         </Card>
       )}
+      {user && o.delivery && (track?.status || o.delivery.status) === 'DELIVERED' && <DeliveryReviewCard orderId={o.id} />}
       {o.status === 'COMPLETED' && user && (
         <Card title="Rate your order">
           <div className="flex gap-1">{[1, 2, 3, 4, 5].map((n) => <button key={n} onClick={() => setReview({ ...review, rating: n })} className={`text-2xl ${n <= review.rating ? 'text-amber-500' : 'text-ink-100'}`}>★</button>)}</div>

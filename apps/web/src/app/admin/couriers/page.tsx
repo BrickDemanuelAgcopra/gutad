@@ -7,6 +7,7 @@ import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Input, Select, statusTone, Table, Tabs } from '@/components/ui';
 import { SectionTitle } from '@/components/admin-ui';
 import { DocLink } from '@/components/courier-docs';
+import { ApplicationsPipeline } from '@/components/courier/admin';
 
 interface Row { id: string; name: string | null; email: string; status: string; operational: string; vehicleType: string; capabilities: string[]; activeJobs: number; missingDocs: string[]; pendingDocs: number; appealStatus: string; lastSeenAt: string | null; metrics?: { acceptanceRate: number | null; completionRate: number | null; onTimeRate: number | null; delivered: number } }
 const pct = (x: number | null | undefined) => (x == null ? '—' : `${x}%`);
@@ -15,9 +16,10 @@ export default function Couriers() {
   const [tab, setTab] = useState('directory');
   return (
     <div className="space-y-4">
-      <SectionTitle title="Couriers" hint="Gutad fleet couriers: status, documents, shifts, reliability, pay adjustments, suspensions and appeals." />
-      <Tabs tabs={[{ id: 'directory', label: 'Directory' }, { id: 'documents', label: 'Documents' }, { id: 'shifts', label: 'Shifts' }]} active={tab} onChange={setTab} />
+      <SectionTitle title="Couriers" hint="Gutad fleet couriers: applications, status, documents, shifts, reliability, pay adjustments, suspensions and appeals." />
+      <Tabs tabs={[{ id: 'directory', label: 'Directory' }, { id: 'applications', label: 'Applications' }, { id: 'documents', label: 'Documents' }, { id: 'shifts', label: 'Shifts' }]} active={tab} onChange={setTab} />
       {tab === 'directory' && <Directory />}
+      {tab === 'applications' && <ApplicationsPipeline />}
       {tab === 'documents' && <Documents />}
       {tab === 'shifts' && <Shifts />}
     </div>

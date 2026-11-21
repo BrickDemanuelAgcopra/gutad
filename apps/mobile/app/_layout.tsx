@@ -20,7 +20,7 @@ export default function RootLayout() {
         <Stack.Screen name="merchant/index" options={{ title: 'Merchant tablet' }} />
         <Stack.Screen name="merchant/host" options={{ title: 'Host stand' }} />
         <Stack.Screen name="merchant/kitchen" options={{ title: 'Kitchen' }} />
-        <Stack.Screen name="driver/index" options={{ title: 'Driver' }} />
+        <Stack.Screen name="driver/index" options={{ title: 'Courier' }} />
         <Stack.Screen name="kiosk/[slug]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="ops/index" options={{ title: 'Gutad Ops' }} />
         <Stack.Screen name="ops/chefs" options={{ title: 'Chef applications' }} />
@@ -68,6 +68,7 @@ export default function RootLayout() {
         <Stack.Screen name="ops/kitchens" options={{ title: 'Kitchen operations' }} />
         <Stack.Screen name="ops/delivery" options={{ title: 'Delivery & dispatch' }} />
         <Stack.Screen name="ops/couriers" options={{ title: 'Couriers' }} />
+        <Stack.Screen name="ops/delivery-reviews" options={{ title: 'Delivery reviews' }} />
         <Stack.Screen name="ops/finance" options={{ title: 'Finance' }} />
         <Stack.Screen name="ops/supply" options={{ title: 'Supply & inventory' }} />
         <Stack.Screen name="ops/growth" options={{ title: 'Growth' }} />

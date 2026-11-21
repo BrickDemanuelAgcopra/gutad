@@ -1,6 +1,6 @@
 // Admin platform, phase G: delivery restrictions, courier documents, shifts, records, provider connections.
-import { index, integer, pgTable, text, uuid, boolean } from 'drizzle-orm/pg-core';
-import { createdAt, id, ts } from './_common';
+import { doublePrecision, index, integer, jsonb, pgTable, text, uniqueIndex, uuid, boolean } from 'drizzle-orm/pg-core';
+import { createdAt, id, ts, updatedAt } from './_common';
 import { drivers } from './delivery';
 
 /** 15.5 weather / disruption restrictions with expiry. Scope: a zone, a location, a region, or everywhere (all null). */
@@ -47,7 +47,8 @@ export const courierShifts = pgTable('courier_shifts', {
   zoneId: uuid('zone_id'),
   startsAt: ts('starts_at').notNull(),
   endsAt: ts('ends_at').notNull(),
-  status: text('status').notNull().default('SCHEDULED'), // SCHEDULED | CANCELED
+  status: text('status').notNull().default('SCHEDULED'), // SCHEDULED | CHECKED_IN | NO_SHOW | CANCELED
+  checkedInAt: ts('checked_in_at'),
   createdAt: createdAt(),
 }, (t) => [index('courier_shifts_driver_idx').on(t.driverId, t.startsAt)]);
 
@@ -74,3 +75,65 @@ export const providerConnections = pgTable('provider_connections', {
   isActive: boolean('is_active').notNull().default(true),
   createdAt: createdAt(),
 });
+
+/** Courier R1: independent eligibility checks (identity, vehicle, screening, payout, agreement, training, equipment). */
+export const courierEligibility = pgTable('courier_eligibility', {
+  id: id(),
+  driverId: uuid('driver_id')
+    .notNull()
+    .references(() => drivers.id, { onDelete: 'cascade' }),
+  check: text('check').notNull(),
+  status: text('status').notNull().default('NOT_STARTED'), // NOT_STARTED | PENDING | PASSED | NEEDS_ACTION | FAILED | EXPIRED
+  /** screening / payout provider and its reference */
+  provider: text('provider'),
+  providerRef: text('provider_ref'),
+  note: text('note'),
+  expiresAt: ts('expires_at'),
+  decidedById: uuid('decided_by_id'),
+  /** [{ at, status, by, note }] */
+  history: jsonb('history').notNull().default([]),
+  updatedAt: updatedAt(),
+  createdAt: createdAt(),
+}, (t) => [uniqueIndex('courier_eligibility_driver_check_uq').on(t.driverId, t.check)]);
+
+/** Courier R1: online, break and reserved time (active delivery and waiting time come from the jobs). */
+export const courierTimeEntries = pgTable('courier_time_entries', {
+  id: id(),
+  driverId: uuid('driver_id')
+    .notNull()
+    .references(() => drivers.id, { onDelete: 'cascade' }),
+  kind: text('kind').notNull(), // ONLINE | BREAK
+  mode: text('mode'), // ON_DEMAND | RESERVED
+  shiftId: uuid('shift_id'),
+  startedAt: ts('started_at').notNull(),
+  endedAt: ts('ended_at'),
+  createdAt: createdAt(),
+}, (t) => [index('courier_time_driver_idx').on(t.driverId, t.startedAt)]);
+
+/** Courier R1: a customer's review of a delivery (one per customer and delivery job). */
+export const deliveryReviews = pgTable('delivery_reviews', {
+  id: id(),
+  deliveryJobId: uuid('delivery_job_id').notNull(),
+  orderId: uuid('order_id'),
+  customerId: uuid('customer_id').notNull(),
+  driverId: uuid('driver_id'),
+  rating: integer('rating').notNull(),
+  tags: text('tags').array().notNull().default([]),
+  comment: text('comment'),
+  foodRating: integer('food_rating'),
+  packagingRating: integer('packaging_rating'),
+  issues: text('issues').array().notNull().default([]),
+  /** VISIBLE | PENDING_MODERATION | HIDDEN (comment hidden from the courier) */
+  status: text('status').notNull().default('VISIBLE'),
+  /** kept out of the courier's average (kitchen delay, sealed-bag error, moderation) */
+  excluded: boolean('excluded').notNull().default(false),
+  excludedReason: text('excluded_reason'),
+  disputeStatus: text('dispute_status').notNull().default('NONE'), // NONE | PENDING | UPHELD | REJECTED
+  disputeNote: text('dispute_note'),
+  incidentIds: uuid('incident_ids').array().notNull().default([]),
+  /** [{ at, by, action, note, before }] edits and moderation */
+  history: jsonb('history').notNull().default([]),
+  waitMinutes: doublePrecision('wait_minutes'),
+  updatedAt: updatedAt(),
+  createdAt: createdAt(),
+}, (t) => [uniqueIndex('delivery_reviews_job_customer_uq').on(t.deliveryJobId, t.customerId), index('delivery_reviews_driver_idx').on(t.driverId)]);

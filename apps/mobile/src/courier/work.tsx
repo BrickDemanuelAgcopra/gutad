@@ -1,0 +1,217 @@
+import { useState } from 'react';
+import { Linking, Text, View } from 'react-native';
+import { EQUIPMENT_LABELS, LIFECYCLE_LABELS, NOT_DISPATCHABLE_LABELS, TRIP_ISSUES, type EquipmentItem, type LifecycleStatus, type TripIssue } from '@gutad/shared';
+import { api, money } from '../api';
+import { useAction } from '../hooks';
+import { Badge, Button, C, Card, ErrorText, Input, Muted, s, tone } from '../ui';
+import { Choice, Toggle } from '../chef-ui';
+import { currentPos, errCode, label, mins, useCountdown, type Addr, type DriverStatus, type Job, type Offer } from './common';
+import { sendOrQueue } from './queue';
+
+/** Online / break / finish-after-current, why offers aren't coming, and today's time and earnings. */
+export function StatusPanel({ st, onChange }: { st: DriverStatus; onChange: () => void }) {
+  const { run, error, busy } = useAction();
+  const act = (fn: () => Promise<unknown>) => run(async () => { await fn(); onChange(); });
+  const reasons = st.reasons.filter((r) => r !== 'OFFLINE' || !st.isAvailable);
+  const t = st.today;
+  return (
+    <Card title="Status">
+      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+        <Badge text={!st.isAvailable ? 'Offline' : st.onBreak ? 'On a break' : st.activeJobs ? 'On a delivery' : 'Online'} tone={!st.isAvailable ? 'neutral' : st.onBreak ? 'warn' : 'good'} />
+        {st.isAvailable && <Badge text={st.mode === 'RESERVED' ? 'Shift' : 'On demand'} tone="info" />}
+        {st.finishAfterCurrent && <Badge text="Stopping after this trip" tone="warn" />}
+        {st.dispatchable ? <Badge text="Receiving offers" tone="good" /> : null}
+      </View>
+      {!st.dispatchable && reasons.length > 0 && <View style={{ marginTop: 6 }}>{reasons.map((r) => <Text key={r} style={{ color: C.warn, fontSize: 13 }}>• {NOT_DISPATCHABLE_LABELS[r] || label(r)}</Text>)}</View>}
+      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+        <Button title={st.isAvailable ? 'Go offline' : 'Go online'} variant={st.isAvailable ? 'secondary' : 'primary'} disabled={busy} onPress={() => act(async () => { const p = await currentPos(); await api.post('/driver/availability', { isAvailable: !st.isAvailable, ...(p || {}), ...(st.isAvailable ? {} : { mode: 'ON_DEMAND' }) }); })} />
+        {st.isAvailable && <Button title={st.onBreak ? 'End break' : 'Take a break'} variant="secondary" disabled={busy} onPress={() => act(() => api.post('/driver/break', { on: !st.onBreak }))} />}
+        {st.isAvailable && st.activeJobs > 0 && <Button title={st.finishAfterCurrent ? 'Keep receiving offers' : 'Stop after this trip'} variant="ghost" disabled={busy} onPress={() => act(() => api.post('/driver/finish-after-current', { on: !st.finishAfterCurrent }))} />}
+      </View>
+      <ErrorText msg={error} />
+      <Text style={{ marginTop: 6, color: C.ink, fontWeight: '600' }}>Today: {money(t.earningsCents)} · {t.deliveries} deliver{t.deliveries === 1 ? 'y' : 'ies'}</Text>
+      <Muted>Online {mins(t.onlineMinutes)} · active {mins(t.activeMinutes)} · waiting {mins(t.waitingMinutes)} · break {mins(t.breakMinutes)}</Muted>
+    </Card>
+  );
+}
+
+/** Restricted / suspended / deactivated notice, with a reactivation request when deactivated. */
+export function LifecycleNotice({ st, onChange }: { st: DriverStatus; onChange: () => void }) {
+  const { run, error, busy } = useAction();
+  const [note, setNote] = useState('');
+  const l = st.lifecycleStatus as LifecycleStatus;
+  if (!l || l === 'ACTIVE') return null;
+  return (
+    <Card title={LIFECYCLE_LABELS[l] || label(l)}>
+      {l === 'RESTRICTED' && <Muted>Some offers are paused for your account for now. Check your messages from Gutad for details.</Muted>}
+      {l === 'SUSPENDED' && <Muted>You can’t go online while your account is suspended. You can appeal below.</Muted>}
+      {l === 'REACTIVATION_PENDING' && <Muted>We’ve got your request to come back and will reply soon.</Muted>}
+      {l === 'DEACTIVATED' && (
+        <>
+          <Muted>Your account is deactivated. If you’d like to deliver again, tell us what’s changed.</Muted>
+          <Input label="Request reactivation" multiline value={note} onChangeText={setNote} />
+          <ErrorText msg={error} />
+          <Button title="Send request" disabled={busy || note.trim().length < 10} onPress={() => run(async () => { await api.post('/driver/reactivation', { note: note.trim() }); setNote(''); onChange(); })} />
+        </>
+      )}
+    </Card>
+  );
+}
+
+export function FirstDeliveryGuide() {
+  const steps = ['Go online when you’re ready; offers show the guaranteed pay before you accept.', 'At the restaurant, tap Arrived, then check the order code, bags, drinks and seals.', 'Go straight to the customer. Keep the bag closed and upright.', 'At the door, tap Arrived and hand off with the proof the app asks for (photo, PIN, signature or ID).', 'Something wrong? Use Report a problem; we’ll tell you what to do.'];
+  return (
+    <Card title="Your first delivery">
+      {steps.map((x, i) => <Text key={i} style={{ color: C.ink7, marginBottom: 4 }}>{i + 1}. {x}</Text>)}
+    </Card>
+  );
+}
+
+export function OfferCard({ o, onDone }: { o: Offer; onDone: () => void }) {
+  const left = useCountdown(o.expiresAt);
+  const { run, error, busy } = useAction();
+  if (left <= 0) return null;
+  const reply = (accept: boolean) => run(async () => { await api.post(`/driver/offers/${o.id}`, { accept }); onDone(); });
+  const p = o.policy;
+  return (
+    <View style={{ marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.ink1 }}>
+      <View style={s.row}><Text style={{ fontSize: 20, fontWeight: '800', color: C.ink }}>{money(o.pay?.totalCents ?? o.payCents)}</Text><Badge text={`${left}s`} tone={left < 20 ? 'bad' : 'warn'} /></View>
+      <Muted>Guaranteed: base {money(o.pay?.baseCents || 0)} + distance {money(o.pay?.distanceCents || 0)}{o.pay?.timeCents ? ` + time ${money(o.pay.timeCents)}` : ''}</Muted>
+      {o.tipCents > 0 && <Text style={{ color: C.good }}>+ estimated tip {money(o.tipCents)} (100% yours, may change)</Text>}
+      <Text style={{ marginTop: 6, color: C.ink }}><Text style={{ fontWeight: '700' }}>Pick up:</Text> {o.pickup.name} · {o.pickup.line1}, {o.pickup.city}</Text>
+      <Text style={{ color: C.ink }}><Text style={{ fontWeight: '700' }}>Drop off:</Text> {o.dropoffArea.city} {o.dropoffArea.postalCode} <Text style={{ color: C.ink5 }}>(exact address after you accept)</Text></Text>
+      <Muted>{o.stops} stop{o.stops === 1 ? '' : 's'} · {o.distanceKm.toFixed(1)} km trip · {o.toPickupKm.toFixed(1)} km to pickup · about {o.estMinutes} min</Muted>
+      {o.batchWith && <Text style={{ color: C.info }}>Adds to your current trip (same pickup)</Text>}
+      {o.requirements.includes('ALCOHOL') && <Text style={{ color: C.warn }}>Contains alcohol: check ID at handoff</Text>}
+      {o.requirements.filter((r) => r !== 'ALCOHOL').length > 0 && <Muted>Needs: {o.requirements.filter((r) => r !== 'ALCOHOL').map(label).join(', ')}</Muted>}
+      {o.equipment.length > 0 && <Muted>Bring: {o.equipment.map((e) => EQUIPMENT_LABELS[e as EquipmentItem] || label(e)).join(', ')}</Muted>}
+      {p && <Muted>Waiting paid after {p.waitingGraceMinutes} min at {money(p.waitingPerMinuteCents)}/min · return {money(p.returnCents)} · canceled after arrival {money(p.cancelAfterArrivalCents)}</Muted>}
+      <ErrorText msg={error} />
+      <View style={{ flexDirection: 'row', gap: 6 }}><Button title="Accept" disabled={busy} onPress={() => reply(true)} /><Button title="Decline" variant="ghost" disabled={busy} onPress={() => reply(false)} /></View>
+    </View>
+  );
+}
+
+const nav = (a: Addr) => Linking.openURL(a.lat ? `https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lng}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${a.line1}, ${a.city}`)}`);
+
+const FRIENDLY: Record<string, string> = {
+  PIN_MISMATCH: 'That PIN doesn’t match. Ask the customer to read it from their order screen.',
+  ID_CHECK_REQUIRED: 'This order has restricted items. Check the customer’s ID and confirm before handing it over.',
+  SEAL_BROKEN: 'A broken seal can’t be picked up. Report damaged packaging so the kitchen can fix it.',
+};
+
+/** One active delivery: arrival, pickup check, handoff with proof, problems, release, and the customer-unreachable wait flow. */
+export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => void; onQueued?: () => void }) {
+  const { run, error, busy } = useAction();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [panel, setPanel] = useState<'none' | 'issue' | 'release'>('none');
+  const [issue, setIssue] = useState<TripIssue | null>(null);
+  const [issueNote, setIssueNote] = useState('');
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
+  // pickup check
+  const [codeOk, setCodeOk] = useState(false);
+  const [bags, setBags] = useState('1');
+  const [drinks, setDrinks] = useState('0');
+  const [seal, setSeal] = useState(true);
+  const [pickNote, setPickNote] = useState('');
+  // handoff
+  const [method, setMethod] = useState<'PHOTO' | 'PIN' | 'SIGNATURE'>(j.pinRequired ? 'PIN' : 'PHOTO');
+  const [pin, setPin] = useState('');
+  const [sig, setSig] = useState('');
+  const [idOk, setIdOk] = useState(false);
+
+  const ex = j.exception && !j.exception.resolution ? j.exception : null;
+  const waiting = ex ? new Date(ex.waitUntil) > new Date() : false;
+  const atPickup = j.status === 'ASSIGNED';
+  /** Trip actions go through the offline queue. */
+  const send = (path: string, body: Record<string, unknown>, what: string) => run(async () => {
+    setMsg(null);
+    try {
+      const p = await currentPos();
+      const r = await sendOrQueue<{ outcome?: string }>(path, { ...body, ...(p || {}) }, what);
+      if (r.queued) { setMsg(`No connection: “${what}” will be sent when you’re back online.`); onQueued?.(); return r; }
+      onChange();
+      return r;
+    } catch (e) {
+      const c = errCode(e);
+      if (c && FRIENDLY[c]) { setMsg(FRIENDLY[c]); if (c === 'SEAL_BROKEN') { setPanel('issue'); setIssue('DAMAGED_PACKAGING'); } return undefined; }
+      throw e;
+    }
+  });
+  const plain = (fn: () => Promise<unknown>) => run(async () => { await fn(); onChange(); });
+  const issues = (Object.keys(TRIP_ISSUES) as TripIssue[]).filter((k) => TRIP_ISSUES[k].stage === 'ANY' || TRIP_ISSUES[k].stage === (atPickup ? 'PICKUP' : 'DROPOFF') || (j.requiresIdCheck && k === 'ID_CHECK_FAILED' && !atPickup));
+  const handoffOk = (method === 'PHOTO' || (method === 'PIN' && /^\d{4,6}$/.test(pin)) || (method === 'SIGNATURE' && sig.trim().length > 1)) && (!j.requiresIdCheck || idOk) && (!j.pinRequired || method === 'PIN');
+
+  return (
+    <View style={{ marginBottom: 14, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.ink1 }}>
+      <View style={s.row}><Text style={{ fontWeight: '700', flex: 1, color: C.ink }}>{atPickup ? 'Pick up at' : 'Deliver to'}: {atPickup ? j.pickupAddress.line1 : j.dropoffAddress.line1}</Text><Badge text={j.batchId ? `${label(j.status)} · batch` : label(j.status)} tone={tone(j.status)} /></View>
+      <Muted>Pay {money(j.providerCostCents)} + tip {money(j.tipCents)}{!atPickup && j.dropoffAddress.instructions ? ` · ${j.dropoffAddress.instructions}` : ''}</Muted>
+      {j.requiresIdCheck && <Text style={{ color: C.warn }}>Restricted items: check the customer’s ID at handoff</Text>}
+      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+        <Button title="Navigate" variant="secondary" onPress={() => nav(atPickup ? j.pickupAddress : j.dropoffAddress)} />
+        {atPickup && !j.arrivedPickupAt && <Button title="Arrived at pickup" variant="secondary" disabled={busy} onPress={() => send(`/driver/jobs/${j.id}/arrived`, { at: 'PICKUP' }, 'Arrived at pickup')} />}
+        {j.status === 'PICKED_UP' && !j.arrivedDropoffAt && <Button title="Arrived at drop-off" variant="secondary" disabled={busy} onPress={() => send(`/driver/jobs/${j.id}/arrived`, { at: 'DROPOFF' }, 'Arrived at drop-off')} />}
+      </View>
+
+      {atPickup && (
+        <View style={{ marginTop: 8, padding: 10, backgroundColor: C.bg, borderRadius: 10 }}>
+          <Text style={{ fontWeight: '700', color: C.ink, marginBottom: 4 }}>Pickup check</Text>
+          {j.orderCode ? <Toggle on={codeOk} onChange={setCodeOk} title={`Order code ${j.orderCode} matches the bag`} /> : null}
+          <View style={{ flexDirection: 'row', gap: 8 }}><View style={{ flex: 1 }}><Input label="Bags" keyboardType="number-pad" value={bags} onChangeText={setBags} /></View><View style={{ flex: 1 }}><Input label="Drinks" keyboardType="number-pad" value={drinks} onChangeText={setDrinks} /></View></View>
+          <Toggle on={seal} onChange={setSeal} title="All seals intact" text={seal ? undefined : 'Don’t take a bag with a broken seal; report it instead.'} />
+          <Input label="Note (optional)" value={pickNote} onChangeText={setPickNote} />
+          <Button title="Picked up" disabled={busy || (!!j.orderCode && !codeOk) || !(Number(bags) >= 1)} onPress={() => send(`/driver/jobs/${j.id}/transition`, { status: 'PICKED_UP', pickupCheck: { orderCode: j.orderCode && codeOk ? j.orderCode : undefined, bagCount: Number(bags), drinkCount: Number(drinks) || 0, sealIntact: seal, note: pickNote.trim() || undefined } }, 'Picked up')} />
+        </View>
+      )}
+
+      {j.status === 'PICKED_UP' && !ex && (
+        <View style={{ marginTop: 8, padding: 10, backgroundColor: C.bg, borderRadius: 10 }}>
+          <Text style={{ fontWeight: '700', color: C.ink, marginBottom: 4 }}>Hand off</Text>
+          {j.pinRequired ? <Muted>This order needs the customer’s PIN.</Muted> : <Choice value={method} onChange={setMethod} options={[{ value: 'PHOTO', label: 'Photo at the door' }, { value: 'PIN', label: 'Customer’s PIN' }, { value: 'SIGNATURE', label: 'Signature' }]} />}
+          {method === 'PIN' && <Input label="PIN from the customer" keyboardType="number-pad" maxLength={6} value={pin} onChangeText={setPin} />}
+          {method === 'SIGNATURE' && <Input label="Customer signs by typing their name" value={sig} onChangeText={setSig} />}
+          {method === 'PHOTO' && <Muted>A photo of the order at the door is attached when you complete.</Muted>}
+          {j.requiresIdCheck && <Toggle on={idOk} onChange={setIdOk} title="I checked the customer’s ID" text="They are of legal age and the ID matches. If not, don’t hand over; report the failed ID check." />}
+          <Button title="Complete delivery" disabled={busy || !handoffOk} onPress={() => send(`/driver/jobs/${j.id}/transition`, {
+            status: 'DELIVERED',
+            ...(method === 'PHOTO' ? { proofPhotoUrl: 'https://placehold.co/600x400?text=Handoff' } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: sig.trim() }),
+            ...(j.requiresIdCheck ? { idChecked: idOk } : {}),
+          }, 'Delivered')} />
+        </View>
+      )}
+
+      {j.status === 'PICKED_UP' && !ex && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>{[['CUSTOMER_UNREACHABLE', 'Can’t reach customer'], ['WRONG_ADDRESS', 'Wrong address'], ['ACCESS_PROBLEM', 'Can’t get in']].map(([k, l]) => <Button key={k} title={l} variant="ghost" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception`, { kind: k, method: 'CALL' }))} />)}</View>}
+      {ex && (
+        <View style={{ backgroundColor: '#fffbeb', padding: 8, borderRadius: 10, marginTop: 6 }}>
+          <Text style={{ fontWeight: '600' }}>{label(ex.kind)} · {ex.attempts.length} attempt(s)</Text>
+          <Muted>{waiting ? `Keep trying until ${new Date(ex.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Wait time is over'}</Muted>
+          <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>{['CALL', 'SMS', 'DOOR'].map((m) => <Button key={m} title={`Log ${m.toLowerCase()}`} variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception`, { kind: ex.kind, method: m }))} />)}</View>
+          {!waiting && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><Button title="Leave safely (photo)" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: 'https://placehold.co/600x400?text=Left+safely' }))} /><Button title="Return" variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'RETURN' }))} /><Button title="Dispose" variant="ghost" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'DISPOSE' }))} /></View>}
+        </View>
+      )}
+
+      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+        <Button title={panel === 'issue' ? 'Close' : 'Report a problem'} variant="ghost" onPress={() => { setPanel(panel === 'issue' ? 'none' : 'issue'); setOutcome(null); }} />
+        {atPickup && <Button title={panel === 'release' ? 'Close' : 'Release this delivery'} variant="ghost" onPress={() => setPanel(panel === 'release' ? 'none' : 'release')} />}
+      </View>
+      {panel === 'issue' && (
+        <View style={{ padding: 10, backgroundColor: '#fff4ec', borderRadius: 10 }}>
+          <Choice value={issue || undefined} onChange={(v) => setIssue(v)} options={issues.map((k) => ({ value: k, label: TRIP_ISSUES[k].label }))} />
+          <Input label="What happened? (optional)" multiline value={issueNote} onChangeText={setIssueNote} />
+          <Button title="Send report" disabled={busy || !issue} onPress={() => send(`/driver/jobs/${j.id}/issue`, { kind: issue, note: issueNote.trim() || undefined }, `Problem: ${issue ? TRIP_ISSUES[issue].label : ''}`).then((r) => { if (r && !r.queued) { setOutcome(r.result?.outcome || 'Reported. We’ll be in touch.'); setIssue(null); setIssueNote(''); } })} />
+        </View>
+      )}
+      {outcome && <Text style={{ color: C.info, marginTop: 4 }}>{outcome}</Text>}
+      {panel === 'release' && (
+        <View style={{ padding: 10, backgroundColor: '#fff4ec', borderRadius: 10 }}>
+          <Muted>The order goes back to other couriers. Releasing often can affect your access.</Muted>
+          <Input label="Reason" value={reason} onChangeText={setReason} />
+          <Button title="Release" variant="danger" disabled={busy || reason.trim().length < 3} onPress={() => plain(async () => { await api.post(`/driver/jobs/${j.id}/release`, { reason: reason.trim() }); setReason(''); setPanel('none'); })} />
+        </View>
+      )}
+      {msg && <Text style={{ color: C.warn, marginTop: 4 }}>{msg}</Text>}
+      <ErrorText msg={error} />
+    </View>
+  );
+}

@@ -1,5 +1,6 @@
 // 12 Delivery orchestration, 13 Driver operations
-import { boolean, doublePrecision, integer, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { boolean, doublePrecision, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, id, ts, updatedAt } from './_common';
 import { deliveryFleetEnum, deliveryStatusEnum } from './enums';
 import { users } from './accounts';
@@ -65,6 +66,26 @@ export const drivers = pgTable('drivers', {
   lastSeenAt: ts('last_seen_at'),
   payoutProvider: text('payout_provider').notNull().default('mock'),
   payoutAccountId: text('payout_account_id'),
+  /** Courier R1: application (DRAFT … APPROVED | WAITLISTED | REJECTED), separate from the lifecycle after approval */
+  applicationStatus: text('application_status').notNull().default('DRAFT'),
+  /** ACTIVE | RESTRICTED | SUSPENDED | DEACTIVATED | REACTIVATION_PENDING (null before approval) */
+  lifecycleStatus: text('lifecycle_status'),
+  /** { location, profile, vehicle, screening, payout, agreement, training, equipment } as entered in the wizard */
+  onboarding: jsonb('onboarding').notNull().default({}),
+  city: text('city'),
+  submittedAt: ts('submitted_at'),
+  decidedAt: ts('decided_at'),
+  decidedById: uuid('decided_by_id'),
+  decisionNote: text('decision_note'),
+  lifecycleReason: text('lifecycle_reason'),
+  /** ON_DEMAND | RESERVED */
+  availabilityMode: text('availability_mode').notNull().default('ON_DEMAND'),
+  onBreak: boolean('on_break').notNull().default(false),
+  finishAfterCurrent: boolean('finish_after_current').notNull().default(false),
+  firstDeliveryAt: ts('first_delivery_at'),
+  ratingAvg: doublePrecision('rating_avg'),
+  ratingCount: integer('rating_count').notNull().default(0),
+  updatedAt: updatedAt(),
   createdAt: createdAt(),
 });
 
@@ -119,6 +140,19 @@ export const deliveryJobs = pgTable('delivery_jobs', {
   trackingUrl: text('tracking_url'),
   providerInvoiceId: text('provider_invoice_id'),
   idempotencyKey: text('idempotency_key').unique(),
+  /** Courier R1: customer PIN accepted as handoff proof */
+  handoffPin: text('handoff_pin'),
+  /** { orderCode, bagCount, drinkCount, sealIntact, note, at } confirmed at pickup */
+  pickupCheck: jsonb('pickup_check'),
+  /** who holds the food: KITCHEN | COURIER | CUSTOMER | RETURNED | DISPOSED */
+  custody: text('custody').notNull().default('KITCHEN'),
+  /** pay policy + guaranteed pay accepted with the offer: { policy, pay: { baseCents, distanceCents, timeCents, totalCents }, estMinutes } */
+  payPolicy: jsonb('pay_policy'),
+  /** trip problems raised by the courier: [{ kind, note, at, incidentId, outcome }] */
+  issues: jsonb('issues').notNull().default([]),
+  /** how the handoff was proven: PHOTO | PIN | SIGNATURE */
+  handoffMethod: text('handoff_method'),
+  idCheckedAt: ts('id_checked_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -145,7 +179,9 @@ export const driverOffers = pgTable('driver_offers', {
     .references(() => deliveryJobs.id, { onDelete: 'cascade' }),
   payCents: integer('pay_cents').notNull(),
   expiresAt: ts('expires_at').notNull(),
-  status: text('status').notNull().default('OFFERED'), // OFFERED | ACCEPTED | DECLINED | EXPIRED
+  status: text('status').notNull().default('OFFERED'), // OFFERED | ACCEPTED | DECLINED | EXPIRED | RELEASED
+  /** Courier R1 guaranteed pay breakdown + estimates shown with the offer */
+  payBreakdown: jsonb('pay_breakdown'),
   /** 17.2 assignment score (lower is better) and why */
   score: doublePrecision('score'),
   scoreDetail: jsonb('score_detail'),
@@ -162,10 +198,18 @@ export const driverEarnings = pgTable('driver_earnings', {
   baseCents: integer('base_cents').notNull(),
   tipCents: integer('tip_cents').notNull().default(0),
   bonusCents: integer('bonus_cents').notNull().default(0),
-  /** 16.7 DELIVERY | BONUS | DEDUCTION */
+  /** Courier R1 itemized pay (base_cents is the base part only for R1 rows) */
+  distanceCents: integer('distance_cents').notNull().default(0),
+  timeCents: integer('time_cents').notNull().default(0),
+  waitingCents: integer('waiting_cents').notNull().default(0),
+  returnCents: integer('return_cents').notNull().default(0),
+  policyVersion: integer('policy_version'),
+  /** earnings in hold until then (pending), available afterwards */
+  availableAt: ts('available_at'),
+  /** 16.7 DELIVERY | CANCEL_COMP | BONUS | DEDUCTION */
   kind: text('kind').notNull().default('DELIVERY'),
   reason: text('reason'),
   createdById: uuid('created_by_id'),
   payoutId: uuid('payout_id'),
   createdAt: createdAt(),
-});
+}, (t) => [uniqueIndex('driver_earnings_job_kind_uq').on(t.deliveryJobId, t.kind).where(sql`delivery_job_id is not null and kind in ('DELIVERY','CANCEL_COMP')`)]);

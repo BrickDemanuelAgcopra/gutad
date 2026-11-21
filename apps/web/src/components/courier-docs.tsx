@@ -22,8 +22,10 @@ export function DocLink({ doc, label }: { doc: { fileUrl: string; fileId?: strin
 }
 
 /** 16.2-U courier uploads a scan or photo straight to storage; a link is still accepted. */
-export function CourierDocUpload({ onDone }: { onDone: () => void }) {
-  const [kind, setKind] = useState<string>('LICENSE');
+export function CourierDocUpload({ onDone, kinds }: { onDone: () => void; kinds?: readonly string[] }) {
+  const options: readonly string[] = kinds?.length ? kinds : COURIER_DOC_KINDS;
+  const [kind, setKind] = useState<string>(options[0] || 'LICENSE');
+  const current = options.includes(kind) ? kind : options[0];
   const [expiresAt, setExpiresAt] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [link, setLink] = useState('');
@@ -36,12 +38,12 @@ export function CourierDocUpload({ onDone }: { onDone: () => void }) {
     try {
       if (file) {
         const fd = new FormData();
-        fd.append('kind', kind);
+        fd.append('kind', current);
         if (exp) fd.append('expiresAt', exp);
         fd.append('file', file);
         await uploadFile('/driver/documents/upload', fd);
       } else {
-        await api.post('/driver/documents', { kind, fileUrl: link, expiresAt: exp || undefined });
+        await api.post('/driver/documents', { kind: current, fileUrl: link, expiresAt: exp || undefined });
       }
       setFile(null); setLink(''); setExpiresAt('');
       if (input.current) input.current.value = '';
@@ -52,7 +54,7 @@ export function CourierDocUpload({ onDone }: { onDone: () => void }) {
     <div className="mt-2 space-y-2">
       {error && <Alert>{error}</Alert>}
       <div className="grid gap-2 sm:grid-cols-3">
-        <Select label="Document" value={kind} onChange={(e) => setKind(e.target.value)}>{COURIER_DOC_KINDS.map((k) => <option key={k} value={k}>{COURIER_DOC_LABELS[k]}</option>)}</Select>
+        <Select label="Document" value={current} onChange={(e) => setKind(e.target.value)} disabled={options.length === 1}>{options.map((k) => <option key={k} value={k}>{COURIER_DOC_LABELS[k as keyof typeof COURIER_DOC_LABELS] || k}</option>)}</Select>
         <label className="block"><span className="mb-1 block text-xs font-medium text-ink-500">File (PDF or photo, up to 10 MB)</span><input ref={input} type="file" accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" className="w-full text-sm" onChange={(e) => setFile(e.target.files?.[0] || null)} /></label>
         <Input label="Expires" type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
       </div>
