@@ -11,6 +11,7 @@ import { Documents, FirstDeliveryGuide, ShiftsCard, StatusCard, type CourierStat
 import { JobCard, OfferCard, type Job, type Offer } from '@/components/courier/trips';
 import { EarningsSection, FeedbackSection } from '@/components/courier/money';
 import { BusyTimesCard, CampaignsCard, ReviewNotices } from '@/components/courier/incentives';
+import { CertificationsCard } from '@/components/courier/special';
 
 /** Web console for Gutad-fleet couriers (the mobile app is the primary surface): sign-up, then work. */
 export default function DriverPage() {
@@ -37,7 +38,7 @@ function CourierConsole() {
       <ReviewNotices />
       {!status.firstDeliveryAt && <FirstDeliveryGuide />}
       {standing && standing.missingDocs.length > 0 && <Alert tone="info">Upload and get approved: {standing.missingDocs.map((d) => COURIER_DOC_LABELS[d as CourierDocKind] || d).join(', ')}.</Alert>}
-      <Tabs tabs={[{ id: 'work', label: 'Deliveries' }, { id: 'incentives', label: 'Incentives' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'account', label: 'Documents & shifts' }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ id: 'work', label: 'Deliveries' }, { id: 'incentives', label: 'Incentives' }, { id: 'special', label: 'Certifications' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'account', label: 'Documents & shifts' }]} active={tab} onChange={setTab} />
       {tab === 'work' && (
         <>
           <Card title="Offers">
@@ -49,6 +50,7 @@ function CourierConsole() {
         </>
       )}
       {tab === 'incentives' && <><CampaignsCard /><BusyTimesCard /></>}
+      {tab === 'special' && <CertificationsCard />}
       {tab === 'earnings' && <EarningsSection />}
       {tab === 'feedback' && <FeedbackSection />}
       {tab === 'account' && (

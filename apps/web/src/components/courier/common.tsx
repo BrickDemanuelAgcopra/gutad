@@ -34,7 +34,20 @@ export const getLoc = () => new Promise<{ lat: number; lng: number }>((res) => {
 /** Plain-language text for the API error codes couriers can hit. */
 const CODE_TEXT: Record<string, string> = {
   PIN_MISMATCH: 'That PIN doesn’t match. Ask the customer to read the PIN from their Gutad order.',
-  ID_CHECK_REQUIRED: 'This order has restricted items. Check the customer’s ID and tick “I checked ID”.',
+  ID_CHECK_REQUIRED: 'This order has restricted items. Check the customer’s ID and enter the date of birth and ID type.',
+  UNDERAGE: 'The customer is under age. Don’t hand over the order: use “Can’t hand over”.',
+  ID_TYPE_INVALID: 'That type of ID isn’t accepted. Ask for another photo ID.',
+  ALCOHOL_HOURS: 'Alcohol can’t be handed over at this time. Use “Can’t hand over” and return it.',
+  SIGNATURE_REQUIRED: 'This order needs the recipient’s signature.',
+  RECIPIENT_MISMATCH: 'Only the person named on the order can receive it.',
+  SEAL_CHECK_REQUIRED: 'Confirm the seal is intact. If it’s broken, use “Can’t hand over”.',
+  PIN_REQUIRED: 'Ask the customer for their delivery PIN.',
+  CATERING_CHECKLIST: 'Count the items with the customer first.',
+  CATERING_SETUP: 'Start and finish the setup first.',
+  TEMP_READING_REQUIRED: 'Log the temperature at the drop-off first.',
+  SAFE_PLACE_NOT_ALLOWED: 'This order can’t be left unattended. Return it instead.',
+  TRAINING_FAILED: 'Some answers aren’t right yet. Read the guide again and retry.',
+  CERT_REVOKED: 'This certification was revoked. Contact courier support.',
   SEAL_BROKEN: 'The seal is broken, so you can’t take this order. Report “Damaged packaging or broken seal” below.',
   WRONG_ANSWER: 'Not quite. Read the module again and try another answer.',
   ONBOARDING_INCOMPLETE: 'Some steps still need to be finished.',
@@ -105,7 +118,7 @@ export const minutes = (m: number | null | undefined) => {
 
 export const humanize = (s: string) => s.toLowerCase().replace(/_/g, ' ');
 
-export type PhotoPurpose = 'HANDOFF' | 'SAFE_PLACE' | 'PROFILE' | 'EQUIPMENT' | 'ISSUE';
+export type PhotoPurpose = 'HANDOFF' | 'SAFE_PLACE' | 'PROFILE' | 'EQUIPMENT' | 'ISSUE' | 'CERTIFICATE';
 export interface UploadedPhoto { id: string; url: string; previewUrl: string | null }
 
 /** Take a photo (phones open the rear camera) or choose one; uploads privately and hands back the `/files/<id>` reference. */

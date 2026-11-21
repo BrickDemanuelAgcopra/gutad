@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Linking, Text, View } from 'react-native';
-import { EQUIPMENT_LABELS, LIFECYCLE_LABELS, NOT_DISPATCHABLE_LABELS, TRIP_ISSUES, type EquipmentItem, type LifecycleStatus, type Manifest, type TripIssue } from '@gutad/shared';
+import { EQUIPMENT_LABELS, LIFECYCLE_LABELS, NOT_DISPATCHABLE_LABELS, SPECIAL_CATEGORIES, TRIP_ISSUES, type EquipmentItem, type LifecycleStatus, type Manifest, type TripIssue } from '@gutad/shared';
 import { api, money } from '../api';
 import { useAction } from '../hooks';
 import { Badge, Button, C, Card, ErrorText, Input, Muted, s, tone } from '../ui';
@@ -8,6 +8,9 @@ import { Choice, Toggle } from '../chef-ui';
 import { currentPos, errBody, errCode, label, mins, readyText, useCountdown, type Addr, type DriverStatus, type Job, type Offer } from './common';
 import { sendOrQueue } from './queue';
 import { PhotoCapture, type UploadedPhoto } from './photo';
+import { AgeCheckForm, CateringPanel, CategoryBadges, RefusePanel, SPECIAL_FRIENDLY, TemperaturePanel, ageCheckOk, type AgeCheckValue } from './special';
+
+const isCategory = (r: string) => (SPECIAL_CATEGORIES as readonly string[]).includes(r);
 
 /** Online / break / finish-after-current, why offers aren't coming, and today's time and earnings. */
 export function StatusPanel({ st, onChange }: { st: DriverStatus; onChange: () => void }) {
@@ -100,8 +103,10 @@ export function OfferCard({ o, onDone }: { o: Offer; onDone: () => void }) {
     <View style={{ marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.ink1 }}>
       <View style={s.row}><Text style={{ fontSize: 20, fontWeight: '800', color: C.ink }}>{money(o.pay?.totalCents ?? o.payCents)}</Text><Badge text={`${left}s`} tone={left < 20 ? 'bad' : 'warn'} /></View>
       <Muted>Guaranteed: base {money(o.pay?.baseCents || 0)} + distance {money(o.pay?.distanceCents || 0)}{o.pay?.timeCents ? ` + time ${money(o.pay.timeCents)}` : ''}</Muted>
+      {(o.pay?.specialCents ?? 0) > 0 && <Text style={{ color: C.brand, fontWeight: '700' }}>+ {money(o.pay.specialCents!)} {o.pay.special?.length ? o.pay.special.map((x) => `${x.label} ${money(x.cents)}`).join(', ') : 'special order premium'}</Text>}
       {(o.pay?.incentiveCents ?? 0) > 0 && <Text style={{ color: C.brand, fontWeight: '700' }}>+ {money(o.pay.incentiveCents!)} {o.pay.incentives?.map((i) => i.name).join(', ') || 'boost'}</Text>}
       {o.tipCents > 0 && <Text style={{ color: C.good }}>+ estimated tip {money(o.tipCents)} (100% yours, may change)</Text>}
+      <CategoryBadges categories={o.categories} />
       {(o.readiness || o.market) && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><ReadyChip r={o.readiness} />{o.market && <Badge text={o.market.name} tone="info" />}</View>}
       <Text style={{ marginTop: 6, color: C.ink }}><Text style={{ fontWeight: '700' }}>Pick up:</Text> {o.pickup.name} · {o.pickup.line1}, {o.pickup.city}</Text>
       {o.manifest && o.manifest.brands.length > 0 && <ManifestList m={o.manifest} />}
@@ -109,7 +114,7 @@ export function OfferCard({ o, onDone }: { o: Offer; onDone: () => void }) {
       <Muted>{o.stops} stop{o.stops === 1 ? '' : 's'} · {o.distanceKm.toFixed(1)} km trip · {o.toPickupKm.toFixed(1)} km to pickup · about {o.estMinutes} min</Muted>
       {o.batchWith && <Text style={{ color: C.info }}>Adds to your current trip (same pickup)</Text>}
       {o.requirements.includes('ALCOHOL') && <Text style={{ color: C.warn }}>Contains alcohol: check ID at handoff</Text>}
-      {o.requirements.filter((r) => r !== 'ALCOHOL').length > 0 && <Muted>Needs: {o.requirements.filter((r) => r !== 'ALCOHOL').map(label).join(', ')}</Muted>}
+      {o.requirements.filter((r) => !isCategory(r)).length > 0 && <Muted>Needs: {o.requirements.filter((r) => !isCategory(r)).map(label).join(', ')}</Muted>}
       {o.equipment.length > 0 && <Muted>Bring: {o.equipment.map((e) => EQUIPMENT_LABELS[e as EquipmentItem] || label(e)).join(', ')}</Muted>}
       {p && <Muted>Waiting paid after {p.waitingGraceMinutes} min at pickup{p.dropoffGraceMinutes != null ? ` and ${p.dropoffGraceMinutes} min at drop-off` : ''}, {money(p.waitingPerMinuteCents)}/min{p.waitingCapMinutes ? `, up to ${p.waitingCapMinutes} min` : ''} · return {money(p.returnCents)} · canceled after arrival {money(p.cancelAfterArrivalCents)}</Muted>}
       {full && <Text style={{ color: C.warn }}>You already have as many orders as you can carry.</Text>}
@@ -123,12 +128,13 @@ const nav = (a: Addr) => Linking.openURL(a.lat ? `https://www.google.com/maps/di
 
 const FRIENDLY: Record<string, string> = {
   PIN_MISMATCH: 'That PIN doesn’t match. Ask the customer to read it from their order screen.',
-  ID_CHECK_REQUIRED: 'This order has restricted items. Check the customer’s ID and confirm before handing it over.',
+  ID_CHECK_REQUIRED: 'This order has restricted items. Check the customer’s ID: enter the date of birth and ID type.',
   SEAL_BROKEN: 'A broken seal can’t be picked up. Report damaged packaging so the kitchen can fix it.',
+  ...SPECIAL_FRIENDLY,
 };
 
 /** One active delivery: arrival, pickup check, handoff with proof, problems, release, and the customer-unreachable wait flow. */
-export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => void; onQueued?: () => void }) {
+export function JobCard({ j, onChange, onQueued, onRefused }: { j: Job; onChange: () => void; onQueued?: () => void; onRefused?: (outcome: string) => void }) {
   const { run, error, busy } = useAction();
   const [msg, setMsg] = useState<string | null>(null);
   const [panel, setPanel] = useState<'none' | 'issue' | 'release'>('none');
@@ -147,8 +153,16 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
   const [brandBags, setBrandBags] = useState<Record<string, string>>(() => Object.fromEntries((j.manifest?.brands || []).map((b) => [b.brandKey, String(b.bagCount || 1)])));
   const [brandSeal, setBrandSeal] = useState<Record<string, boolean>>(() => Object.fromEntries((j.manifest?.brands || []).map((b) => [b.brandKey, true])));
   const [missing, setMissing] = useState<string[]>([]);
-  // handoff
-  const [method, setMethod] = useState<'PHOTO' | 'PIN' | 'SIGNATURE'>(j.pinRequired ? 'PIN' : 'PHOTO');
+  // handoff (Courier R4: `j.handoff` adds the ID check, signature, named recipient, seal, PIN and catering rules)
+  const h = j.handoff ?? null;
+  const needPin = !!(j.pinRequired || h?.pin);
+  const needSig = !!h?.signature;
+  const forcedProof = needPin || needSig;
+  const [method, setMethod] = useState<'PHOTO' | 'PIN' | 'SIGNATURE'>(needPin ? 'PIN' : needSig ? 'SIGNATURE' : 'PHOTO');
+  const [age, setAge] = useState<AgeCheckValue>({ dob: '', idType: '', idLast4: '' });
+  const [recipient, setRecipient] = useState('');
+  const [sealOk, setSealOk] = useState(false);
+  const [catering, setCatering] = useState(j.special?.catering ?? null);
   const [pin, setPin] = useState('');
   const [sig, setSig] = useState('');
   const [idOk, setIdOk] = useState(false);
@@ -183,13 +197,23 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
   });
   const plain = (fn: () => Promise<unknown>) => run(async () => { await fn(); onChange(); });
   const issues = (Object.keys(TRIP_ISSUES) as TripIssue[]).filter((k) => TRIP_ISSUES[k].stage === 'ANY' || TRIP_ISSUES[k].stage === (atPickup ? 'PICKUP' : 'DROPOFF') || (j.requiresIdCheck && k === 'ID_CHECK_FAILED' && !atPickup));
-  const handoffOk = ((method === 'PHOTO' && !!photo) || (method === 'PIN' && /^\d{4,6}$/.test(pin)) || (method === 'SIGNATURE' && sig.trim().length > 1)) && (!j.requiresIdCheck || idOk) && (!j.pinRequired || method === 'PIN');
+  const pinOk = /^\d{4,6}$/.test(pin);
+  const sigOk = sig.trim().length > 1;
+  const proofOk = forcedProof ? (!needPin || pinOk) && (!needSig || sigOk) : (method === 'PHOTO' && !!photo) || (method === 'PIN' && pinOk) || (method === 'SIGNATURE' && sigOk);
+  const idCheckOk = h?.ageCheck ? ageCheckOk(age, h.ageCheck.minAge) : !j.requiresIdCheck || idOk;
+  const cateringOk = !h?.catering || (!!catering?.checklist?.itemsCounted && (!h.catering.setupRequired || !!catering.checklist?.setupDone));
+  const handoffOk = proofOk && idCheckOk && (!h?.recipientName || recipient.trim().length > 1) && (!h?.sealCheck || sealOk) && cateringOk;
+  const restricted = (j.categories?.length ?? 0) > 0;
 
   return (
     <View style={{ marginBottom: 14, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.ink1 }}>
       <View style={s.row}><Text style={{ fontWeight: '700', flex: 1, color: C.ink }}>{atPickup ? 'Pick up at' : 'Deliver to'}: {atPickup ? j.pickupAddress.line1 : j.dropoffAddress.line1}</Text><Badge text={j.batchId ? `${label(j.status)} · batch` : label(j.status)} tone={tone(j.status)} /></View>
       <Muted>Pay {money(j.providerCostCents)} + tip {money(j.tipCents)}{!atPickup && j.dropoffAddress.instructions ? ` · ${j.dropoffAddress.instructions}` : ''}</Muted>
+      <CategoryBadges categories={j.categories} />
       {j.requiresIdCheck && <Text style={{ color: C.warn }}>Restricted items: check the customer’s ID at handoff</Text>}
+      {h?.recipientName && <Text style={{ color: C.warn }}>Only {h.recipientName} can receive this</Text>}
+      {h?.noSafePlace && <Muted>Hand it over in person: it can’t be left at the door.</Muted>}
+      {j.special?.breach && <Text style={{ color: C.warn }}>{j.special.breach.detail}</Text>}
       {atPickup && (j.readiness || j.shelfSlot) && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><ReadyChip r={j.readiness} />{j.shelfSlot && <Badge text={`Shelf ${j.shelfSlot}`} tone="info" />}</View>}
       {atPickup && j.manifest && j.manifest.brands.length > 0 && <ManifestList m={j.manifest} />}
       <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -236,21 +260,30 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
         </View>
       )}
 
+      {h?.tempControl && ['ASSIGNED', 'PICKED_UP'].includes(j.status) && <TemperaturePanel j={j} />}
+      {h?.catering && j.status === 'PICKED_UP' && !ex && <CateringPanel j={j} onState={setCatering} />}
+
       {j.status === 'PICKED_UP' && !ex && (
         <View style={{ marginTop: 8, padding: 10, backgroundColor: C.bg, borderRadius: 10 }}>
           <Text style={{ fontWeight: '700', color: C.ink, marginBottom: 4 }}>Hand off</Text>
-          {j.pinRequired ? <Muted>This order needs the customer’s PIN.</Muted> : <Choice value={method} onChange={setMethod} options={[{ value: 'PHOTO', label: 'Photo at the door' }, { value: 'PIN', label: 'Customer’s PIN' }, { value: 'SIGNATURE', label: 'Signature' }]} />}
-          {method === 'PIN' && <Input label="PIN from the customer" keyboardType="number-pad" maxLength={6} value={pin} onChangeText={setPin} />}
-          {method === 'SIGNATURE' && <Input label="Customer signs by typing their name" value={sig} onChangeText={setSig} />}
-          {method === 'PHOTO' && <><Muted>Take a clear photo of the order at the door, with the door number in view if you can.</Muted><PhotoCapture purpose="HANDOFF" label="Take handoff photo" value={photo} onChange={setPhoto} library={false} /></>}
-          {j.requiresIdCheck && <Toggle on={idOk} onChange={setIdOk} title="I checked the customer’s ID" text="They are of legal age and the ID matches. If not, don’t hand over; report the failed ID check." />}
+          {forcedProof ? <Muted>This order needs {[needPin && 'the customer’s PIN', needSig && 'a signature'].filter(Boolean).join(' and ')}.</Muted> : <Choice value={method} onChange={setMethod} options={[{ value: 'PHOTO', label: 'Photo at the door' }, { value: 'PIN', label: 'Customer’s PIN' }, { value: 'SIGNATURE', label: 'Signature' }]} />}
+          {(forcedProof ? needPin : method === 'PIN') && <Input label="PIN from the customer" keyboardType="number-pad" maxLength={6} value={pin} onChangeText={setPin} />}
+          {(forcedProof ? needSig : method === 'SIGNATURE') && <Input label={h?.recipientName ? `${h.recipientName} signs by typing their name` : 'Customer signs by typing their name'} value={sig} onChangeText={setSig} />}
+          {h?.recipientName && <Input label={`Recipient’s name (only ${h.recipientName} can receive this)`} value={recipient} onChangeText={setRecipient} />}
+          {h?.sealCheck && <Toggle on={sealOk} onChange={setSealOk} title="Seal intact" text={sealOk ? undefined : 'If the seal is broken, don’t hand it over: tap “Can’t hand over”.'} />}
+          {h?.ageCheck && <AgeCheckForm req={h.ageCheck} value={age} onChange={setAge} />}
+          {!forcedProof && method === 'PHOTO' && <><Muted>Take a clear photo of the order at the door, with the door number in view if you can.</Muted><PhotoCapture purpose="HANDOFF" label="Take handoff photo" value={photo} onChange={setPhoto} library={false} /></>}
+          {j.requiresIdCheck && !h?.ageCheck && <Toggle on={idOk} onChange={setIdOk} title="I checked the customer’s ID" text="They are of legal age and the ID matches. If not, don’t hand over; report the failed ID check." />}
           <Button title="Complete delivery" disabled={busy || !handoffOk} onPress={() => send(`/driver/jobs/${j.id}/transition`, {
             status: 'DELIVERED',
-            ...(method === 'PHOTO' ? { proofPhotoUrl: photo!.url } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: sig.trim() }),
-            ...(j.requiresIdCheck ? { idChecked: idOk } : {}),
+            ...(forcedProof ? { ...(needPin ? { handoffPin: pin } : {}), ...(needSig ? { proofSignature: sig.trim() } : {}) } : method === 'PHOTO' ? { proofPhotoUrl: photo!.url } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: sig.trim() }),
+            ...(h?.ageCheck ? { ageCheck: { dob: age.dob, idType: age.idType, ...(age.idLast4.trim() ? { idLast4: age.idLast4.trim() } : {}) } } : j.requiresIdCheck ? { idChecked: idOk } : {}),
+            ...(h?.recipientName ? { recipientName: recipient.trim() } : {}),
+            ...(h?.sealCheck ? { sealIntact: sealOk } : {}),
           }, 'Delivered')} />
         </View>
       )}
+      {j.status === 'PICKED_UP' && restricted && <RefusePanel j={j} onDone={(o) => { onRefused?.(o); onChange(); }} />}
 
       {j.status === 'PICKED_UP' && !ex && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>{[['CUSTOMER_UNREACHABLE', 'Can’t reach customer'], ['WRONG_ADDRESS', 'Wrong address'], ['ACCESS_PROBLEM', 'Can’t get in']].map(([k, l]) => <Button key={k} title={l} variant="ghost" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception`, { kind: k, method: 'CALL' }))} />)}</View>}
       {ex && (
@@ -258,8 +291,9 @@ export function JobCard({ j, onChange, onQueued }: { j: Job; onChange: () => voi
           <Text style={{ fontWeight: '600' }}>{label(ex.kind)} · {ex.attempts.length} attempt(s)</Text>
           <Muted>{waiting ? `Keep trying until ${new Date(ex.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Wait time is over'}</Muted>
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>{['CALL', 'SMS', 'DOOR'].map((m) => <Button key={m} title={`Log ${m.toLowerCase()}`} variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception`, { kind: ex.kind, method: m }))} />)}</View>
-          {!waiting && <PhotoCapture purpose="SAFE_PLACE" label="Photo of where you left it" value={safePhoto} onChange={setSafePhoto} library={false} />}
-          {!waiting && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}><Button title="Leave safely" disabled={!safePhoto} onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: safePhoto!.url }))} /><Button title="Return" variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'RETURN' }))} /><Button title="Dispose" variant="ghost" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'DISPOSE' }))} /></View>}
+          {!waiting && !h?.noSafePlace && <PhotoCapture purpose="SAFE_PLACE" label="Photo of where you left it" value={safePhoto} onChange={setSafePhoto} library={false} />}
+          {!waiting && h?.noSafePlace && <Muted>This order can’t be left unattended. Return it to the kitchen.</Muted>}
+          {!waiting && <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>{!h?.noSafePlace && <Button title="Leave safely" disabled={!safePhoto} onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: safePhoto!.url }))} />}<Button title="Return" variant="secondary" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'RETURN' }))} /><Button title="Dispose" variant="ghost" onPress={() => plain(() => api.post(`/driver/jobs/${j.id}/exception/resolve`, { resolution: 'DISPOSE' }))} /></View>}
         </View>
       )}
 

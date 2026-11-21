@@ -1,18 +1,20 @@
 import { WorkspaceGate } from '@/ops';
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
-import { GutadApiError, HANDLING_LABELS, KITCHEN_REASONS, type HandlingFlag } from '@gutad/shared';
+import { GutadApiError, HANDLING_LABELS, KITCHEN_REASONS, REFUSAL_LABELS, SPECIAL_CATEGORY_LABELS, type HandlingFlag, type RefusalReason, type SpecialCategory } from '@gutad/shared';
 import { api, when } from '@/api';
 import { useAction, useApi, useStored } from '@/hooks';
 import { useMerchantLocation } from '@/merchant';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
 import { Pills } from '@/ops';
+import { Toggle } from '@/chef-ui';
 
 interface KLine { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null; status: string; handling: string[] }
 interface Ticket { id: string; orderId: string; stationCode: string | null; status: string; kind: string; orderNumber: string; fireAt: string | null; readyBy: string | null; fireState: 'HOLD' | 'FIRE'; delayed: boolean; targetMinutes: number; minutesInProgress: number; tableNumber: string | null; lines: KLine[] }
 interface Pack { id: string; orderId: string; orderNumber: string; bagCode: string; status: string; verifiedLineIds: string[]; blockedReason: string | null; checklist: { key: string; label: string; done: boolean }[]; bagCount: number; handling: string[]; tableNumber: string | null; lines: KLine[] }
 interface Expo { orderId: string; number: string; tableNumber: string | null; holding: { stationCode: string | null }[]; readyLines: number; totalLines: number; foodWaitingMinutes: number; lateMinutes: number; status: string; shelfSlot: string | null }
 interface Board { orders: { id: string; number: string; fulfillmentType: string; name: string | null; shelfSlot: string | null; waitingMinutes: number; overWait: boolean }[] }
+interface Return { jobId: string; orderId: string | null; orderNumber: string | null; courierFirstName: string | null; categories: string[]; refusal: { reason: RefusalReason; note?: string | null; at: string } | null; since: string }
 interface Runner { id: string; number: string; status: string; tableNumber: string | null; lines: { name: string; quantity: number }[] }
 
 const hhmm = (d?: string | null) => (d ? new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—');
@@ -113,6 +115,7 @@ function Kitchen() {
               </View>
             ))}
           </Card>
+          <DeliveryReturns locationId={loc.id} />
           <Card title="Runner: tables">
             {!runner?.length && <Muted>No dine-in orders.</Muted>}
             {runner?.map((o) => <View key={o.id} style={[s.row, { marginBottom: 8 }]}><View style={{ flex: 1 }}><Text style={{ fontSize: 18, fontWeight: '700' }}>Table {o.tableNumber || '—'} · {o.number}</Text><Muted>{o.lines.map((l) => `${l.quantity}× ${l.name}`).join(', ')}</Muted></View>{o.status === 'READY' ? <Button title="Served" onPress={() => post(`/orders/${o.id}/handoff`, { tableNumber: o.tableNumber || undefined })} /> : <Badge text={o.status} tone={tone(o.status)} />}</View>)}
@@ -127,6 +130,38 @@ function Kitchen() {
         </Card>
       )}
     </ScrollView>
+  );
+}
+
+/** Courier R4: refused restricted orders a courier is bringing back; the kitchen confirms receipt (chain of custody). */
+function DeliveryReturns({ locationId }: { locationId: string }) {
+  const { data, reload } = useApi<Return[]>(`/locations/${locationId}/delivery-returns`, { poll: 15000, deps: [locationId] });
+  const { run, error, busy } = useAction();
+  const [open, setOpen] = useState<string | null>(null);
+  const [sealIntact, setSealIntact] = useState(true);
+  const [note, setNote] = useState('');
+  if (!data?.length) return null;
+  return (
+    <Card title="Refused orders coming back">
+      <ErrorText msg={error} />
+      {data.map((r) => (
+        <View key={r.jobId} style={{ marginBottom: 10, paddingBottom: 8, borderBottomWidth: 1, borderColor: C.ink1 }}>
+          <View style={s.row}><Text style={{ fontSize: 18, fontWeight: '700' }}>{r.orderNumber || r.jobId.slice(0, 8)}</Text><Text style={{ color: C.ink5 }}>since {hhmm(r.since)}</Text></View>
+          <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>{r.categories.map((c) => <Badge key={c} text={SPECIAL_CATEGORY_LABELS[c as SpecialCategory] || c} tone="warn" />)}</View>
+          <Muted>{r.refusal ? `Refused: ${REFUSAL_LABELS[r.refusal.reason] || r.refusal.reason}${r.refusal.note ? ` — ${r.refusal.note}` : ''}` : 'Returned'}{r.courierFirstName ? ` · courier ${r.courierFirstName}` : ''}</Muted>
+          {open === r.jobId ? (
+            <View style={{ marginTop: 6 }}>
+              <Toggle on={sealIntact} onChange={setSealIntact} title="Seal intact" text={sealIntact ? undefined : 'Note what was opened or missing.'} />
+              <Input label={sealIntact ? 'Note (optional)' : 'What was wrong?'} value={note} onChangeText={setNote} />
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                <Button title="Confirm received" disabled={busy || (!sealIntact && note.trim().length < 3)} onPress={() => run(async () => { await api.post(`/delivery-jobs/${r.jobId}/return-received`, { sealIntact, note: note.trim() || undefined }); setOpen(null); setNote(''); setSealIntact(true); await reload(); })} />
+                <Button title="Cancel" variant="ghost" onPress={() => setOpen(null)} />
+              </View>
+            </View>
+          ) : <Button title="Confirm received" variant="secondary" onPress={() => { setOpen(r.jobId); setSealIntact(true); setNote(''); }} />}
+        </View>
+      ))}
+    </Card>
   );
 }
 

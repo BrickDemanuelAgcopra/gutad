@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as Location from 'expo-location';
-import { GutadApiError, type CheckStatus, type EligibilityCheck, type EquipmentItem, type Manifest, type OnboardingStepKey, type Readiness } from '@gutad/shared';
+import { GutadApiError, type CheckStatus, type EligibilityCheck, type EquipmentItem, type HandoffRequirements, type Manifest, type OnboardingStepKey, type Readiness, type SpecialCategory, type SpecialRecord } from '@gutad/shared';
 
 /** Courier Release 1 shapes, as in docs/COURIER-R1-PLAN.md. */
 export interface Onboarding {
@@ -30,11 +30,13 @@ export interface DriverStatus {
 }
 
 export interface Offer {
-  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number; incentiveCents?: number; incentives?: { campaignId: string; name: string; cents: number }[] }; tipCents: number;
+  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number; incentiveCents?: number; incentives?: { campaignId: string; name: string; cents: number }[]; specialCents?: number; special?: { category: SpecialCategory; label: string; cents: number }[] }; tipCents: number;
   stops: number; pickup: { name: string; line1: string; city: string }; dropoffArea: { city: string; postalCode: string }; distanceKm: number; toPickupKm: number; estMinutes: number;
   requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number; waitingCapMinutes?: number; dropoffGraceMinutes?: number }; batchWith: string | null;
   /** Courier R2 */
   readiness?: Readiness | null; manifest?: Manifest | null; market?: { id: string; name: string } | null;
+  /** Courier R4 */
+  categories?: SpecialCategory[]; handoff?: HandoffRequirements | null;
 }
 
 export interface Addr { line1: string; city: string; lat?: number; lng?: number; instructions?: string }
@@ -46,6 +48,9 @@ export interface Job {
   requiresIdCheck?: boolean; pinRequired?: boolean; orderCode?: string | null;
   /** Courier R2 */
   readiness?: Readiness | null; manifest?: Manifest | null; shelfSlot?: string | null;
+  /** Courier R4 */
+  categories?: SpecialCategory[]; handoff?: HandoffRequirements | null;
+  special?: { temps: NonNullable<SpecialRecord['temps']>; breach: SpecialRecord['breach'] | null; catering: SpecialRecord['catering'] | null; refusal: SpecialRecord['refusal'] | null } | null;
 }
 
 /** The API's machine-readable error code (e.g. PIN_MISMATCH), if any. */

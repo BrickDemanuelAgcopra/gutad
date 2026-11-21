@@ -13,6 +13,7 @@ import { FirstDeliveryGuide, JobCard, LifecycleNotice, OfferCard, StatusPanel } 
 import { CourierEarnings, CourierFeedback } from '@/courier/earnings';
 import { BusyTimes, Incentives, ReviewNotices } from '@/courier/incentives';
 import { useQueue } from '@/courier/queue';
+import { Certifications } from '@/courier/special';
 
 interface Standing { status: string; suspendedReason: string | null; appealStatus: string; appealDecisionNote: string | null; missingDocs: string[]; metrics?: { acceptanceRate: number | null; completionRate: number | null; onTimeRate: number | null; delivered: number } }
 
@@ -33,13 +34,14 @@ export default function Driver() {
 }
 
 function Work({ onboarding }: { onboarding: Onboarding }) {
-  const [tab, setTab] = useState<'work' | 'incentives' | 'earnings' | 'feedback' | 'docs' | 'shifts'>('work');
+  const [tab, setTab] = useState<'work' | 'incentives' | 'certs' | 'earnings' | 'feedback' | 'docs' | 'shifts'>('work');
   const { data: st, reload: reloadSt } = useApi<DriverStatus>('/driver/status', { poll: 15000 });
   const { data: standing, reload: reloadStanding } = useApi<Standing>('/driver/standing', { deps: [st?.lifecycleStatus] });
   const { data: offers, reload: reloadOffers } = useApi<Offer[]>('/driver/offers', { poll: 5000 });
   const { data: jobs, reload: reloadJobs } = useApi<Job[]>('/driver/jobs', { poll: 5000 });
   const { run, error } = useAction();
   const [appeal, setAppeal] = useState('');
+  const [refused, setRefused] = useState<string | null>(null);
   const refresh = () => { void reloadJobs(); void reloadOffers(); void reloadSt(); };
   const queue = useQueue(refresh);
   // retry queued trip actions alongside the job poll
@@ -60,16 +62,18 @@ function Work({ onboarding }: { onboarding: Onboarding }) {
       {standing?.status === 'SUSPENDED' && <Card title="Appeal">{standing.suspendedReason && <Muted>{standing.suspendedReason}</Muted>}{standing.appealStatus === 'PENDING' ? <Muted>Your appeal is being reviewed by someone who wasn’t involved in the suspension.</Muted> : <>{standing.appealDecisionNote && <Muted>Decision: {standing.appealDecisionNote}</Muted>}<Input label="Appeal" multiline value={appeal} onChangeText={setAppeal} /><ErrorText msg={error} /><Button title="Send appeal" disabled={appeal.length < 10} onPress={() => run(async () => { await api.post('/driver/appeal', { note: appeal }); setAppeal(''); await reloadStanding(); })} /></>}</Card>}
       {!!standing?.missingDocs.length && <Card><Text style={{ color: C.warn }}>Needed: {standing.missingDocs.map((d) => COURIER_DOC_LABELS[d as CourierDocKind] || d).join(', ')}</Text></Card>}
       {standing?.metrics && <Muted>30 days: accept {standing.metrics.acceptanceRate ?? '—'}% · complete {standing.metrics.completionRate ?? '—'}% · on time {standing.metrics.onTimeRate ?? '—'}% · {standing.metrics.delivered} delivered</Muted>}
-      <Pills value={tab} onChange={setTab} options={[{ id: 'work', label: 'Deliveries' }, { id: 'incentives', label: 'Incentives' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'docs', label: 'Documents' }, { id: 'shifts', label: 'Shifts' }]} />
+      <Pills value={tab} onChange={setTab} options={[{ id: 'work', label: 'Deliveries' }, { id: 'incentives', label: 'Incentives' }, { id: 'certs', label: 'Certifications' }, { id: 'earnings', label: 'Earnings' }, { id: 'feedback', label: 'Feedback' }, { id: 'docs', label: 'Documents' }, { id: 'shifts', label: 'Shifts' }]} />
       {tab === 'work' && (
         <>
           {!firstDeliveryAt && <FirstDeliveryGuide />}
           <Card title="Offers">{offers?.length ? offers.map((o) => <OfferCard key={o.id} o={o} onDone={refresh} />) : <Muted>No offers right now{st?.isAvailable ? '' : '. Go online to receive offers'}.</Muted>}</Card>
-          <Card title="Active deliveries">{jobs?.length ? jobs.map((j) => <JobCard key={j.id} j={j} onChange={refresh} />) : <Muted>No active deliveries.</Muted>}</Card>
+          {refused && <Card title="Return to the kitchen"><Text style={{ color: C.info, fontWeight: '600' }}>{refused}</Text><Button title="OK" variant="secondary" onPress={() => setRefused(null)} /></Card>}
+          <Card title="Active deliveries">{jobs?.length ? jobs.map((j) => <JobCard key={j.id} j={j} onChange={refresh} onRefused={setRefused} />) : <Muted>No active deliveries.</Muted>}</Card>
           <ResponsibilityDisputes role="DRIVER" />
         </>
       )}
       {tab === 'incentives' && <><Incentives /><BusyTimes /></>}
+      {tab === 'certs' && <Certifications />}
       {tab === 'earnings' && <CourierEarnings refreshKey={jobs?.length} />}
       {tab === 'feedback' && <CourierFeedback />}
       {tab === 'docs' && <Docs />}

@@ -11,6 +11,7 @@ import { DocLink } from '@/components/courier-docs';
 import { CourierFeedbackTime, OnboardingPanel } from '@/components/courier/admin';
 import type { Onboarding } from '@/components/courier/common';
 import { CourierRiskCard } from '@/components/courier/fraud';
+import { CourierCertificationsCard } from '@/components/courier/special-admin';
 import type { Feedback } from '@/components/courier/money';
 
 interface P {
@@ -52,6 +53,7 @@ export default function Courier() {
         {[['Offers (30d)', p.metrics?.offers ?? 0], ['Acceptance', pct(p.metrics?.acceptanceRate)], ['Completion', pct(p.metrics?.completionRate)], ['Cancellations', pct(p.metrics?.cancellationRate)], ['On time', pct(p.metrics?.onTimeRate)], ['Payable', money(p.payableCents)]].map(([l, x]) => <div key={l as string} className="rounded-xl border border-ink-100 bg-white p-3"><div className="text-xs text-ink-500">{l}</div><div className="text-lg font-bold">{x}</div></div>)}
       </div>
       <CourierRiskCard driverId={id} />
+      <CourierCertificationsCard driverId={id} />
       {p.onboarding && <OnboardingPanel courierId={id} ob={p.onboarding} manage={manage} onChange={reload} />}
       {c.status === 'SUSPENDED' && (
         <Card title="Suspension">

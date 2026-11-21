@@ -5,7 +5,7 @@ import { pickImage } from '../chef-ui';
 import { uploadMultipart } from '../upload';
 import { Button, C } from '../ui';
 
-export type PhotoPurpose = 'HANDOFF' | 'SAFE_PLACE' | 'PROFILE' | 'EQUIPMENT' | 'ISSUE';
+export type PhotoPurpose = 'HANDOFF' | 'SAFE_PLACE' | 'PROFILE' | 'EQUIPMENT' | 'ISSUE' | 'CERTIFICATE';
 export interface UploadedPhoto { id: string; url: string; previewUrl: string | null }
 
 /** Camera first (library as a fallback); the photo is uploaded privately and the `/files/<id>` reference handed back. */

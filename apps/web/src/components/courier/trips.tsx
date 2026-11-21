@@ -1,15 +1,17 @@
 'use client';
 import { useState } from 'react';
-import { GutadApiError, TRIP_ISSUES, type Manifest, type PickupCheck, type Readiness, type TripIssue } from '@gutad/shared';
+import { GutadApiError, TRIP_ISSUES, type HandoffRequirements, type Manifest, type PickupCheck, type Readiness, type SpecialCategory, type TripIssue } from '@gutad/shared';
 import { api, money, when } from '@/lib/api';
 import { Alert, Badge, Button, Input, Select, statusTone } from '@/components/ui';
 import { errCode, friendlyError, getLoc, humanize, PhotoCapture, useCourierAction, useNow, type UploadedPhoto } from './common';
+import { CategoryBadges, CateringBox, PremiumLine, RefuseHandoff, TemperatureBox, useSpecialHandoff, type JobSpecial, type SpecialPremium } from './special';
 
 export interface Offer {
-  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number; incentiveCents?: number; incentives?: { campaignId: string; name: string; cents: number }[] }; tipCents: number;
+  id: string; deliveryJobId: string; expiresAt: string; payCents: number; pay: { baseCents: number; distanceCents: number; timeCents: number; totalCents: number; incentiveCents?: number; incentives?: { campaignId: string; name: string; cents: number }[]; specialCents?: number; special?: SpecialPremium[] }; tipCents: number;
   stops: number; pickup: { name: string; line1: string; city: string }; dropoffArea: { city: string; postalCode: string }; distanceKm: number; toPickupKm: number; estMinutes: number;
   requirements: string[]; equipment: string[]; policy: { version: number; waitingGraceMinutes: number; waitingPerMinuteCents: number; returnCents: number; cancelAfterArrivalCents: number; waitingCapMinutes?: number; dropoffGraceMinutes?: number }; batchWith: string | null;
   readiness?: Readiness | null; manifest?: Manifest | null; market?: { id: string; name: string } | null;
+  categories?: SpecialCategory[]; handoff?: HandoffRequirements;
 }
 
 export interface Job {
@@ -19,6 +21,7 @@ export interface Job {
   pickupCheck?: PickupCheck & { at?: string } | null; custody?: unknown; payPolicy?: unknown;
   issues?: { kind: string; note?: string | null; at?: string; outcome?: string }[]; requiresIdCheck?: boolean; pinRequired?: boolean; orderCode?: string | null;
   readiness?: Readiness | null; manifest?: Manifest | null; shelfSlot?: string | null;
+  categories?: SpecialCategory[]; handoff?: HandoffRequirements; special?: JobSpecial;
 }
 
 const km = (x: number | null | undefined) => (x == null ? '—' : `${Math.round(x * 10) / 10} km`);
@@ -57,6 +60,7 @@ export function OfferCard({ offer: o, onAnswer }: { offer: Offer; onAnswer: (acc
           <div className="text-xl font-bold">{money(pay.totalCents)} <span className="text-xs font-normal text-ink-500">guaranteed</span></div>
           <div className="text-xs text-ink-500">base {money(pay.baseCents)} + distance {money(pay.distanceCents)}{pay.timeCents ? ` + time ${money(pay.timeCents)}` : ''}</div>
           {(pay.incentiveCents ?? 0) > 0 && <div className="text-xs font-semibold text-brand-700">+ {money(pay.incentiveCents!)} {pay.incentives?.map((i) => i.name).join(', ') || 'boost'}</div>}
+          <PremiumLine special={pay.special} />
           {o.tipCents > 0 && <div className="text-xs text-emerald-700">+ estimated tip {money(o.tipCents)}</div>}
         </div>
         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${left <= 15 ? 'bg-red-100 text-red-800' : 'bg-ink-100 text-ink-700'}`}>{left > 0 ? `${left}s` : 'expired'}</span>
@@ -70,7 +74,8 @@ export function OfferCard({ offer: o, onAnswer }: { offer: Offer; onAnswer: (acc
       <div className="mt-1 flex flex-wrap gap-1">
         <ReadyChip readiness={o.readiness} />
         {o.batchWith && <Badge tone="info">adds to your current trip</Badge>}
-        {o.requirements.map((r) => <Badge key={r} tone="warn">{r === 'ALCOHOL' ? 'ID check' : humanize(r)}</Badge>)}
+        <CategoryBadges categories={o.categories} />
+        {o.requirements.filter((r) => !o.categories?.includes(r as SpecialCategory)).map((r) => <Badge key={r} tone="warn">{humanize(r)}</Badge>)}
         {o.equipment.map((e) => <Badge key={e}>{humanize(e)}</Badge>)}
       </div>
       {p && <p className="mt-1 text-xs text-ink-500">Waiting paid after {p.waitingGraceMinutes} min at pickup{p.dropoffGraceMinutes != null ? ` and ${p.dropoffGraceMinutes} min at drop-off` : ''} ({money(p.waitingPerMinuteCents)}/min{p.waitingCapMinutes ? `, up to ${p.waitingCapMinutes} min` : ''}) · returning an order {money(p.returnCents)} · canceled after you arrive {money(p.cancelAfterArrivalCents)}</p>}
@@ -87,7 +92,7 @@ export function JobCard({ job: j, onChange }: { job: Job; onChange: () => Promis
   const act = (fn: () => Promise<unknown>) => run(async () => { setMsg(null); await fn(); await onChange(); });
   return (
     <div className="space-y-2 border-b border-ink-100 py-3 text-sm last:border-0">
-      <div className="flex justify-between gap-2"><span>{j.pickupAddress.name ? `${j.pickupAddress.name}, ` : ''}{j.pickupAddress.line1} → {j.dropoffAddress.line1} · tip {money(j.tipCents)}{j.batchId && <Badge tone="info">batch</Badge>}{j.requiresIdCheck && <Badge tone="warn">ID check</Badge>}</span><Badge tone={statusTone(j.status)}>{humanize(j.status)}</Badge></div>
+      <div className="flex justify-between gap-2"><span>{j.pickupAddress.name ? `${j.pickupAddress.name}, ` : ''}{j.pickupAddress.line1} → {j.dropoffAddress.line1} · tip {money(j.tipCents)}{j.batchId && <Badge tone="info">batch</Badge>}<CategoryBadges categories={j.categories} /></span><Badge tone={statusTone(j.status)}>{humanize(j.status)}</Badge></div>
       {j.status === 'ASSIGNED' && (j.readiness || j.shelfSlot) && <div className="flex flex-wrap items-center gap-1"><ReadyChip readiness={j.readiness} />{j.shelfSlot && <Badge tone="info">Shelf {j.shelfSlot}</Badge>}</div>}
       {j.status === 'ASSIGNED' && <ManifestList manifest={j.manifest} />}
       {j.dropoffAddress.instructions && <p className="text-xs text-ink-500">“{j.dropoffAddress.instructions}”</p>}
@@ -98,11 +103,14 @@ export function JobCard({ job: j, onChange }: { job: Job; onChange: () => Promis
       {j.status === 'ASSIGNED' && j.arrivedPickupAt && !(j.manifest && j.manifest.brands.length > 1) && <PickupForm job={j} busy={busy} onSubmit={(pickupCheck) => act(async () => api.post(`/driver/jobs/${j.id}/transition`, { status: 'PICKED_UP', pickupCheck, ...(await getLoc()) }))} />}
       {j.status === 'PICKED_UP' && !j.arrivedDropoffAt && <Button size="sm" variant="secondary" disabled={busy} onClick={() => act(async () => api.post(`/driver/jobs/${j.id}/arrived`, { at: 'DROPOFF', ...(await getLoc()) }))}>Arrived at drop-off</Button>}
       {j.status === 'PICKED_UP' && j.arrivedDropoffAt && <HandoffForm job={j} busy={busy} onSubmit={(body) => act(async () => api.post(`/driver/jobs/${j.id}/transition`, { status: 'DELIVERED', ...body, ...(await getLoc()) }))} />}
+      {j.handoff?.tempControl && ['ASSIGNED', 'PICKED_UP'].includes(j.status) && <TemperatureBox jobId={j.id} h={j.handoff} special={j.special} picked={j.status === 'PICKED_UP'} onDone={onChange} />}
+      {j.handoff?.catering && j.status === 'PICKED_UP' && <CateringBox jobId={j.id} h={j.handoff} special={j.special} onDone={onChange} />}
       {j.status === 'PICKED_UP' && <ExceptionBox job={j} onDone={() => void onChange()} />}
       {!!j.issues?.length && <ul className="text-xs text-ink-500">{j.issues.map((x, i) => <li key={i}>{TRIP_ISSUES[x.kind as TripIssue]?.label || humanize(x.kind)}{x.at ? ` · ${when(x.at)}` : ''}{x.outcome ? ` — ${x.outcome}` : ''}</li>)}</ul>}
       <div className="flex flex-wrap gap-2">
         <IssueMenu job={j} onReported={async (outcome) => { setMsg(outcome); await onChange(); }} />
         {j.status === 'ASSIGNED' && <Release job={j} onDone={onChange} />}
+        {j.status === 'PICKED_UP' && !!j.categories?.length && <RefuseHandoff jobId={j.id} onDone={async (outcome) => { setMsg(outcome); await onChange(); }} />}
       </div>
     </div>
   );
@@ -202,23 +210,30 @@ function MultiBrandPickupForm({ job, manifest, onSubmit }: { job: Job; manifest:
 
 type Method = 'PHOTO' | 'PIN' | 'SIGNATURE';
 function HandoffForm({ job, busy, onSubmit }: { job: Job; busy: boolean; onSubmit: (b: Record<string, unknown>) => void }) {
-  const [method, setMethod] = useState<Method>(job.pinRequired ? 'PIN' : 'PHOTO');
+  const h = job.handoff;
+  const pinOnly = !!job.pinRequired || !!h?.pin;
+  const sigOnly = !pinOnly && !!h?.signature;
+  const sp = useSpecialHandoff(h);
+  const [method, setMethod] = useState<Method>(pinOnly ? 'PIN' : sigOnly ? 'SIGNATURE' : 'PHOTO');
   const [pin, setPin] = useState('');
   const [name, setName] = useState('');
   const [idChecked, setIdChecked] = useState(false);
   const [photo, setPhoto] = useState<UploadedPhoto | null>(null);
-  const ready = ((method === 'PHOTO' && !!photo) || (method === 'PIN' && pin.length >= 4) || (method === 'SIGNATURE' && name.trim().length >= 2)) && (!job.requiresIdCheck || idChecked);
-  const body = () => ({ ...(method === 'PHOTO' ? { proofPhotoUrl: photo!.url } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: name.trim() }), ...(job.requiresIdCheck ? { idChecked } : {}) });
-  const methods: Method[] = job.pinRequired ? ['PIN'] : ['PHOTO', 'PIN', 'SIGNATURE'];
+  const legacyId = !!job.requiresIdCheck && !h?.ageCheck;
+  const needSig = !!h?.signature && pinOnly;
+  const ready = ((method === 'PHOTO' && !!photo) || (method === 'PIN' && pin.length >= 4) || (method === 'SIGNATURE' && name.trim().length >= 2)) && (!needSig || name.trim().length >= 2) && (!legacyId || idChecked) && sp.complete;
+  const body = () => ({ ...(method === 'PHOTO' ? { proofPhotoUrl: photo!.url } : method === 'PIN' ? { handoffPin: pin } : { proofSignature: name.trim() }), ...(needSig ? { proofSignature: name.trim() } : {}), ...(legacyId ? { idChecked } : {}), ...sp.body() });
+  const methods: Method[] = pinOnly ? ['PIN'] : sigOnly ? ['SIGNATURE'] : ['PHOTO', 'PIN', 'SIGNATURE'];
   return (
     <div className="rounded-lg bg-ink-50 p-3">
       <p className="mb-2 font-medium">Complete the handoff</p>
       {job.pinRequired && <p className="mb-2 text-xs text-ink-500">This order needs the customer’s PIN. They can see it in their Gutad order.</p>}
       <div className="flex flex-wrap gap-3">{methods.map((m) => <label key={m} className="flex items-center gap-1"><input type="radio" name={`m-${job.id}`} checked={method === m} onChange={() => setMethod(m)} /> {m === 'PHOTO' ? 'Photo' : m === 'PIN' ? 'Customer PIN' : 'Signature'}</label>)}</div>
       {method === 'PIN' && <Input className="mt-2" label="PIN" inputMode="numeric" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />}
-      {method === 'SIGNATURE' && <Input className="mt-2" label="Name of the person who received it" value={name} onChange={(e) => setName(e.target.value)} />}
+      {(method === 'SIGNATURE' || needSig) && <Input className="mt-2" label="Signature: name of the person who received it" value={name} onChange={(e) => setName(e.target.value)} />}
       {method === 'PHOTO' && <div className="mt-2"><p className="mb-1 text-xs text-ink-500">Take a clear photo of the order at the door, with the door number in view if you can.</p><PhotoCapture purpose="HANDOFF" label="Take handoff photo" value={photo} onChange={setPhoto} /></div>}
-      {job.requiresIdCheck && <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} /> I checked the customer’s ID and they are old enough</label>}
+      {legacyId && <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} /> I checked the customer’s ID and they are old enough</label>}
+      {sp.fields}
       <Button className="mt-2" size="sm" disabled={busy || !ready} onClick={() => onSubmit(body())}>Delivered</Button>
     </div>
   );
@@ -278,8 +293,9 @@ function ExceptionBox({ job, onDone }: { job: Job; onDone: () => void }) {
         <div className="space-y-1 text-xs">
           <div><b>{humanize(ex.kind)}</b> · {ex.attempts.length} attempt(s) · {waiting ? `keep trying until ${new Date(ex.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'wait time is over'}</div>
           <div className="flex flex-wrap gap-1">{['CALL', 'SMS', 'DOOR'].map((m) => <Button key={m} size="sm" variant="secondary" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception`, { kind: ex.kind, method: m }))}>Log {m.toLowerCase()}</Button>)}</div>
-          {!waiting && <PhotoCapture purpose="SAFE_PLACE" label="Photo of where you left it" value={photo} onChange={setPhoto} />}
-          {!waiting && <div className="flex flex-wrap gap-1"><Button size="sm" disabled={!photo} onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: photo!.url }))}>Leave safely</Button><Button size="sm" variant="secondary" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'RETURN' }))}>Return to restaurant</Button><Button size="sm" variant="ghost" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'DISPOSE' }))}>Dispose</Button></div>}
+          {!waiting && !job.handoff?.noSafePlace && <PhotoCapture purpose="SAFE_PLACE" label="Photo of where you left it" value={photo} onChange={setPhoto} />}
+          {!waiting && job.handoff?.noSafePlace && <p className="text-ink-600">This order can’t be left unattended. Return it to the restaurant.</p>}
+          {!waiting && <div className="flex flex-wrap gap-1">{!job.handoff?.noSafePlace && <Button size="sm" disabled={!photo} onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'SAFE_PLACE', proofPhotoUrl: photo!.url }))}>Leave safely</Button>}<Button size="sm" variant="secondary" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'RETURN' }))}>Return to restaurant</Button><Button size="sm" variant="ghost" onClick={() => act(() => api.post(`/driver/jobs/${job.id}/exception/resolve`, { resolution: 'DISPOSE' }))}>Dispose</Button></div>}
         </div>
       )}
     </div>

@@ -1,4 +1,5 @@
 'use client';
+import { ReturnsCard } from '@/components/courier/special-admin';
 import { useState } from 'react';
 import { api, money, when } from '@/lib/api';
 import { useAction, useApi } from '@/lib/hooks';
@@ -24,7 +25,7 @@ export default function KitchenPage() {
       <h1 className="text-2xl font-bold">Kitchen</h1>
       <Tabs tabs={[{ id: 'packing', label: 'Packing' }, { id: 'pickup', label: 'Pickup & runner' }, { id: 'setup', label: 'Setup' }, { id: 'kitchen', label: 'Production kitchen' }]} active={['packing', 'pickup', 'setup', 'kitchen'].includes(tab) ? tab : 'packing'} onChange={setTab} />
       {(tab === 'packing' || !['pickup', 'setup', 'kitchen'].includes(tab)) && <PackingBoard path={`/locations/${loc.id}/packing`} />}
-      {tab === 'pickup' && <PickupBoard locationId={loc.id} />}
+      {tab === 'pickup' && <><ReturnsCard locationId={loc.id} /><PickupBoard locationId={loc.id} /></>}
       {tab === 'setup' && <KitchenSetup kitchenId={null} locationId={loc.id} stations={[]} reloadKitchen={() => undefined} />}
       {tab === 'kitchen' && (
       <Card title="No shared kitchen linked to this location">
@@ -44,7 +45,7 @@ export default function KitchenPage() {
       {error && <Alert>{error}</Alert>}
       <div className="print:hidden"><Tabs tabs={[{ id: 'stations', label: 'Stations' }, { id: 'expo', label: 'Expo' }, { id: 'packing', label: 'Packing' }, { id: 'pickup', label: 'Pickup & runner' }, { id: 'performance', label: 'Performance' }, { id: 'setup', label: 'Setup' }, { id: 'supply', label: 'Supply & costing' }]} active={tab} onChange={setTab} /></div>
       {tab === 'expo' && <ExpoBoard kitchenId={kitchenId} />}
-      {tab === 'pickup' && <PickupBoard locationId={loc.id} />}
+      {tab === 'pickup' && <><ReturnsCard locationId={loc.id} /><PickupBoard locationId={loc.id} /></>}
       {tab === 'performance' && <KitchenPerformance kitchenId={kitchenId} />}
       {tab === 'setup' && <KitchenSetup kitchenId={kitchenId} locationId={loc.id} stations={kitchen?.stations || []} reloadKitchen={() => void reloadKitchen()} />}
       {tab === 'stations' && <StationsBoard kitchenId={kitchenId} stations={kitchen?.stations || []} />}

@@ -1,4 +1,5 @@
 'use client';
+import type { CustomerHandoffRequirements } from '@gutad/shared';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
@@ -17,7 +18,7 @@ interface Order {
   payment: { status: string; capturedCents: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null;
   prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null; amendable?: boolean; amendedFromOrderId?: string | null;
   chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null;
-  delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; handoffPin?: string | null; courierFirstName?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
+  delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; handoffPin?: string | null; handoffRequirements?: CustomerHandoffRequirements | null; courierFirstName?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
 
 
@@ -156,6 +157,7 @@ export default function OrderPage() {
         <Card title="Delivery">
           <div className="flex items-center justify-between text-sm"><span>Courier</span><Badge tone={statusTone(track?.status || o.delivery.status)}>{courierLabel(track?.status || o.delivery.status)}</Badge></div>
           {o.delivery.courierFirstName && ['ASSIGNED', 'PICKED_UP'].includes(track?.status || o.delivery.status) && <p className="mt-1 text-sm">Your courier is {o.delivery.courierFirstName}.</p>}
+          {o.delivery.handoffRequirements && <HandoffNotes r={o.delivery.handoffRequirements} />}
           {o.delivery.handoffPin && ['ASSIGNED', 'PICKED_UP'].includes(track?.status || o.delivery.status) && <div className="mt-2"><Alert tone="info">Your handoff PIN: <b className="text-lg tracking-widest">{o.delivery.handoffPin}</b> — give it to your courier.</Alert></div>}
           {track?.etaAt && <p className="mt-1 text-sm">ETA {when(track.etaAt)}</p>}
           {track?.courierLocation && <p className="text-xs text-ink-500">Courier at {track.courierLocation.lat.toFixed(4)}, {track.courierLocation.lng.toFixed(4)}</p>}
@@ -212,4 +214,18 @@ export default function OrderPage() {
       )}
     </div>
   );
+}
+
+/** Courier R4: what to have ready when a special-category order arrives. */
+function HandoffNotes({ r }: { r: CustomerHandoffRequirements }) {
+  const notes = [
+    r.ageCheck && `Have a photo ID ready — you must be ${r.ageCheck.minAge} or over.`,
+    r.recipientName && `Only ${r.recipientName} can receive this order.`,
+    r.signature && 'A signature is required at the door.',
+    r.pin && 'Have your delivery PIN ready.',
+    r.noSafePlace && 'It won’t be left at the door, so please be there to receive it.',
+    r.temperatureControlled && 'Temperature-controlled delivery: please put it in the fridge straight away.',
+  ].filter(Boolean) as string[];
+  if (!notes.length) return null;
+  return <ul className="mt-2 list-disc rounded-lg bg-amber-50 py-2 pl-6 pr-2 text-sm text-amber-900">{notes.map((n) => <li key={n}>{n}</li>)}</ul>;
 }
