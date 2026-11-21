@@ -14,11 +14,13 @@ import { CourierFilesService } from './courier-files.service';
 import { DeliveryFollowupsController } from './delivery-followups.controller';
 import { CourierController } from './courier.controller';
 import { CourierService } from './courier.service';
+import { DeliveryPolicyService } from './delivery-policy.service';
+import { DeliveryPolicyController } from './delivery-policy.controller';
 import { StorageService } from '../../core/storage.service';
 
 @Global()
 @Module({
-  controllers: [CourierController, DeliveryController, DeliveryFollowupsController],
+  controllers: [CourierController, DeliveryPolicyController, DeliveryController, DeliveryFollowupsController],
   providers: [
     MockDeliveryProvider,
     DoorDashDriveProvider,
@@ -37,11 +39,12 @@ import { StorageService } from '../../core/storage.service';
     RoutingService,
     LiveService,
     StorageService,
+    DeliveryPolicyService,
     DeliveryService,
     DeliveryAdminService,
     CourierFilesService,
     CourierService,
   ],
-  exports: [CourierService, DeliveryService, DeliveryAdminService, DeliveryProviderRegistry, RoutingService, LiveService, StorageService],
+  exports: [CourierService, DeliveryPolicyService, DeliveryService, DeliveryAdminService, DeliveryProviderRegistry, RoutingService, LiveService, StorageService],
 })
 export class DeliveryModule {}

@@ -656,7 +656,7 @@ export class CourierService {
     return {
       payableCents: payable, pendingCents: pending, availableCents: Math.max(0, payable - pending),
       policy,
-      entries: rows.map((e) => ({ id: e.id, kind: e.kind, deliveryJobId: e.deliveryJobId, baseCents: e.baseCents, distanceCents: e.distanceCents, timeCents: e.timeCents, waitingCents: e.waitingCents, returnCents: e.returnCents, tipCents: e.tipCents, bonusCents: e.bonusCents, totalCents: total(e), reason: e.reason, policyVersion: e.policyVersion, availableAt: e.availableAt, createdAt: e.createdAt })),
+      entries: rows.map((e) => ({ id: e.id, kind: e.kind, deliveryJobId: e.deliveryJobId, baseCents: e.baseCents, distanceCents: e.distanceCents, timeCents: e.timeCents, waitingCents: e.waitingCents, returnCents: e.returnCents, tipCents: e.tipCents, bonusCents: e.bonusCents, detail: e.detail ?? null, totalCents: total(e), reason: e.reason, policyVersion: e.policyVersion, availableAt: e.availableAt, createdAt: e.createdAt })),
       days: group(day, 14).map(([date, g]) => ({ date, ...g })),
       weeks: group(monday, 8).map(([weekStart, g]) => ({ weekStart, ...g })),
       payouts: pays.map((p) => ({ id: p.id, amountCents: p.amountCents, status: p.status, failureReason: p.failureReason, periodStart: p.periodStart, periodEnd: p.periodEnd, paidAt: p.paidAt })),

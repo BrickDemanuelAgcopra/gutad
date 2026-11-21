@@ -1,9 +1,9 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { bearing, bearingDiff, DEFAULT_AVAILABILITY, DEFAULT_BATCHING, DEFAULT_DISPATCH, DEFAULT_PAY_POLICY, HARD_REQUIREMENTS, offerPay, REQUIRED_COURIER_DOCS, waitingPay, type AvailabilityConfig, type BatchingConfig, type CourierPayPolicy, type DispatchConfig, type OfferPay } from '@gutad/shared';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { DEFAULT_AVAILABILITY, DEFAULT_BATCHING, DEFAULT_DISPATCH, DEFAULT_PAY_POLICY, HARD_REQUIREMENTS, offerPay, REQUIRED_COURIER_DOCS, waitingPay, type AvailabilityConfig, type BatchingConfig, type CourierPayPolicy, type DispatchConfig, type Manifest, type OfferPay, type ReadySyncConfig } from '@gutad/shared';
 import { ModuleRef } from '@nestjs/core';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { courierDocuments, courierEligibility, courierRecords, courierTimeEntries, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, storedFiles, users } from '../../db/schema';
+import { courierDocuments, courierEligibility, courierRecords, courierTimeEntries, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, regions, storedFiles, users } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
 import { assertCan, assertOrgAccess, hasAnyRole, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { LedgerService } from '../../core/ledger.service';
@@ -11,7 +11,8 @@ import { OutboxService } from '../../core/outbox.service';
 import { AuditService } from '../../core/audit.service';
 import { haversineKm, pointInPolygon } from '../../common/utils';
 import { DELIVERY_PROVIDER } from './delivery.constants';
-import type { Address, DeliveryProvider, DeliveryProviderEvent } from './providers/delivery-provider';
+import { WebhookAuthError, type Address, type DeliveryProvider, type DeliveryProviderEvent } from './providers/delivery-provider';
+import { DeliveryPolicyService, type EffectivePolicy } from './delivery-policy.service';
 import { DeliveryProviderRegistry } from './providers/provider-registry';
 import { RoutingService } from './routing.service';
 import { LiveService } from './live.service';
@@ -36,6 +37,7 @@ export class DeliveryService {
     private readonly routing: RoutingService,
     private readonly live: LiveService,
     private readonly redis: RedisService,
+    readonly policy: DeliveryPolicyService,
   ) {}
 
   // ───── 17.9-M partner providers in priority order ─────
@@ -250,12 +252,19 @@ export class DeliveryService {
     if (job.status !== 'QUOTED' && job.status !== 'UNASSIGNED' && job.status !== 'QUOTE_EXPIRED') return job; // already dispatched
     const [o] = job.orderId ? await tx.select().from(orders).where(eq(orders.id, job.orderId)).limit(1) : [null];
     const externalId = job.id;
+    // Courier R2: market, ready estimate and manifest go with every dispatch
+    const eff = await this.policy.effectiveForLocation(job.locationId, tx);
+    const estReadyAt = o?.status === 'READY' ? (o.readyAt ?? new Date()) : (job.estReadyAt ?? this.estimateReady(o ?? null, eff.readySync));
+    const requirements = await this.requirementsFor(job, tx);
+    const manifest = await this.policy.manifest([{ ...job, requirements }], tx);
+    await tx.update(deliveryJobs).set({ estReadyAt, readyAt: o?.status === 'READY' ? estReadyAt : job.readyAt, marketId: eff.market?.id ?? null, manifest, requirements }).where(eq(deliveryJobs.id, job.id));
     if (job.fleet === 'PARTNER') {
       const provider = this.providers.get(job.provider);
       let result = await provider.findByExternalId(externalId);
       if (!result) {
         try {
-          result = await provider.createJob({ externalId, pickup: job.pickupAddress as Address, dropoff: job.dropoffAddress as Address, orderValueCents: o?.subtotalCents || 0, tipCents: job.tipCents, providerQuoteId: job.providerQuoteId, idempotencyKey: `dispatch:${job.id}`, pickupReadyAt: o?.promiseAt ?? null });
+          const items = manifest.brands.flatMap((b) => b.items.map((i) => ({ name: manifest.brands.length > 1 ? `${b.brandName}: ${i.name}` : i.name, quantity: i.quantity })));
+          result = await provider.createJob({ externalId, pickup: job.pickupAddress as Address, dropoff: job.dropoffAddress as Address, orderValueCents: o?.subtotalCents || 0, tipCents: job.tipCents, providerQuoteId: job.providerQuoteId, idempotencyKey: `dispatch:${job.id}`, pickupReadyAt: estReadyAt, items, containsAlcohol: manifest.hasAlcohol || requirements.includes('ALCOHOL') });
         } catch (e) {
           // uncertain response: look up before surfacing the failure
           result = await provider.findByExternalId(externalId);
@@ -268,7 +277,7 @@ export class DeliveryService {
       }
       const [u] = await tx
         .update(deliveryJobs)
-        .set({ status: result.status === 'REQUESTED' ? 'REQUESTED' : (result.status as Status), providerJobId: result.providerJobId, trackingUrl: result.trackingUrl, etaAt: result.etaAt })
+        .set({ status: result.status === 'REQUESTED' ? 'REQUESTED' : (result.status as Status), providerJobId: result.providerJobId, trackingUrl: result.trackingUrl, etaAt: result.etaAt, providerFeeCents: result.feeCents ?? null, providerSyncedReadyAt: estReadyAt })
         .where(eq(deliveryJobs.id, job.id))
         .returning();
       await this.event(job.id, 'REQUESTED', { provider: provider.name, providerJobId: result.providerJobId }, tx);
@@ -277,9 +286,17 @@ export class DeliveryService {
       return u;
     }
     if (job.fleet === 'PLATFORM') {
+      // Courier R2: offers are held until shortly before the food is due (a courier who must leave now gets it now)
+      const ready = o?.status === 'READY';
+      const holdUntil = eff.readySync.enabled && !ready ? new Date(estReadyAt.getTime() - (eff.readySync.pickupTravelMinutes + eff.readySync.offerLeadMinutes) * 60_000) : null;
+      const held = !!holdUntil && holdUntil.getTime() > Date.now();
       // Courier R1: the customer's handoff PIN (accepted as proof of delivery)
-      const [u] = await tx.update(deliveryJobs).set({ status: 'REQUESTED', requirements: await this.requirementsFor(job, tx), handoffPin: job.handoffPin ?? String(Math.floor(1000 + Math.random() * 9000)) }).where(eq(deliveryJobs.id, job.id)).returning();
-      await this.event(job.id, 'REQUESTED', { fleet: 'PLATFORM' }, tx);
+      const [u] = await tx.update(deliveryJobs).set({ status: 'REQUESTED', handoffPin: job.handoffPin ?? String(Math.floor(1000 + Math.random() * 9000)), holdUntil: held ? holdUntil : null }).where(eq(deliveryJobs.id, job.id)).returning();
+      await this.event(job.id, 'REQUESTED', { fleet: 'PLATFORM', market: eff.market?.id ?? null }, tx);
+      if (held) {
+        await this.event(job.id, 'HELD', { until: holdUntil!.toISOString(), estReadyAt: estReadyAt.toISOString() }, tx);
+        return u;
+      }
       await this.offerRound(u, tx);
       return (await tx.select().from(deliveryJobs).where(eq(deliveryJobs.id, job.id)))[0];
     }
@@ -401,14 +418,16 @@ export class DeliveryService {
   }
 
   /** Guaranteed pay recorded for a job: the accepted offer's snapshot, else the current policy (manual assignment). */
-  async jobPay(job: typeof deliveryJobs.$inferSelect): Promise<{ policy: CourierPayPolicy; pay: OfferPay; estMinutes: number }> {
-    const snap = job.payPolicy as { policy: CourierPayPolicy; pay: OfferPay; estMinutes: number } | null;
-    if (snap?.pay && snap.policy) return snap;
-    const policy = await this.payPolicy();
-    const cfg = await this.dispatchCfg();
+  async jobPay(job: typeof deliveryJobs.$inferSelect): Promise<{ policy: CourierPayPolicy; pay: OfferPay; estMinutes: number; market?: { id: string; version: number } | null }> {
+    const snap = job.payPolicy as { policy: CourierPayPolicy; pay: OfferPay; estMinutes: number; market?: { id: string; version: number } | null } | null;
+    if (snap?.pay && snap.policy) return { ...snap, policy: { ...DEFAULT_PAY_POLICY, ...snap.policy } };
+    // Courier R2: manual assignment uses the job's market policy
+    const eff = await this.policy.effectiveForLocation(job.locationId);
+    const policy = eff.pay;
+    const cfg = eff.dispatch;
     const km = job.distanceKm ?? 3;
     const estMinutes = Math.round(km * cfg.travelMinutesPerKm + 5);
-    return { policy, pay: offerPay(policy, km, estMinutes), estMinutes };
+    return { policy, pay: offerPay(policy, km, estMinutes), estMinutes, market: eff.market ? { id: eff.market.id, version: eff.market.version } : null };
   }
 
   /**
@@ -418,9 +437,14 @@ export class DeliveryService {
    */
   async courierPay(job: typeof deliveryJobs.$inferSelect, outcome: Status, tx: DbOrTx) {
     if (!job.driverId) return null;
-    const { policy, pay } = await this.jobPay(job);
-    const waited = job.arrivedPickupAt ? ((job.pickedUpAt ?? new Date()).getTime() - job.arrivedPickupAt.getTime()) / 60_000 : 0;
-    const wait = waitingPay(policy, waited);
+    const { policy, pay, market } = await this.jobPay(job);
+    // Courier R2 fair waiting: pickup waiting starts when the food was due (the estimate shown at accept), never before
+    // the courier arrived; drop-off waiting after its own grace; both capped by the market policy.
+    const from = job.arrivedPickupAt ? new Date(Math.max(job.arrivedPickupAt.getTime(), (job.acceptedReadyAt ?? job.arrivedPickupAt).getTime())) : null;
+    const waited = from ? Math.max(0, ((job.pickedUpAt ?? new Date()).getTime() - from.getTime()) / 60_000) : 0;
+    const dropWaited = job.arrivedDropoffAt && job.deliveredAt ? Math.max(0, (job.deliveredAt.getTime() - job.arrivedDropoffAt.getTime()) / 60_000) : 0;
+    const wait = waitingPay(policy, waited, dropWaited);
+    const detail = { pickupWaitMinutes: wait.pickupMinutes, dropoffWaitMinutes: wait.dropoffMinutes, kitchenDelayMinutes: job.kitchenDelayMinutes ?? 0, marketId: market?.id ?? null, marketVersion: market?.version ?? null };
     let row: Omit<typeof driverEarnings.$inferInsert, 'driverId'>;
     if (outcome === 'CANCELED' || (outcome === 'FAILED' && !job.pickedUpAt)) {
       if (!job.arrivedPickupAt) return null; // released or canceled before arriving: nothing earned
@@ -430,7 +454,7 @@ export class DeliveryService {
     }
     const total = (row.baseCents || 0) + (row.distanceCents || 0) + (row.timeCents || 0) + (row.waitingCents || 0) + (row.returnCents || 0);
     const availableAt = new Date(Date.now() + policy.holdHours * 3600_000);
-    const [e] = await tx.insert(driverEarnings).values({ ...row, driverId: job.driverId, deliveryJobId: job.id, policyVersion: policy.version, availableAt }).onConflictDoNothing().returning();
+    const [e] = await tx.insert(driverEarnings).values({ ...row, driverId: job.driverId, deliveryJobId: job.id, policyVersion: policy.version, availableAt, detail }).onConflictDoNothing().returning();
     if (!e) return null;
     const [loc] = await tx.select({ currency: locations.currency }).from(locations).where(eq(locations.id, job.locationId)).limit(1);
     if (total > 0) {
@@ -464,6 +488,7 @@ export class DeliveryService {
     if (job.fleet === 'PARTNER' && job.providerJobId) feeCents = (await this.providers.get(job.provider).cancel(job.providerJobId)).feeCents;
     return this.db.transaction(async (tx) => {
       const u = await this.transition(jobId, 'CANCELED', { reason, costOwner, lateCancelFeeCents: feeCents }, tx);
+      if (job.fleet === 'PARTNER') await tx.update(deliveryJobs).set({ providerCancelFeeCents: feeCents }).where(eq(deliveryJobs.id, jobId));
       if (feeCents > 0) {
         const [loc] = await tx.select().from(locations).where(eq(locations.id, job.locationId)).limit(1);
         const owner = costOwner || this.defaultCostOwner(job, 'CANCELED');
@@ -488,7 +513,13 @@ export class DeliveryService {
     // 17.9-M each partner posts to /webhooks/delivery/:provider; the legacy route is the configured provider
     const provider = providerName ? (this.providers.has(providerName) ? this.providers.get(providerName) : null) : this.provider;
     if (!provider) throw new BadRequestException('Unknown delivery provider');
-    const ev = await provider.parseWebhook(rawBody, headers);
+    let ev: DeliveryProviderEvent | null;
+    try {
+      ev = await provider.parseWebhook(rawBody, headers);
+    } catch (e) {
+      if (e instanceof WebhookAuthError) throw new UnauthorizedException('Webhook not authenticated');
+      throw e;
+    }
     if (!ev) throw new BadRequestException('Invalid delivery webhook');
     const [inserted] = await this.db.insert(inboxEvents).values({ provider: `delivery:${provider.name}`, eventId: ev.id, type: ev.status, payload: ev as unknown as Record<string, unknown> }).onConflictDoNothing().returning();
     if (!inserted) return { duplicate: true };
@@ -507,6 +538,10 @@ export class DeliveryService {
       this.log.warn(`webhook for unknown provider job ${ev.providerJobId}`);
       return;
     }
+    // Courier R2 reconciliation: the provider's actual and cancellation fees
+    if ((ev.feeCents != null && ev.feeCents !== job.providerFeeCents) || (ev.cancelFeeCents != null && ev.cancelFeeCents !== job.providerCancelFeeCents)) {
+      await this.db.update(deliveryJobs).set({ ...(ev.feeCents != null ? { providerFeeCents: ev.feeCents } : {}), ...(ev.cancelFeeCents != null ? { providerCancelFeeCents: ev.cancelFeeCents } : {}) }).where(eq(deliveryJobs.id, job.id));
+    }
     // out-of-order protection: never regress
     const order: Status[] = ['QUOTED', 'REQUESTED', 'ASSIGNED', 'PICKED_UP', 'DELIVERED'];
     if (order.indexOf(ev.status as Status) !== -1 && order.indexOf(ev.status as Status) <= order.indexOf(job.status)) {
@@ -514,6 +549,136 @@ export class DeliveryService {
       return;
     }
     await this.db.transaction((tx) => this.transition(job.id, ev.status as Status, { etaAt: ev.etaAt?.toISOString(), lat: ev.lat, lng: ev.lng, proofPhotoUrl: ev.proofPhotoUrl, driverName: ev.driverName, reason: ev.failureReason }, tx));
+  }
+
+  // ───── Courier R2: kitchen-ready sync ─────
+
+  /**
+   * The kitchen changed what delivery should know: the order was accepted (new promise), is READY, went back to
+   * PREPARING (refire), or the kitchen pushed a new estimate. Updates the job's ready times and manifest, releases a
+   * held offer when the food is ready, and moves a partner's pickup time when the estimate shifted enough.
+   */
+  async onKitchenUpdate(orderId: string, kind: 'READY' | 'REFIRE' | 'ESTIMATE', tx: DbOrTx, opts: { minutes?: number } = {}) {
+    const [job] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+    if (!job || ['DELIVERED', 'CANCELED', 'FAILED', 'RETURNED', 'PICKED_UP'].includes(job.status)) return null;
+    const [o] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    const eff = await this.policy.effectiveForLocation(job.locationId, tx);
+    const now = new Date();
+    const patch: Partial<typeof deliveryJobs.$inferInsert> = {};
+    if (kind === 'READY') {
+      patch.readyAt = o?.readyAt ?? now;
+      patch.estReadyAt = patch.readyAt;
+      patch.manifest = await this.policy.manifest([job], tx); // bags are known once packed
+    } else {
+      patch.readyAt = null;
+      patch.estReadyAt = opts.minutes !== undefined ? new Date(now.getTime() + opts.minutes * 60_000) : kind === 'REFIRE' ? new Date(now.getTime() + eff.readySync.defaultPrepMinutes * 60_000) : this.estimateReady(o ?? null, eff.readySync);
+    }
+    const [u] = await tx.update(deliveryJobs).set(patch).where(eq(deliveryJobs.id, job.id)).returning();
+    await this.event(job.id, kind === 'READY' ? 'KITCHEN_READY' : kind === 'REFIRE' ? 'KITCHEN_REFIRE' : 'KITCHEN_ESTIMATE', { estReadyAt: u.estReadyAt?.toISOString() ?? null, readyAt: u.readyAt?.toISOString() ?? null }, tx);
+    this.pushJob(u);
+    if (u.fleet === 'PLATFORM' && u.status === 'REQUESTED' && !u.driverId) {
+      const live = await tx.select({ id: driverOffers.id }).from(driverOffers).where(and(eq(driverOffers.deliveryJobId, u.id), eq(driverOffers.status, 'OFFERED'))).limit(1);
+      if (kind === 'READY' && u.holdUntil && !live.length) {
+        await this.event(u.id, 'RELEASED_ON_READY', {}, tx);
+        await this.offerRound(u, tx);
+      } else if (kind !== 'READY' && eff.readySync.enabled && !live.length) {
+        // still waiting for its first offer: re-time the hold
+        const hold = new Date(u.estReadyAt!.getTime() - (eff.readySync.pickupTravelMinutes + eff.readySync.offerLeadMinutes) * 60_000);
+        if (hold > now) await tx.update(deliveryJobs).set({ holdUntil: hold }).where(eq(deliveryJobs.id, u.id));
+      }
+    }
+    if (u.fleet === 'PARTNER' && u.providerJobId && u.estReadyAt) {
+      const synced = u.providerSyncedReadyAt?.getTime() ?? 0;
+      if (Math.abs(u.estReadyAt.getTime() - synced) >= eff.readySync.resyncMinutes * 60_000 && u.estReadyAt > now) {
+        const provider = this.providers.get(u.provider);
+        if (provider.updatePickupTime) {
+          const r = await provider.updatePickupTime(u.providerJobId, u.estReadyAt);
+          await this.event(u.id, r.ok ? 'PROVIDER_READY_SYNCED' : 'PROVIDER_READY_SYNC_FAILED', { provider: provider.name, at: u.estReadyAt.toISOString() }, tx);
+          if (r.ok) await tx.update(deliveryJobs).set({ providerSyncedReadyAt: u.estReadyAt }).where(eq(deliveryJobs.id, u.id));
+        }
+      }
+    }
+    if (u.driverId && kind === 'READY') await this.event(u.id, 'COURIER_TOLD_READY', { driverId: u.driverId }, tx);
+    return u;
+  }
+
+  /** Kitchen staff push a new ready estimate (running late, or early). */
+  async setReadyEstimate(user: JwtPayload, orderId: string, minutes: number) {
+    const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o) throw new NotFoundException('Order not found');
+    assertOrgAccess(user, o.organizationId, o.locationId);
+    if (!['ACCEPTED', 'PREPARING'].includes(o.status)) throw new ConflictException(`Order is ${o.status}`);
+    if (!Number.isFinite(minutes) || minutes < 0 || minutes > 240) throw new BadRequestException('minutes must be 0–240');
+    const u = await this.db.transaction((tx) => this.onKitchenUpdate(orderId, 'ESTIMATE', tx, { minutes }));
+    if (!u) throw new ConflictException('This order has no open delivery');
+    return { jobId: u.id, estReadyAt: u.estReadyAt, readyAt: u.readyAt, holdUntil: u.holdUntil };
+  }
+
+  /** Every minute: held own-fleet jobs whose time has come get their first offer round. */
+  async releaseHeld(now = new Date()) {
+    const due = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.status, 'REQUESTED'), isNull(deliveryJobs.driverId), isNotNull(deliveryJobs.holdUntil), lte(deliveryJobs.holdUntil, now)));
+    let n = 0;
+    for (const j of due) {
+      await this.db.transaction(async (tx) => {
+        const [cur] = await tx.update(deliveryJobs).set({ holdUntil: null }).where(and(eq(deliveryJobs.id, j.id), isNotNull(deliveryJobs.holdUntil))).returning();
+        if (!cur) return; // another worker took it
+        await this.event(j.id, 'RELEASED', {}, tx);
+        await this.offerRound(cur, tx);
+        n++;
+      });
+    }
+    return n;
+  }
+
+  /** What the kitchen sees: couriers coming for its orders, with readiness and the manifest. */
+  async courierArrivals(user: JwtPayload, locationId: string) {
+    const [loc] = await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
+    if (!loc) throw new NotFoundException('Location not found');
+    assertOrgAccess(user, loc.organizationId, locationId);
+    const locIds = loc.kitchenId ? (await this.db.select({ id: locations.id }).from(locations).where(eq(locations.kitchenId, loc.kitchenId))).map((l) => l.id) : [locationId];
+    const rows = await this.db.select({ j: deliveryJobs, number: orders.number, shelfSlot: orders.shelfSlot, lat: drivers.lastLat, lng: drivers.lastLng, name: users.name }).from(deliveryJobs)
+      .leftJoin(orders, eq(orders.id, deliveryJobs.orderId)).leftJoin(drivers, eq(drivers.id, deliveryJobs.driverId)).leftJoin(users, eq(users.id, drivers.userId))
+      .where(and(inArray(deliveryJobs.locationId, locIds), inArray(deliveryJobs.status, ['REQUESTED', 'ASSIGNED', 'UNASSIGNED']))).orderBy(deliveryJobs.estReadyAt);
+    const cfg = await this.dispatchCfg();
+    return rows.map(({ j, number, shelfSlot, lat, lng, name }) => {
+      const pu = j.pickupAddress as Address;
+      const eta = j.arrivedPickupAt ? 0 : lat != null && lng != null && pu.lat !== undefined && pu.lng !== undefined ? Math.round(haversineKm(lat, lng, pu.lat, pu.lng) * cfg.travelMinutesPerKm) : null;
+      return { jobId: j.id, orderId: j.orderId, orderNumber: number, status: j.status, courierFirstName: j.fleet === 'PLATFORM' && name ? name.split(' ')[0] : null, fleet: j.fleet, provider: j.provider, etaToPickupMinutes: j.driverId ? eta : null, arrivedAt: j.arrivedPickupAt, estReadyAt: j.estReadyAt, readyAt: j.readyAt, holdUntil: j.holdUntil, shelfSlot, manifest: j.manifest };
+    });
+  }
+
+  /** Partner fees: quoted at checkout vs. reported by the provider (variance only; nothing is posted). */
+  async reconciliation(user: JwtPayload, q: { provider?: string; from?: string; to?: string }) {
+    assertCan(user, 'delivery.read', 'finance.read');
+    const from = q.from ? new Date(q.from) : new Date(Date.now() - 30 * 86_400_000);
+    const to = q.to ? new Date(q.to) : new Date();
+    const conds = [eq(deliveryJobs.fleet, 'PARTNER'), gte(deliveryJobs.createdAt, from), lte(deliveryJobs.createdAt, to)];
+    if (q.provider) conds.push(eq(deliveryJobs.provider, q.provider));
+    const rows = await this.db.select({ j: deliveryJobs, number: orders.number }).from(deliveryJobs).leftJoin(orders, eq(orders.id, deliveryJobs.orderId)).where(and(...conds)).orderBy(desc(deliveryJobs.createdAt)).limit(500);
+    const out = rows.map(({ j, number }) => {
+      const actual = j.providerFeeCents;
+      const cancelFee = j.providerCancelFeeCents ?? 0;
+      return { jobId: j.id, orderNumber: number, provider: j.provider, quotedCents: j.providerCostCents, actualCents: actual, cancelFeeCents: cancelFee, varianceCents: actual === null ? null : actual + cancelFee - j.providerCostCents, status: j.status, createdAt: j.createdAt };
+    });
+    const known = out.filter((r) => r.actualCents !== null);
+    return { rows: out, totals: { jobs: out.length, quotedCents: out.reduce((t, r) => t + r.quotedCents, 0), actualCents: known.reduce((t, r) => t + (r.actualCents ?? 0) + r.cancelFeeCents, 0), varianceCents: known.reduce((t, r) => t + (r.varianceCents ?? 0), 0), unreported: out.length - known.length } };
+  }
+
+  /** Connectivity check for a partner: one quote between a location and a nearby point. Nothing is created. */
+  async testProvider(user: JwtPayload, name: string, locationId?: string) {
+    assertCan(user, 'delivery.manage');
+    if (!this.providers.has(name)) throw new NotFoundException(`Provider ${name} is not configured`);
+    const [loc] = locationId ? await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1) : await this.db.select().from(locations).where(isNotNull(locations.lat)).limit(1);
+    if (!loc) throw new BadRequestException('No location to quote from');
+    const pickup = this.pickupAddress(loc);
+    const dropoff: Address = { ...pickup, line2: undefined, contactName: 'Connectivity test', lat: pickup.lat !== undefined ? pickup.lat + 0.01 : undefined, lng: pickup.lng };
+    const t0 = Date.now();
+    try {
+      const q = await this.providers.get(name).quote({ externalId: `test_${Date.now()}`, pickup, dropoff, orderValueCents: 2000, tipCents: 0 });
+      return { ok: true, latencyMs: Date.now() - t0, error: null, quote: { feeCents: q.feeCents, etaMinutes: q.etaMinutes } };
+    } catch (e) {
+      return { ok: false, latencyMs: Date.now() - t0, error: (e as Error).message.slice(0, 300) };
+    }
   }
 
   // ───── tracking & dispatcher ─────
@@ -635,6 +800,7 @@ export class DeliveryService {
     if (ls.some((l) => l.tax === 'ALCOHOL')) req.push('ALCOHOL');
     if (ls.reduce((a, l) => a + l.q, 0) > 10 || (o?.sub ?? 0) >= 15000) req.push('LARGE_ORDER');
     if (ls.some((l) => l.handling?.includes('COLD'))) req.push('COLD_BAG');
+    if (ls.some((l) => l.handling?.includes('HOT'))) req.push('HOT_BAG');
     return req;
   }
 
@@ -657,21 +823,28 @@ export class DeliveryService {
    * courier the job fails over to the next provider (17.9).
    */
   async offerRound(job: typeof deliveryJobs.$inferSelect, tx: DbOrTx) {
-    const cfg = await this.dispatchCfg();
-    const bcfg = await this.batchingCfg();
+    const eff = await this.policy.effectiveForLocation(job.locationId, tx);
+    const cfg = eff.dispatch;
+    const bcfg = eff.batching;
+    const policy = eff.pay;
     const pickup = job.pickupAddress as Address;
     const drop = job.dropoffAddress as Address;
     const reqs = job.requirements.length ? job.requirements : await this.requirementsFor(job, tx);
     const [o] = job.orderId ? await tx.select().from(orders).where(eq(orders.id, job.orderId)).limit(1) : [null];
-    const readyIn = o?.promiseAt ? Math.max(0, (o.promiseAt.getTime() - Date.now()) / 60_000 - (o.fulfillmentType === 'DELIVERY' ? 15 : 0)) : 0;
+    const readyAt = job.estReadyAt ?? this.estimateReady(o ?? null, eff.readySync);
+    const readyIn = o?.status === 'READY' ? 0 : Math.max(0, (readyAt.getTime() - Date.now()) / 60_000);
     // Courier R1 dispatchability: approved, active lifecycle, not on a break or finishing, recent location
     const acfg = await this.availabilityCfg();
-    const policy = await this.payPolicy();
     const fresh = new Date(Date.now() - acfg.locationFreshMinutes * 60_000);
     const available = (await tx.select().from(drivers).where(and(eq(drivers.isAvailable, true), eq(drivers.status, 'APPROVED'), eq(drivers.applicationStatus, 'APPROVED'), inArray(drivers.lifecycleStatus, ['ACTIVE', 'RESTRICTED']), eq(drivers.onBreak, false), eq(drivers.finishAfterCurrent, false)))).filter((d) => !d.lastSeenAt || d.lastSeenAt >= fresh);
     const expired = new Set([...(await this.driversWithExpiredDocs(tx)), ...(await this.driversWithBadChecks(tx))]);
     const tried = new Set((await tx.select({ d: driverOffers.driverId }).from(driverOffers).where(eq(driverOffers.deliveryJobId, job.id))).map((x) => x.d));
     const active = await tx.select().from(deliveryJobs).where(and(inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP']), sql`${deliveryJobs.driverId} is not null`));
+    const me = await this.policy.candidate({ ...job, requirements: reqs, estReadyAt: readyAt }, tx);
+    const kitchens = new Map<string, string>();
+    const locIds = Array.from(new Set(active.map((j) => j.locationId)));
+    if (locIds.length) for (const l of await tx.select({ id: locations.id, k: locations.kitchenId }).from(locations).where(inArray(locations.id, locIds))) kitchens.set(l.id, l.k ?? `location:${l.id}`);
+    const hard = reqs.filter((r) => (HARD_REQUIREMENTS as string[]).includes(r));
     const scored: { d: typeof available[number]; score: number; detail: Record<string, unknown> }[] = [];
     for (const d of available) {
       if (expired.has(d.id) || tried.has(d.id) || d.lastLat === null || d.lastLng === null || pickup.lat === undefined || pickup.lng === undefined) continue;
@@ -680,37 +853,29 @@ export class DeliveryService {
       const km = haversineKm(d.lastLat, d.lastLng, pickup.lat, pickup.lng);
       if (km > cfg.radiusKm) continue;
       const mine = active.filter((j) => j.driverId === d.id);
+      const trips = mine.length;
       let batchWith: string | null = null;
       if (mine.length) {
-        if (!bcfg.enabled || mine.length >= Math.min(bcfg.maxOrders, d.maxConcurrent)) continue;
-        // 17.4 same pickup, not yet picked up, ready within the window, same direction, small detour
-        const mate = mine.find((j) => {
-          if (j.status !== 'ASSIGNED' || j.locationId !== job.locationId) return false;
-          const jd = j.dropoffAddress as Address;
-          if (jd.lat === undefined || jd.lng === undefined || drop.lat === undefined || drop.lng === undefined) return false;
-          const b1 = bearing({ lat: pickup.lat!, lng: pickup.lng! }, { lat: jd.lat, lng: jd.lng });
-          const b2 = bearing({ lat: pickup.lat!, lng: pickup.lng! }, { lat: drop.lat, lng: drop.lng });
-          const extra = haversineKm(jd.lat, jd.lng, drop.lat, drop.lng) * cfg.travelMinutesPerKm;
-          return bearingDiff(b1, b2) <= bcfg.maxBearingDiff && extra <= bcfg.maxExtraMinutes;
-        });
+        if (!bcfg.enabled || trips >= Math.min(bcfg.maxOrders, d.maxConcurrent)) continue;
+        // 17.4 + Courier R2 batching rules (market policy): same kitchen, not picked up, direction, detour, spread, ready window, exclusions
+        const mate = mine.find((j) => this.policy.batchReasons({ id: j.id, status: j.status, kitchenKey: kitchens.get(j.locationId) ?? `location:${j.locationId}`, pickup: j.pickupAddress as Address, dropoff: j.dropoffAddress as Address, requirements: j.requirements, readyAt: j.estReadyAt }, me, bcfg, cfg.travelMinutesPerKm).length === 0);
         if (!mate) continue;
-        const [mo] = mate.orderId ? await tx.select({ p: orders.promiseAt }).from(orders).where(eq(orders.id, mate.orderId)).limit(1) : [null];
-        if (mo?.p && o?.promiseAt && Math.abs(mo.p.getTime() - o.promiseAt.getTime()) > bcfg.readyWindowMinutes * 60_000) continue;
         batchWith = mate.id;
-      } else if (mine.length >= d.maxConcurrent) continue;
+      }
       const travel = km * cfg.travelMinutesPerKm;
       const readiness = Math.abs(travel - readyIn);
       const vehicle = (d.vehicleType === 'CAR' || d.vehicleType === 'VAN') && (job.distanceKm ?? 3) < 2 ? 2 : d.vehicleType === 'WALK' && (job.distanceKm ?? 3) > 2 ? 6 : 0;
       const cold = reqs.includes('COLD_BAG') && d.capabilities.includes('COLD_BAG') ? -3 : 0;
-      const score = Math.round((km * 2 + readiness * 0.5 + mine.length * 5 + vehicle + cold - (batchWith ? 10 : 0)) * 100) / 100;
-      // RESTRICTED couriers take single, unrestricted orders only
-      if (d.lifecycleStatus === 'RESTRICTED' && (batchWith || reqs.length)) continue;
-      scored.push({ d, score, detail: { km: Math.round(km * 100) / 100, readinessGap: Math.round(readiness), load: mine.length, vehicle: d.vehicleType, batchWith } });
+      const hot = reqs.includes('HOT_BAG') && d.capabilities.includes('HOT_BAG') ? -1 : 0;
+      const score = Math.round((km * 2 + readiness * 0.5 + trips * 5 + vehicle + cold + hot - (batchWith ? 10 : 0)) * 100) / 100;
+      // RESTRICTED couriers take single orders without hard requirements only
+      if (d.lifecycleStatus === 'RESTRICTED' && (batchWith || hard.length)) continue;
+      scored.push({ d, score, detail: { km: Math.round(km * 100) / 100, readinessGap: Math.round(readiness), load: trips, vehicle: d.vehicleType, batchWith } });
     }
     scored.sort((a, b) => a.score - b.score);
     const pick = scored.slice(0, cfg.offersPerRound);
     const attempts = job.offerAttempts + 1;
-    await tx.update(deliveryJobs).set({ offerAttempts: attempts, requirements: reqs }).where(eq(deliveryJobs.id, job.id));
+    await tx.update(deliveryJobs).set({ offerAttempts: attempts, requirements: reqs, holdUntil: null }).where(eq(deliveryJobs.id, job.id));
     if (!pick.length) {
       await this.event(job.id, 'NO_COURIER', { round: attempts }, tx);
       if (attempts >= cfg.maxOfferRounds) await this.failover({ ...job, offerAttempts: attempts }, tx, 'No courier accepted');
@@ -718,14 +883,24 @@ export class DeliveryService {
     }
     // Courier R1 guaranteed pay from the versioned policy (distance and time are inside it, never added again later)
     const tripKm = job.distanceKm ?? (drop.lat !== undefined && drop.lng !== undefined && pickup.lat !== undefined && pickup.lng !== undefined ? haversineKm(pickup.lat, pickup.lng, drop.lat, drop.lng) : 3);
+    const market = eff.market ? { id: eff.market.id, version: eff.market.version } : null;
     await tx.insert(driverOffers).values(pick.map((r) => {
       const toPickupKm = Number(r.detail.km) || 0;
       const estMinutes = Math.round((toPickupKm + tripKm) * cfg.travelMinutesPerKm + 5);
       const pay = offerPay(policy, tripKm, estMinutes);
-      return { driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100 }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail };
+      return { driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail };
     }));
     await this.event(job.id, 'OFFERED', { round: attempts, couriers: pick.map((r) => ({ driverId: r.d.id, score: r.score })) }, tx);
     return pick;
+  }
+
+  // ───── Courier R2: kitchen-ready estimate ─────
+
+  /** When the food should be ready: the kitchen's promise (less the delivery leg), else now + default prep. */
+  estimateReady(o: typeof orders.$inferSelect | null, rs: ReadySyncConfig): Date {
+    if (o?.readyAt && o.status === 'READY') return o.readyAt;
+    if (o?.promiseAt) return new Date(o.promiseAt.getTime() - (o.fulfillmentType === 'DELIVERY' ? 15 * 60_000 : 0));
+    return new Date(Date.now() + rs.defaultPrepMinutes * 60_000);
   }
 
   /** 17.9 provider failover: own fleet → connected providers in priority order for the region; then a dispatcher alert. */
@@ -767,6 +942,9 @@ export class DeliveryService {
       .innerJoin(deliveryJobs, eq(deliveryJobs.id, driverOffers.deliveryJobId))
       .where(and(eq(driverOffers.driverId, d.id), eq(driverOffers.status, 'OFFERED'), sql`${driverOffers.expiresAt} > now()`));
     // Courier R1: full pickup, drop-off area only (street and contact after accepting), pay breakdown with the tip apart
+    // Courier R2: readiness, the multi-brand manifest and the market
+    const marketIds = Array.from(new Set(rows.map((r) => r.job.marketId).filter((x): x is string => !!x)));
+    const marketNames = new Map(marketIds.length ? (await this.db.select({ id: regions.id, name: regions.name }).from(regions).where(inArray(regions.id, marketIds))).map((m) => [m.id, m.name]) : []);
     return rows.map((r) => {
       const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number };
       const pu = r.job.pickupAddress as Address;
@@ -777,9 +955,11 @@ export class DeliveryService {
         id: r.offer.id, deliveryJobId: r.offer.deliveryJobId, expiresAt: r.offer.expiresAt, payCents: r.offer.payCents,
         pay: b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }, tipCents: r.job.tipCents,
         stops: batchWith ? 3 : 2, pickup: { name: pu.contactName ?? null, line1: pu.line1, city: pu.city }, dropoffArea: { city: dr.city, postalCode: dr.postalCode },
+        readiness: this.readiness(r.job), manifest: r.job.manifest as Manifest | null,
+        market: r.job.marketId ? { id: r.job.marketId, name: marketNames.get(r.job.marketId) ?? null } : null,
         distanceKm: b.distanceKm ?? r.job.distanceKm, toPickupKm: b.toPickupKm ?? null, estMinutes: b.estMinutes ?? null,
         requirements: r.job.requirements, equipment,
-        policy: b.policy ? { version: b.policy.version, waitingGraceMinutes: b.policy.waitingGraceMinutes, waitingPerMinuteCents: b.policy.waitingPerMinuteCents, returnCents: b.policy.returnCents, cancelAfterArrivalCents: b.policy.cancelAfterArrivalCents } : null,
+        policy: b.policy ? { version: b.policy.version, waitingGraceMinutes: b.policy.waitingGraceMinutes, waitingPerMinuteCents: b.policy.waitingPerMinuteCents, returnCents: b.policy.returnCents, cancelAfterArrivalCents: b.policy.cancelAfterArrivalCents, waitingCapMinutes: b.policy.waitingCapMinutes ?? DEFAULT_PAY_POLICY.waitingCapMinutes, dropoffGraceMinutes: b.policy.dropoffGraceMinutes ?? DEFAULT_PAY_POLICY.dropoffGraceMinutes } : null,
         batchWith, score: r.offer.score, scoreDetail: r.offer.scoreDetail,
       };
     });
@@ -796,14 +976,17 @@ export class DeliveryService {
         await tx.update(driverOffers).set({ status: 'DECLINED', respondedAt: new Date() }).where(eq(driverOffers.id, offerId));
         return { ok: true };
       }
-      // first accept wins
+      // Courier R2: capacity is checked again at accept (the courier may have taken other work since the offer)
+      const mateId = (offer.scoreDetail as { batchWith?: string } | null)?.batchWith;
+      const mineNow = await tx.select({ id: deliveryJobs.id }).from(deliveryJobs).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP'])));
+      const tripsNow = mineNow.length;
+      if (tripsNow && (!mateId || !mineNow.some((j) => j.id === mateId) || tripsNow >= d.maxConcurrent)) throw new ConflictException({ message: 'You already have as many orders as you can carry', code: 'AT_CAPACITY' });
       // first accept wins: the conditional update awards the job to exactly one courier; the accepted pay is kept on the job
-      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number } | null;
-      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
+      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number; market?: { id: string; version: number } | null } | null;
+      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, holdUntil: null, acceptedReadyAt: sql`${deliveryJobs.estReadyAt}`, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id, market: b.market ?? null } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
       if (!job) throw new ConflictException('Job already taken');
       await tx.update(driverOffers).set({ status: 'ACCEPTED', respondedAt: new Date() }).where(eq(driverOffers.id, offerId));
       await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.status, 'OFFERED')));
-      const mateId = (offer.scoreDetail as { batchWith?: string } | null)?.batchWith;
       if (mateId) {
         const [mate] = await tx.select().from(deliveryJobs).where(and(eq(deliveryJobs.id, mateId), eq(deliveryJobs.driverId, d.id))).limit(1);
         if (mate) {
@@ -817,14 +1000,19 @@ export class DeliveryService {
     });
   }
 
-  async myActiveJobs(user: JwtPayload) {
-    const d = await this.myDriver(user);
-    const rows = await this.db.select({ j: deliveryJobs, number: orders.number }).from(deliveryJobs).leftJoin(orders, eq(orders.id, deliveryJobs.orderId)).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP']))).orderBy(deliveryJobs.batchId, deliveryJobs.createdAt);
-    // the PIN itself never goes to the courier; the order code is what the kitchen shows on the bag
-    return rows.map(({ j, number }) => ({ ...j, handoffPin: undefined, pinAvailable: !!j.handoffPin, orderCode: number ? String(number).slice(-4) : j.id.slice(0, 4).toUpperCase(), requiresIdCheck: j.requirements.includes('ALCOHOL') }));
+  /** Courier R2 readiness as shown to couriers and the kitchen. */
+  readiness(j: typeof deliveryJobs.$inferSelect) {
+    return { status: j.readyAt ? 'READY' as const : 'PREPARING' as const, estReadyAt: j.estReadyAt?.toISOString() ?? null, readyAt: j.readyAt?.toISOString() ?? null };
   }
 
-  async driverTransition(user: JwtPayload, jobId: string, status: 'PICKED_UP' | 'DELIVERED' | 'FAILED', data: { proofPhotoUrl?: string; proofSignature?: string; handoffPin?: string; idChecked?: boolean; pickupCheck?: { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string }; reason?: string; lat?: number; lng?: number; clientEventId?: string }) {
+  async myActiveJobs(user: JwtPayload) {
+    const d = await this.myDriver(user);
+    const rows = await this.db.select({ j: deliveryJobs, number: orders.number, shelfSlot: orders.shelfSlot }).from(deliveryJobs).leftJoin(orders, eq(orders.id, deliveryJobs.orderId)).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP']))).orderBy(deliveryJobs.batchId, deliveryJobs.createdAt);
+    // the PIN itself never goes to the courier; the order code is what the kitchen shows on the bag
+    return rows.map(({ j, number, shelfSlot }) => ({ ...j, handoffPin: undefined, pinAvailable: !!j.handoffPin, orderCode: number ? String(number).slice(-4) : j.id.slice(0, 4).toUpperCase(), requiresIdCheck: j.requirements.includes('ALCOHOL'), readiness: this.readiness(j), shelfSlot: j.readyAt ? shelfSlot : null }));
+  }
+
+  async driverTransition(user: JwtPayload, jobId: string, status: 'PICKED_UP' | 'DELIVERED' | 'FAILED', data: { proofPhotoUrl?: string; proofSignature?: string; handoffPin?: string; idChecked?: boolean; pickupCheck?: { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string; brands?: { brandKey: string; bagCount: number; sealIntact: boolean }[] }; reason?: string; lat?: number; lng?: number; clientEventId?: string }) {
     const d = await this.myDriver(user);
     const [job] = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.id, jobId), eq(deliveryJobs.driverId, d.id))).limit(1);
     if (!job) throw new NotFoundException();
@@ -839,8 +1027,15 @@ export class DeliveryService {
       const [o] = job.orderId ? await this.db.select({ number: orders.number }).from(orders).where(eq(orders.id, job.orderId)).limit(1) : [null];
       const code = o?.number ? String(o.number).slice(-4) : job.id.slice(0, 4).toUpperCase();
       if (pickupCheck.orderCode && pickupCheck.orderCode.trim().toUpperCase() !== code.toUpperCase()) throw new BadRequestException({ message: 'That order code doesn’t match this delivery. Check the bag label.', code: 'ORDER_CODE_MISMATCH' });
+      // Courier R2: an order with several brands needs every brand's bags confirmed one by one
+      const check = this.policy.checkManifest(job.manifest as Manifest | null, pickupCheck.brands);
+      if (!check.ok) throw new ConflictException(check.broken.length ? { message: 'A broken seal must be reported (damaged packaging) before you leave', code: 'SEAL_BROKEN', broken: check.broken } : { message: 'Collect every brand\u2019s bags before leaving', code: 'MANIFEST_INCOMPLETE', missing: check.missing });
       patch.pickupCheck = { ...pickupCheck, orderCodeMatched: !!pickupCheck.orderCode, at: new Date().toISOString() };
-      if (!job.arrivedPickupAt) patch.arrivedPickupAt = new Date();
+      const now = new Date();
+      if (!job.arrivedPickupAt) patch.arrivedPickupAt = now;
+      // kitchen delay: from when the food was due (or the courier arrived, if later) until it was ready
+      const due = Math.max((job.arrivedPickupAt ?? now).getTime(), (job.acceptedReadyAt ?? job.estReadyAt ?? job.arrivedPickupAt ?? now).getTime());
+      patch.kitchenDelayMinutes = Math.max(0, Math.round(((job.readyAt ?? now).getTime() - due) / 60_000));
     }
     if (status === 'DELIVERED') {
       if (job.status !== 'PICKED_UP') throw new ConflictException('Pick the order up first');

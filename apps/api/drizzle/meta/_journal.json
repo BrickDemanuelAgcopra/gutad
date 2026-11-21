@@ -190,6 +190,13 @@
       "when": 1795227734784,
       "tag": "0026_courier_r1",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1795263192777,
+      "tag": "0027_courier_r2",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 // 12 Delivery orchestration, 13 Driver operations
 import { sql } from 'drizzle-orm';
-import { boolean, doublePrecision, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, doublePrecision, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, id, ts, updatedAt } from './_common';
 import { deliveryFleetEnum, deliveryStatusEnum } from './enums';
 import { users } from './accounts';
@@ -153,9 +153,26 @@ export const deliveryJobs = pgTable('delivery_jobs', {
   /** how the handoff was proven: PHOTO | PIN | SIGNATURE */
   handoffMethod: text('handoff_method'),
   idCheckedAt: ts('id_checked_at'),
+  /** Courier R2 kitchen-ready sync: estimated (kitchen-updated) and actual ready time */
+  estReadyAt: ts('est_ready_at'),
+  readyAt: ts('ready_at'),
+  /** own-fleet offers are held until then (null = not held) */
+  holdUntil: ts('hold_until'),
+  /** the ready estimate the courier saw when accepting; pickup waiting counts from max(arrival, this) */
+  acceptedReadyAt: ts('accepted_ready_at'),
+  kitchenDelayMinutes: integer('kitchen_delay_minutes'),
+  /** multi-brand manifest: { brands: [{ brandKey, brandName, orderId, orderNumber, items, bagCount, bagCodes }], totals, handling, hasAlcohol } */
+  manifest: jsonb('manifest'),
+  /** market (region with a courier policy) used for pay and batching */
+  marketId: uuid('market_id'),
+  /** partner fees read back from the provider (reconciliation) */
+  providerFeeCents: integer('provider_fee_cents'),
+  providerCancelFeeCents: integer('provider_cancel_fee_cents'),
+  /** last ready time sent to the partner */
+  providerSyncedReadyAt: ts('provider_synced_ready_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}, (t) => [index('delivery_jobs_hold_idx').on(t.status, t.holdUntil)]);
 
 export const deliveryEvents = pgTable('delivery_events', {
   id: id(),
@@ -204,6 +221,8 @@ export const driverEarnings = pgTable('driver_earnings', {
   waitingCents: integer('waiting_cents').notNull().default(0),
   returnCents: integer('return_cents').notNull().default(0),
   policyVersion: integer('policy_version'),
+  /** Courier R2: { pickupWaitMinutes, dropoffWaitMinutes, kitchenDelayMinutes, extraOrders, marketId, marketVersion } */
+  detail: jsonb('detail'),
   /** earnings in hold until then (pending), available afterwards */
   availableAt: ts('available_at'),
   /** 16.7 DELIVERY | CANCEL_COMP | BONUS | DEDUCTION */
@@ -213,3 +232,15 @@ export const driverEarnings = pgTable('driver_earnings', {
   payoutId: uuid('payout_id'),
   createdAt: createdAt(),
 }, (t) => [uniqueIndex('driver_earnings_job_kind_uq').on(t.deliveryJobId, t.kind).where(sql`delivery_job_id is not null and kind in ('DELIVERY','CANCEL_COMP')`)]);
+
+/** Courier R2: per-market overrides of `delivery.pay` and `delivery.batching`. A market is an operating region. */
+export const courierMarketPolicies = pgTable('courier_market_policies', {
+  id: id(),
+  regionId: uuid('region_id').notNull().unique(),
+  pay: jsonb('pay').notNull().default({}),
+  batching: jsonb('batching').notNull().default({}),
+  version: integer('version').notNull().default(1),
+  updatedById: uuid('updated_by_id'),
+  updatedAt: updatedAt(),
+  createdAt: createdAt(),
+});

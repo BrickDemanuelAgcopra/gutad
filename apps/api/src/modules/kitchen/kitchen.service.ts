@@ -11,10 +11,11 @@ import { AuditService } from '../../core/audit.service';
 import { SettingsService } from '../../core/settings.service';
 import { LedgerService } from '../../core/ledger.service';
 import { PrintingService } from './printing.service';
+import { DeliveryService } from '../delivery/delivery.service';
 
 @Injectable()
 export class KitchenService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService, private readonly printing: PrintingService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService, private readonly printing: PrintingService, private readonly delivery: DeliveryService) {}
 
   onModuleInit() {
     this.approvals.register('PURCHASE_ORDER', {
@@ -273,6 +274,8 @@ export class KitchenService implements OnModuleInit {
     await tx.update(packingTasks).set({ status: 'RELEASED', releasedAt: now, verifiedById: actorId }).where(and(eq(packingTasks.orderId, o.id), ne(packingTasks.status, 'RELEASED')));
     const shelfSlot = await this.assignShelf(o, tx);
     await tx.update(orders).set({ status: 'READY', readyAt: now, shelfSlot }).where(eq(orders.id, o.id));
+    // Courier R2: delivery learns the food is ready (releases a held offer, tells the courier, resyncs a partner)
+    if (o.fulfillmentType === 'DELIVERY') await this.delivery.onKitchenUpdate(o.id, 'READY', tx);
     await this.outbox.publish('order.ready', o.id, { number: o.number, orderNumber: o.number, pickupCode: o.pickupCode, userId: o.userId, shelfSlot, tableNumber: o.tableNumber }, tx);
     return shelfSlot;
   }
@@ -322,7 +325,10 @@ export class KitchenService implements OnModuleInit {
         await tx.update(orderLines).set({ status: 'PREPARING', readyAt: null }).where(eq(orderLines.id, line.id));
         const [pack] = await tx.select().from(packingTasks).where(eq(packingTasks.orderId, o.id)).limit(1);
         if (pack && pack.status !== 'RELEASED') await tx.update(packingTasks).set({ status: 'WAITING', verifiedLineIds: pack.verifiedLineIds.filter((x) => x !== line.id) }).where(eq(packingTasks.id, pack.id));
-        if (o.status === 'READY') await tx.update(orders).set({ status: 'PREPARING', readyAt: null, shelfSlot: null }).where(eq(orders.id, o.id));
+        if (o.status === 'READY') {
+          await tx.update(orders).set({ status: 'PREPARING', readyAt: null, shelfSlot: null }).where(eq(orders.id, o.id));
+          if (o.fulfillmentType === 'DELIVERY') await this.delivery.onKitchenUpdate(o.id, 'REFIRE', tx);
+        }
       }
       await this.audit.log({ organizationId: o.organizationId, actorId: user.sub, action: `kitchen.${input.kind.toLowerCase()}`, entityType: 'order', entityId: o.id, after: ev }, tx);
       return { event: ev, refired: refire };

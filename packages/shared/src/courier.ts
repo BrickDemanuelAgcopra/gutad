@@ -136,8 +136,12 @@ export interface CourierPayPolicy {
   cancelAfterArrivalCents: number;
   /** hours before earnings become available for payout */
   holdHours: number;
+  /** Courier R2: pickup + dropoff waiting is paid for at most this many minutes */
+  waitingCapMinutes: number;
+  /** waiting at the dropoff beyond this grace is paid at the waiting rate */
+  dropoffGraceMinutes: number;
 }
-export const DEFAULT_PAY_POLICY: CourierPayPolicy = { version: 1, baseCents: 500, perKmCents: 80, perMinuteCents: 0, waitingGraceMinutes: 5, waitingPerMinuteCents: 15, returnCents: 300, cancelAfterArrivalCents: 300, holdHours: 24 };
+export const DEFAULT_PAY_POLICY: CourierPayPolicy = { version: 1, baseCents: 500, perKmCents: 80, perMinuteCents: 0, waitingGraceMinutes: 5, waitingPerMinuteCents: 15, returnCents: 300, cancelAfterArrivalCents: 300, holdHours: 24, waitingCapMinutes: 30, dropoffGraceMinutes: 5 };
 
 export interface OfferPay { baseCents: number; distanceCents: number; timeCents: number; totalCents: number }
 /** Guaranteed pay for a trip. Distance and time are already inside it; waiting, return and cancellation pay are added later. */
@@ -146,16 +150,18 @@ export function offerPay(policy: CourierPayPolicy, km: number, minutes: number):
   const timeCents = Math.round(Math.max(0, minutes) * policy.perMinuteCents);
   return { baseCents: policy.baseCents, distanceCents, timeCents, totalCents: policy.baseCents + distanceCents + timeCents };
 }
-export function waitingPay(policy: CourierPayPolicy, waitedMinutes: number) {
-  const paid = Math.max(0, Math.floor(waitedMinutes - policy.waitingGraceMinutes));
-  return { minutes: paid, cents: paid * policy.waitingPerMinuteCents };
+export function waitingPay(policy: CourierPayPolicy, waitedMinutes: number, dropoffWaitedMinutes = 0) {
+  const pickup = Math.max(0, Math.floor(waitedMinutes - policy.waitingGraceMinutes));
+  const dropoff = Math.max(0, Math.floor(dropoffWaitedMinutes - (policy.dropoffGraceMinutes ?? 5)));
+  const paid = Math.min(pickup + dropoff, policy.waitingCapMinutes ?? Infinity);
+  return { minutes: paid, cents: paid * policy.waitingPerMinuteCents, pickupMinutes: pickup, dropoffMinutes: dropoff };
 }
 
 export const EARNING_KINDS = ['DELIVERY', 'CANCEL_COMP', 'BONUS', 'DEDUCTION'] as const;
 
 // ───── pickup, handoff and trip problems ─────
 
-export interface PickupCheck { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string }
+export interface PickupCheck { orderCode?: string; bagCount: number; drinkCount?: number; sealIntact: boolean; note?: string; brands?: { brandKey: string; bagCount: number; sealIntact: boolean }[] }
 
 /** Problems a courier can raise on a trip (besides customer-unreachable, which has its own wait-timer flow). */
 export const TRIP_ISSUES = {

@@ -36,6 +36,13 @@ export class MockDeliveryProvider implements DeliveryProvider {
     return Array.from(this.jobs.values()).find((j) => j.externalId === externalId) || null;
   }
 
+  /** Courier R2: pickup times the platform asked for, by provider job id (read by tests). */
+  readonly pickupTimes = new Map<string, Date>();
+  async updatePickupTime(providerJobId: string, at: Date): Promise<{ ok: boolean }> {
+    this.pickupTimes.set(providerJobId, at);
+    return { ok: true };
+  }
+
   async cancel(providerJobId: string): Promise<{ ok: boolean; feeCents: number }> {
     const j = this.jobs.get(providerJobId);
     if (!j) return { ok: true, feeCents: 0 };
@@ -48,7 +55,7 @@ export class MockDeliveryProvider implements DeliveryProvider {
     try {
       const b = JSON.parse(rawBody.toString('utf8')) as Partial<DeliveryProviderEvent> & { id?: string };
       if (!b.id || !b.providerJobId || !b.status) return null;
-      return { id: b.id, providerJobId: b.providerJobId, status: b.status, etaAt: b.etaAt ? new Date(b.etaAt) : null, lat: b.lat, lng: b.lng, proofPhotoUrl: b.proofPhotoUrl ?? null, driverName: b.driverName ?? null, failureReason: b.failureReason ?? null, raw: b };
+      return { id: b.id, providerJobId: b.providerJobId, status: b.status, etaAt: b.etaAt ? new Date(b.etaAt) : null, lat: b.lat, lng: b.lng, proofPhotoUrl: b.proofPhotoUrl ?? null, driverName: b.driverName ?? null, failureReason: b.failureReason ?? null, feeCents: b.feeCents ?? null, cancelFeeCents: b.cancelFeeCents ?? null, raw: b };
     } catch {
       return null;
     }

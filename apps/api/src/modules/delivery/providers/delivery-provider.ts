@@ -19,6 +19,9 @@ export interface DeliveryQuoteInput {
   orderValueCents: number;
   pickupReadyAt?: Date | null;
   tipCents?: number;
+  /** Courier R2: what the courier collects (sent to providers that accept an item list) */
+  items?: { name: string; quantity: number }[];
+  containsAlcohol?: boolean;
 }
 
 export interface DeliveryQuote {
@@ -31,10 +34,12 @@ export interface DeliveryQuote {
 
 export interface DeliveryJobResult {
   providerJobId: string;
-  status: 'REQUESTED' | 'ASSIGNED' | 'PICKED_UP' | 'DELIVERED' | 'CANCELED' | 'FAILED';
+  status: 'REQUESTED' | 'ASSIGNED' | 'PICKED_UP' | 'DELIVERED' | 'CANCELED' | 'FAILED' | 'RETURNED';
   trackingUrl: string | null;
   etaAt: Date | null;
   driverName?: string | null;
+  /** Courier R2: the provider's actual fee when it reports one */
+  feeCents?: number | null;
 }
 
 export interface DeliveryProviderEvent {
@@ -47,8 +52,14 @@ export interface DeliveryProviderEvent {
   proofPhotoUrl?: string | null;
   driverName?: string | null;
   failureReason?: string | null;
+  /** Courier R2: actual fee / cancellation fee reported with the event */
+  feeCents?: number | null;
+  cancelFeeCents?: number | null;
   raw: unknown;
 }
+
+/** Thrown by `parseWebhook` when the request is not authentic (answered with 401). */
+export class WebhookAuthError extends Error {}
 
 export interface DeliveryProvider {
   readonly name: string;
@@ -58,5 +69,7 @@ export interface DeliveryProvider {
   /** Used when a create call timed out: look the job up by our external id before retrying. */
   findByExternalId(externalId: string): Promise<DeliveryJobResult | null>;
   cancel(providerJobId: string): Promise<{ ok: boolean; feeCents: number }>;
+  /** Courier R2: move the pickup time after a kitchen estimate change (providers without it are skipped). */
+  updatePickupTime?(providerJobId: string, at: Date): Promise<{ ok: boolean }>;
   parseWebhook(rawBody: Buffer, headers: Record<string, string | undefined>): Promise<DeliveryProviderEvent | null>;
 }

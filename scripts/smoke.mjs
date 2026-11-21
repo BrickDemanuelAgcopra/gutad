@@ -31,6 +31,7 @@ import { chefPhaseG } from './smoke-chef-g.mjs';
 import { chefPhaseH } from './smoke-chef-h.mjs';
 import { chefPhaseI } from './smoke-chef-i.mjs';
 import { courierR1 } from './smoke-courier-r1.mjs';
+import { courierR2 } from './smoke-courier-r2.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -68,6 +69,9 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   const C = cust.accessToken, O = owner.accessToken, A = admin.accessToken;
   // repeated runs leave several superadmins behind; the IAM section switches dual control back on to test it
   await call('PATCH', '/admin/iam/policy', { requireSecondApprover: false, reason: 'Smoke run setup', stepUp: { password: process.env.ADMIN_PASSWORD || 'admin12345' } }, A);
+  // Courier R2 holds own-fleet offers until shortly before the food is ready; earlier phases expect offers at accept,
+  // so the hold is off until the courierR2 phase turns it on to test it
+  await call('POST', '/admin/settings', { key: 'delivery.readySync', value: { enabled: false }, reason: 'Smoke run setup' }, A);
   const guest = (await call('POST', '/auth/guest', { email: `guest-${Date.now()}@example.com`, name: 'Guest One' })).json;
   check('guest checkout identity', guest.accessToken, guest);
 
@@ -516,6 +520,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await followupsD({ call, check, A, O, C, locId, demoOrgId, API: FAPI });
   await iamChecks({ call, check, A, O, C, demoOrgId, o1 });
   await courierR1({ call, check, A, O, C });
+  await courierR2({ call, check, A, O, C });
   const chefA = await chefPhaseA({ call, check, A, O, C, API: FAPI });
   await chefPhaseB({ call, check, A, O, C, API: FAPI, ...chefA });
   await chefPhaseC({ call, check, A, O, C, API: FAPI, ...chefA });

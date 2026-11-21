@@ -21,6 +21,8 @@ const schema = z.object({
   DOORDASH_DEVELOPER_ID: z.string().optional().default(''),
   DOORDASH_KEY_ID: z.string().optional().default(''),
   DOORDASH_SIGNING_SECRET: z.string().optional().default(''),
+  /** Courier R2: value DoorDash sends in the webhook Authorization header (set in the Developer Portal) */
+  DOORDASH_WEBHOOK_SECRET: z.string().optional().default(''),
   UBER_CUSTOMER_ID: z.string().optional().default(''),
   UBER_CLIENT_ID: z.string().optional().default(''),
   UBER_CLIENT_SECRET: z.string().optional().default(''),

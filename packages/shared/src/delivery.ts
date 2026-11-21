@@ -25,8 +25,35 @@ export interface DispatchConfig { offerSeconds: number; offersPerRound: number; 
 export const DEFAULT_DISPATCH: DispatchConfig = { offerSeconds: 90, offersPerRound: 3, maxOfferRounds: 3, radiusKm: 12, waitMinutes: 5, proofRetentionDays: 90, docExpiryWarnDays: 30, travelMinutesPerKm: 3 };
 
 /** Setting `delivery.batching` (17.4). */
-export interface BatchingConfig { enabled: boolean; maxOrders: number; readyWindowMinutes: number; maxBearingDiff: number; maxExtraMinutes: number }
-export const DEFAULT_BATCHING: BatchingConfig = { enabled: true, maxOrders: 2, readyWindowMinutes: 10, maxBearingDiff: 45, maxExtraMinutes: 15 };
+export interface BatchingConfig {
+  enabled: boolean; maxOrders: number; readyWindowMinutes: number; maxBearingDiff: number; maxExtraMinutes: number;
+  /** Courier R2 — false: a job needing a cold bag is never batched with one needing a hot bag */
+  allowMixedTemperature: boolean;
+  /** jobs with any of these requirements are never batched */
+  excludeRequirements: string[];
+  /** max distance between the dropoffs of batched jobs */
+  maxDropoffSpreadKm: number;
+}
+export const DEFAULT_BATCHING: BatchingConfig = { enabled: true, maxOrders: 2, readyWindowMinutes: 10, maxBearingDiff: 45, maxExtraMinutes: 15, allowMixedTemperature: true, excludeRequirements: ['ALCOHOL'], maxDropoffSpreadKm: 3 };
+
+/** Courier R2 setting `delivery.readySync`: kitchen readiness drives when own-fleet offers go out. */
+export interface ReadySyncConfig {
+  enabled: boolean;
+  /** offers go out this long before a courier must leave for the pickup */
+  offerLeadMinutes: number;
+  /** typical travel to the pickup used to time the offer */
+  pickupTravelMinutes: number;
+  /** a partner's pickup time is updated when the estimate moves at least this much */
+  resyncMinutes: number;
+  /** estimate used when an order has no promise time */
+  defaultPrepMinutes: number;
+}
+export const DEFAULT_READY_SYNC: ReadySyncConfig = { enabled: true, offerLeadMinutes: 5, pickupTravelMinutes: 8, resyncMinutes: 3, defaultPrepMinutes: 15 };
+
+/** Courier R2 multi-brand manifest: what the courier collects, per brand. `brandKey` is the brand id or `location:<id>`. */
+export interface ManifestBrand { brandKey: string; brandName: string; orderId: string; orderNumber: string; items: { name: string; quantity: number; handling: string[] }[]; bagCount: number; bagCodes: string[] }
+export interface Manifest { brands: ManifestBrand[]; totals: { items: number; bags: number }; handling: string[]; hasAlcohol: boolean }
+export interface Readiness { status: 'PREPARING' | 'READY'; estReadyAt: string | null; readyAt: string | null }
 
 const R = 6371;
 const rad = (d: number) => (d * Math.PI) / 180;
