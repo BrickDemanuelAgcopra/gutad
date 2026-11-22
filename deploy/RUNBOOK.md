@@ -60,7 +60,7 @@ To ship **without demo data** set `SEED_DEMO=false` in `.env` before the first r
 
 | Provider | Steps |
 |---|---|
-| Stripe | Create a Connect platform; set `PAYMENT_PROVIDER=stripe`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`; add two webhook destinations to `https://api.gutad.io/webhooks/payments`: *Your account* for `payment_intent.*`, `charge.refunded`, `charge.dispute.*`, `transfer.*`, and *Connected accounts* for `account.updated`. Put both signing secrets in `STRIPE_WEBHOOK_SECRET`, comma-separated (`whsec_a,whsec_b`). Merchants complete Express onboarding from *Merchant → Finance → Set up payouts*. |
+| Stripe | Create a Connect platform; set `PAYMENT_PROVIDER=stripe`, `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY` (same mode, test/live, as the secret key), `STRIPE_WEBHOOK_SECRET`; the API refuses to start if the keys are missing or malformed; add two webhook destinations to `https://api.gutad.io/webhooks/payments`: *Your account* for `payment_intent.*`, `charge.refunded`, `charge.dispute.*`, `transfer.*`, and *Connected accounts* for `account.updated`. Put both signing secrets in `STRIPE_WEBHOOK_SECRET`, comma-separated (`whsec_a,whsec_b`). Merchants complete Express onboarding from *Merchant → Finance → Set up payouts*. |
 | DoorDash Drive | Request production access; set `DELIVERY_PROVIDER=doordash` + developer id / key id / signing secret; webhook `https://api.gutad.io/webhooks/delivery`. |
 | Uber Direct | Set `DELIVERY_PROVIDER=uber` + customer id / client id / secret; webhook as above. |
 | Twilio | `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_FROM` (E.164 number) or `TWILIO_MESSAGING_SERVICE_SID` (MG…, for alphanumeric sender IDs / A2P 10DLC). Marketing SMS is only sent to consented users. |

@@ -16,7 +16,7 @@ import { StripePaymentProvider } from './providers/stripe-payment.provider';
     StripePaymentProvider,
     {
       provide: PAYMENT_PROVIDER,
-      useFactory: (mock: MockPaymentProvider, stripe: StripePaymentProvider) => (loadConfig().PAYMENT_PROVIDER === 'stripe' && loadConfig().STRIPE_SECRET_KEY ? stripe : mock),
+      useFactory: (mock: MockPaymentProvider, stripe: StripePaymentProvider) => (loadConfig().PAYMENT_PROVIDER === 'stripe' ? stripe : mock),
       inject: [MockPaymentProvider, StripePaymentProvider],
     },
     PaymentsService,

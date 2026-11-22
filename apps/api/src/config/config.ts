@@ -82,8 +82,26 @@ export function loadConfig(): AppConfig {
   if (!parsed.success) {
     throw new Error(`Invalid environment: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`);
   }
+  const stripeErrors = stripeConfigErrors(parsed.data);
+  if (stripeErrors.length) throw new Error(`Invalid Stripe environment: ${stripeErrors.join('; ')}`);
   cached = parsed.data;
   return cached;
+}
+
+/** Fail fast instead of silently running the mock processor (which "captures" without charging) when Stripe is selected. */
+function stripeConfigErrors(c: AppConfig): string[] {
+  if (c.PAYMENT_PROVIDER !== 'stripe') return [];
+  const errs: string[] = [];
+  const sk = c.STRIPE_SECRET_KEY.trim();
+  const pk = c.STRIPE_PUBLISHABLE_KEY.trim();
+  if (!sk) errs.push('STRIPE_SECRET_KEY is required when PAYMENT_PROVIDER=stripe');
+  else if (!/^(sk|rk)_(test|live)_/.test(sk)) errs.push('STRIPE_SECRET_KEY must start with sk_test_, sk_live_, rk_test_ or rk_live_');
+  if (pk && !/^pk_(test|live)_/.test(pk)) errs.push('STRIPE_PUBLISHABLE_KEY must start with pk_test_ or pk_live_');
+  const mode = (k: string) => (k.includes('_live_') ? 'live' : 'test');
+  if (sk && pk && mode(sk) !== mode(pk)) errs.push(`STRIPE_SECRET_KEY is a ${mode(sk)} key but STRIPE_PUBLISHABLE_KEY is a ${mode(pk)} key`);
+  const bad = c.STRIPE_WEBHOOK_SECRET.split(',').map((x) => x.trim()).filter((x) => x && !x.startsWith('whsec_'));
+  if (bad.length) errs.push('STRIPE_WEBHOOK_SECRET entries must each start with whsec_');
+  return errs;
 }
 
 export const config = () => loadConfig();
