@@ -17,7 +17,7 @@ export async function firstPartyPhase({ call, check, A, O, C }) {
   check('ranking: pinned to organic slot after sponsored', ids(shared.applyFirstPartyRanking(mk(['s', 'a', 'b', 'c', 'G'], ['G'], ['s']), R({ ranking: 'PINNED', pinSlots: [2], maxFirstPageSharePct: 100 }), 20)) === 'saGbc');
   const capped = shared.applyFirstPartyRanking(mk(['G', 'H', 'a', 'b', 'c', 'd'], ['G', 'H']), R({ ranking: 'NEUTRAL', maxFirstPageSharePct: 25 }), 4);
   check('ranking: first-page share cap demotes extra Gutad results to page two', ids(capped) === 'GabcHd' && capped.why.size === 1, ids(capped));
-  check('ranking: excluded or off removes Gutad results', ids(shared.applyFirstPartyRanking(mk(['a', 'G']), R({ ranking: 'EXCLUDED' }), 20)) === 'a' && ids(shared.applyFirstPartyRanking(mk(['a', 'G']), R({ enabled: false }), 20)) === 'a');
+  check('ranking: excluded or off removes Gutad results', ids(shared.applyFirstPartyRanking(mk(['a', 'G'], ['G']), R({ ranking: 'EXCLUDED' }), 20)) === 'a' && ids(shared.applyFirstPartyRanking(mk(['a', 'G'], ['G']), R({ enabled: false }), 20)) === 'a');
   check('rules: city overrides apply on top', shared.firstPartyRulesFor(R({ cities: { 'new york': { ranking: 'BOOST' } } }), 'New York ').ranking === 'BOOST' && shared.firstPartyRulesFor(R({}), 'Boston').ranking === 'NEUTRAL');
 
   // ── setup
@@ -83,15 +83,11 @@ export async function firstPartyPhase({ call, check, A, O, C }) {
   const acct = (a) => led.entries.filter((e) => e.account === a).reduce((s, e) => s + e.creditCents - e.debitCents, 0);
   check('ledger: food booked as Gutad sales, tax payable, no merchant payable or commission', acct('PLATFORM_REVENUE_FOOD_SALES') === order.subtotalCents - order.discountCents + order.packagingFeeCents + order.tipCents && acct('TAX_PAYABLE') === order.taxCents && !led.entries.some((e) => e.account === 'MERCHANT_PAYABLE' || e.account === 'PLATFORM_REVENUE_COMMISSION'), led.entries.map((e) => [e.account, e.creditCents - e.debitCents]));
   check('ledger: the order batch balances', led.totals.debits === led.totals.credits, led.totals);
-  const pay = (await call('GET', `/orders/${order.id}/payments`, undefined, A)).json;
-  const pid = (Array.isArray(pay) ? pay[0] : pay?.payments?.[0])?.id || acc.payment?.id;
-  if (pid) {
-    const rf = await call('POST', `/payments/${pid}/refund`, { amountCents: 100, reason: 'Smoke first-party refund', funder: 'MERCHANT' }, A);
-    if (rf.status < 300) {
-      const led2 = (await call('GET', `/finance/ledger?orderId=${order.id}`, undefined, A)).json;
-      check('refund on a Gutad sale is Gutad’s cost (never a merchant payable)', !led2.entries.some((e) => e.account === 'MERCHANT_PAYABLE') && led2.entries.some((e) => e.account === 'PLATFORM_EXPENSE_REFUND'), led2.entries.map((e) => e.account));
-    }
-  }
+  const paymentId = acc.payment?.id || led.entries.find((e) => e.paymentId)?.paymentId;
+  const rf = await call('POST', `/admin/payments/${paymentId}/refund`, { amountCents: 100, reason: 'Smoke first-party refund', funder: 'MERCHANT' }, A);
+  check('"merchant-funded" refund on a Gutad sale accepted', rf.status < 300 && rf.json.toCardCents === 100, rf.json);
+  const led2 = (await call('GET', `/finance/ledger?orderId=${order.id}`, undefined, A)).json;
+  check('refund on a Gutad sale is Gutad’s cost (never a merchant payable)', !led2.entries.some((e) => e.account === 'MERCHANT_PAYABLE') && led2.entries.filter((e) => e.account === 'PLATFORM_EXPENSE_REFUND').reduce((s, e) => s + e.debitCents, 0) === 100, led2.entries.map((e) => [e.account, e.debitCents - e.creditCents]));
   const close = (await call('POST', '/finance/close-period', { periodStart: new Date(Date.now() - 7 * 86400000).toISOString(), periodEnd: new Date(Date.now() + 60000).toISOString() }, A)).json;
   check('settlement never pays Gutad out to itself', !Array.isArray(close) || !close.some((c) => c.organizationId === orgId), close);
 
