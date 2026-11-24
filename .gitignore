@@ -14,3 +14,25 @@ coverage/
 *.tsbuildinfo
 next-env.d.ts
 storage/
+
+# Secrets and credentials: never commit
+*.pem
+*.key
+*.crt
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+id_rsa*
+id_ed25519*
+id_ecdsa*
+GoogleService-Info.plist
+credentials.json
+service-account*.json
+*-credentials.json
+secrets/
+.npmrc
+*.dump
+*.sql.gz
