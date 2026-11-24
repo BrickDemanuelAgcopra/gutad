@@ -35,6 +35,7 @@ export default function MerchantLayout({ children }: { children: React.ReactNode
     } finally { setLoading(false); }
   };
   useEffect(() => { if (ready && user) void load(); else if (ready) setLoading(false); }, [ready, user?.id, sup?.organizationId]);
+  useEffect(() => { const l = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('loc') : null; if (l) setLocId(l); }, []);
   const all = useMemo(() => orgs.flatMap((o) => o.locations.map((l) => ({ ...l, organizationId: o.id }))), [orgs]);
   const loc = all.find((l) => l.id === locId) || all[0] || null;
   const org = orgs.find((o) => o.id === loc?.organizationId) || orgs[0] || null;

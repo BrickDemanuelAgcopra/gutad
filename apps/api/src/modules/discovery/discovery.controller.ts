@@ -17,6 +17,7 @@ const SearchDto = z.object({
     .union([z.literal('true'), z.literal('false'), z.boolean()])
     .optional()
     .transform((v) => v === true || v === 'true'),
+  seller: z.enum(['gutad', 'merchants']).optional(),
   page: z.coerce.number().optional(),
   pageSize: z.coerce.number().optional(),
 });

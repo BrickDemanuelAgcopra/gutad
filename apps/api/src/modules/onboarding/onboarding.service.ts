@@ -5,6 +5,7 @@ import { locations, merchantAgreementAcceptances, merchantContracts, merchantDoc
 import { AuditService } from '../../core/audit.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload } from '../../common/auth';
 import { contractFeeRules } from '../contracts/contracts.service';
+import { FIRST_PARTY_ORG_KIND } from '@gutad/shared';
 
 /** Bump when the Merchant Agreement text changes; merchants re-accept the new version. */
 export const MERCHANT_AGREEMENT_VERSION = '2026-11-13.3';
@@ -79,6 +80,9 @@ export class OnboardingService {
   /** Human-readable reasons the organization cannot be verified yet; empty when onboarding is complete. */
   async blockers(orgId: string) {
     const out: string[] = [];
+    // Gutad's own organization signs no Merchant Agreement or Order Form with itself
+    const [own] = await this.db.select({ kind: organizations.kind }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
+    if (own?.kind === FIRST_PARTY_ORG_KIND) return out;
     if (!(await this.currentAcceptance(orgId))) out.push('Merchant Agreement not accepted');
     const c = await this.latestContract(orgId);
     if (!c) out.push('no Order Form assigned (Admin > Commercial: assign contract)');

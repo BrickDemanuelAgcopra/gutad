@@ -27,6 +27,7 @@ export function RestaurantCard({ l }: { l: LocationSummary }) {
         ) : (
           <p className="mt-1 text-xs text-ink-500">{l.platformOperated && <span className="font-medium text-emerald-700">Made at Gutad · </span>}{l.cuisine.join(' · ')} · {l.city}{typeof l.distanceKm === 'number' ? ` · ${l.distanceKm.toFixed(1)} km` : ''}</p>
         )}
+        {l.firstParty && l.sellerLabel && <p className="mt-1 text-xs font-semibold text-ink-900">{l.sellerLabel}</p>}
         <div className="mt-3 flex flex-wrap gap-1 text-[11px] font-medium text-ink-700">
           {l.acceptsPickup && <span className="rounded-full bg-ink-100 px-2 py-0.5">Pickup</span>}
           {l.acceptsDelivery && <span className="rounded-full bg-ink-100 px-2 py-0.5">Delivery</span>}

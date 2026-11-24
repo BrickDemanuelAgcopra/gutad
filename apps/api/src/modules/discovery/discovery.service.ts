@@ -1,4 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { FirstPartyService } from '../../core/first-party.service';
+import { applyFirstPartyRanking, type FirstPartyRules } from '@gutad/shared';
 import { and, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import { brands, deliveryZones, experiences, locations, menus, openingHours, publications, shifts, sponsoredPlacements, locationClosures } from '../../db/schema';
@@ -16,13 +18,15 @@ export interface SearchParams {
   radiusKm?: number;
   service?: 'pickup' | 'delivery' | 'reservations' | 'events' | 'catering';
   openNow?: boolean;
+  /** gutad = only food Gutad sells itself; merchants = only restaurants */
+  seller?: 'gutad' | 'merchants';
   page?: number;
   pageSize?: number;
 }
 
 @Injectable()
 export class DiscoveryService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService, private readonly entitlements: EntitlementsService, private readonly chefCalendar: ChefCalendarService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService, private readonly entitlements: EntitlementsService, private readonly chefCalendar: ChefCalendarService, private readonly firstParty: FirstPartyService) {}
 
   /** Customers only see services the restaurant's plan includes (and the restaurant has switched on). */
   private masked<T extends { acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; acceptsCatering: boolean }>(s: T, e: Entitlements | undefined): T {
@@ -30,7 +34,8 @@ export class DiscoveryService {
     return { ...s, acceptsPickup: s.acceptsPickup && can(e, 'ordering'), acceptsDelivery: s.acceptsDelivery && can(e, 'ordering') && can(e, 'delivery'), acceptsReservations: s.acceptsReservations && can(e, 'reservations'), acceptsEvents: s.acceptsEvents && can(e, 'private_events'), acceptsCatering: s.acceptsCatering && can(e, 'group_orders') };
   }
 
-  async search(p: SearchParams) {
+  /** `opts` is for the admin preview: draft first-party rules and the reason each Gutad result moved. */
+  async search(p: SearchParams, opts: { rules?: FirstPartyRules; explain?: boolean } = {}) {
     const page = Math.max(1, p.page || 1);
     const pageSize = Math.min(50, p.pageSize || 20);
     const conds = [inArray(locations.status, ['LIVE', 'VERIFIED'])];
@@ -56,7 +61,19 @@ export class DiscoveryService {
     const found = await this.db.select().from(locations).where(and(...conds)).limit(500);
     const ents = await this.entitlements.forLocations(found.map((r) => r.id));
     // only plans with a marketplace listing appear in Gutad search
-    const rows = found.filter((r) => { const e = ents.get(r.id); return !e || can(e, 'marketplace_listing'); });
+    // Gutad first-party: off in a city (kill switch) = not listed there; the seller filter narrows to one side
+    const fpIds = await this.firstParty.firstPartyLocationIds(found.map((r) => r.id));
+    const rules = opts.rules || (await this.firstParty.rulesFor(p.city));
+    const fpOn = new Map<string, boolean>();
+    for (const r of found) if (fpIds.has(r.id)) fpOn.set(r.id, opts.rules ? opts.rules.enabled : (await this.firstParty.rulesFor(r.city)).enabled);
+    const rows = found.filter((r) => {
+      const e = ents.get(r.id);
+      if (e && !can(e, 'marketplace_listing')) return false;
+      if (fpIds.has(r.id) && !fpOn.get(r.id)) return false;
+      if (p.seller === 'gutad' && !fpIds.has(r.id)) return false;
+      if (p.seller === 'merchants' && fpIds.has(r.id)) return false;
+      return true;
+    });
     const ids = rows.map((r) => r.id);
     const hours = ids.length ? await this.db.select().from(openingHours).where(inArray(openingHours.locationId, ids)) : [];
     const now = new Date();
@@ -68,9 +85,11 @@ export class DiscoveryService {
       const todays = hours.filter((h) => h.locationId === loc.id && h.dayOfWeek === lp.dayOfWeek);
       const isOpenNow = !loc.isPaused && !closedIds.has(loc.id) && todays.some((h) => isWithin(lp.hhmm, h.opens, h.closes));
       const distanceKm = p.lat !== undefined && p.lng !== undefined && loc.lat !== null && loc.lng !== null ? haversineKm(p.lat, p.lng, loc.lat, loc.lng) : null;
-      const sp = sponsored.find((s) => s.locationId === loc.id);
+      const fp = fpIds.has(loc.id);
+      // Gutad's own locations take sponsored placements only when the policy allows it
+      const sp = fp && !rules.allowSponsored ? undefined : sponsored.find((s) => s.locationId === loc.id);
       const e = ents.get(loc.id);
-      return { ...this.masked(this.summary(loc), e), isOpenNow, distanceKm, sponsored: !!sp, _bid: sp?.bidCents || 0, _spId: sp?.id, _boost: e && can(e, 'marketplace_boost') && !e.unrestricted ? 1 : 0 };
+      return { ...this.masked(this.summary(loc), e), isOpenNow, distanceKm, sponsored: !!sp, firstParty: fp, sellerLabel: fp ? rules.label : null, _bid: sp?.bidCents || 0, _spId: sp?.id, _boost: e && can(e, 'marketplace_boost') && !e.unrestricted ? 1 : 0 };
     });
     // a requested service must survive plan masking
     if (p.service === 'pickup') items = items.filter((i) => i.acceptsPickup);
@@ -83,11 +102,15 @@ export class DiscoveryService {
     items = await this.expandFoodHalls(items, p.q);
     // ranking: sponsored first (by bid), then plans with a marketplace boost, then open, then rating, then distance
     items.sort((a, b) => b._bid - a._bid || b._boost - a._boost || Number(b.isOpenNow) - Number(a.isOpenNow) || (b.rating || 0) - (a.rating || 0) || (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
+    // then the first-party marketplace policy (neutral by default): boost, pinned slots, first-page cap, exclusion
+    const ranked = applyFirstPartyRanking(items, rules, pageSize);
+    items = ranked.items;
     const total = items.length;
     const pageItems = items.slice((page - 1) * pageSize, page * pageSize);
     // count impressions for sponsored placements shown (best-effort)
     const shownSp = pageItems.filter((i) => i._spId).map((i) => i._spId!);
     if (shownSp.length) void this.db.update(sponsoredPlacements).set({ impressions: sql`${sponsoredPlacements.impressions} + 1` }).where(inArray(sponsoredPlacements.id, shownSp));
+    if (opts.explain) return { items: pageItems.map((it) => { const { _bid, _spId, _boost, ...rest } = it; return { ...rest, why: ranked.why.get(it) || [] }; }), total, page, pageSize, rules };
     return { items: pageItems.map(({ _bid, _spId, _boost, ...rest }) => rest), total, page, pageSize };
   }
 
@@ -175,10 +198,16 @@ export class DiscoveryService {
 
   /** Public location page: hours, services, eligible pickup/delivery times, dining shifts, experiences. */
   async locationPage(slugOrId: string) {
-    const cached = await this.redis.getJson<unknown>(`loc:${slugOrId}`);
-    if (cached) return cached;
+    const cached = await this.redis.getJson<{ firstParty?: boolean; city?: string }>(`loc:${slugOrId}`);
+    if (cached) {
+      if (cached.firstParty && !(await this.firstParty.rulesFor(cached.city)).enabled) throw new NotFoundException('Restaurant not found');
+      return cached;
+    }
     const [loc] = await this.db.select().from(locations).where(or(eq(locations.slug, slugOrId), sql`${locations.id}::text = ${slugOrId}`)).limit(1);
     if (!loc || ['PROSPECT', 'OFFBOARDED', 'SUSPENDED'].includes(loc.status)) throw new NotFoundException('Restaurant not found');
+    const firstParty = await this.firstParty.isFirstPartyOrg(loc.organizationId);
+    const fpRules = firstParty ? await this.firstParty.rulesFor(loc.city) : null;
+    if (fpRules && !fpRules.enabled) throw new NotFoundException('Restaurant not found');
     const hours = await this.db.select().from(openingHours).where(eq(openingHours.locationId, loc.id));
     const shiftRows = await this.db.select().from(shifts).where(and(eq(shifts.locationId, loc.id), eq(shifts.isActive, true)));
     const exps = await this.db.select().from(experiences).where(and(eq(experiences.locationId, loc.id), eq(experiences.isActive, true)));
@@ -192,6 +221,8 @@ export class DiscoveryService {
     const times = loc.chefKitchen ? await this.chefCalendar.kitchenTimes(loc.id) : await this.withoutFullSlots(loc, this.eligibleTimes(loc, hours, 'ORDERING'));
     const result = {
       ...this.masked(this.summary(loc), e),
+      firstParty,
+      sellerLabel: fpRules?.label ?? null,
       isOpenNow,
       hours,
       pickupTimes: times,

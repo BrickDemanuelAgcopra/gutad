@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { FirstPartyService } from '../../core/first-party.service';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import { DEFAULT_AUTO_THROTTLE, DEFAULT_PICKUP_POLICY, fireAt as computeFireAt, KITCHEN_REASONS, mentionsAllergy, suggestBags, type AutoThrottle, type PickupPolicy } from '@gutad/shared';
 import { DB, Db, DbOrTx } from '../../db/db.module';
@@ -15,7 +16,7 @@ import { DeliveryService } from '../delivery/delivery.service';
 
 @Injectable()
 export class KitchenService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService, private readonly printing: PrintingService, private readonly delivery: DeliveryService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService, private readonly printing: PrintingService, private readonly delivery: DeliveryService, private readonly firstParty: FirstPartyService) {}
 
   onModuleInit() {
     this.approvals.register('PURCHASE_ORDER', {
@@ -156,7 +157,8 @@ export class KitchenService implements OnModuleInit {
     const bagCount = suggestBags(lineFlags);
     await tx.insert(packingTasks).values({ orderId, bagCode, checklist, handling, bagCount, bags: this.buildBags(bagCode, bagCount, handling) }).onConflictDoNothing();
     await this.consumeIngredients(lines, loc?.kitchenId ?? null, tx);
-    if (loc?.platformOperated) await this.postCogs(o, lines, items, tx);
+    // cost of goods is Gutad's at its food halls and at any of its own (first-party) locations
+    if (loc?.platformOperated || (await this.firstParty.isFirstPartyOrg(o.organizationId, tx))) await this.postCogs(o, lines, items, tx);
     return tickets;
   }
 

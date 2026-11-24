@@ -32,7 +32,7 @@ export default function CheckoutPage() {
   const [useGift, setUseGift] = useState(false);
   const [utensils, setUtensils] = useState(false);
   const [table, setTable] = useState(() => (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('table') || '' : ''));
-  const [quote, setQuote] = useState<(Quote & { chefTerms?: { chargedNow: boolean; freeCancelUntil: string | null; lateRefundPct: number } | null }) | null>(null);
+  const [quote, setQuote] = useState<(Quote & { seller?: { firstParty: boolean; label: string } | null; chefTerms?: { chargedNow: boolean; freeCancelUntil: string | null; lateRefundPct: number } | null }) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idem = useRef(newIdempotencyKey());
@@ -230,6 +230,7 @@ export default function CheckoutPage() {
           {(!user || !cards?.length || savedCardId === 'new') && <CardField value={card} onChange={(t) => { setCard(t); setDeclined(false); }} />}
           {user && (!cards?.length || savedCardId === 'new') && <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={saveCard} onChange={(e) => setSaveCard(e.target.checked)} /> Save this card for next time</label>}
           {declined && <div className="mt-2"><Alert>That card was declined. Your order is still held at the same price; choose another card and try again.</Alert></div>}
+          {quote?.seller?.firstParty && <p className="mt-1 text-xs font-medium text-ink-700">{quote.seller.label}. Gutad prepares and sells this food and is responsible for it.</p>}
           {chef && <p className="mt-1 text-xs text-ink-500">Chef orders are charged now, sold by Gutad. Full refund if the chef declines or doesn’t confirm in time, or if you cancel before the order cutoff{quote?.chefTerms?.freeCancelUntil && loc ? ` (${orderByLabel(quote.chefTerms.freeCancelUntil, loc.timezone)})` : ''}{quote?.chefTerms ? (quote.chefTerms.lateRefundPct ? `; ${quote.chefTerms.lateRefundPct}% refund after that` : '; no refund after that') : ''}.</p>}
           <p className="mt-1 text-xs text-ink-300">{chef ? '' : 'Card is authorized now and captured only when the restaurant accepts. '} Test mode: numbers ending in 0002 are declined.</p>
         </Card>

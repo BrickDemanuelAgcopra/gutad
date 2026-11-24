@@ -74,6 +74,9 @@ export interface LocationSummary {
   brand?: BrandSummary | null;
   /** Name of the food hall the brand is prepared at (brand results only). */
   foodHallName?: string | null;
+  /** Sold by Gutad itself (first-party); `sellerLabel` is the label to show, e.g. "Sold by Gutad". */
+  firstParty?: boolean;
+  sellerLabel?: string | null;
 }
 
 export interface BrandSummary {

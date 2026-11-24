@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { FirstPartyService } from '../../core/first-party.service';
 import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { brands, chefProfiles, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
@@ -88,6 +89,7 @@ export class QuoteService {
     private readonly entitlements: EntitlementsService,
     private readonly settings: SettingsService,
     private readonly chefCalendar: ChefCalendarService,
+    private readonly firstParty: FirstPartyService,
   ) {}
 
   async quote(input: QuoteInput, tx: DbOrTx = this.db) {
@@ -104,6 +106,10 @@ export class QuoteService {
     if (!loc) throw new NotFoundException('Restaurant not found');
     const warnings: string[] = [];
     if (!sim && !['LIVE', 'VERIFIED'].includes(loc.status)) throw new BadRequestException('Restaurant is not accepting orders');
+    // Gutad first-party: the kill switch stops new orders; the seller label is shown at checkout
+    const firstParty = await this.firstParty.isFirstPartyOrg(loc.organizationId, tx);
+    const fpRules = firstParty ? await this.firstParty.rulesFor(loc.city) : null;
+    if (!sim && fpRules && !fpRules.enabled) throw new BadRequestException({ message: 'This kitchen is not taking orders right now', code: 'FIRST_PARTY_OFF' });
     // plan gating: ordering for every order, delivery on top for delivery orders
     await this.entitlements.assertLocation(loc.id, 'ordering', 'customer', tx);
     if (input.fulfillmentType === 'DELIVERY') await this.entitlements.assertLocation(loc.id, 'delivery', 'customer', tx);
@@ -256,6 +262,8 @@ export class QuoteService {
     // Gutad Chef Network orders use their own fee scope and commission (setting fees.chef_network)
     const chefFees = loc.chefKitchen ? await this.settings.getObject<ChefNetworkFees>('fees.chef_network', DEFAULT_CHEF_NETWORK_FEES) : null;
     if (chefFees) terms.commissionBps = chefFees.commissionBps;
+    // Gutad is the seller of record for its own food: no commission to itself
+    if (firstParty) terms.commissionBps = 0;
     const feeRules = sim?.feeRules || chefFees?.customer || (await this.settings.getObject('fees.customer', DEFAULT_CUSTOMER_FEES));
     const fees = computeCustomerFees(feeRules, { channel: input.channel, fulfillmentType: input.fulfillmentType, subtotalCents, itemCount: snapLines.reduce((a, l) => a + l.quantity, 0), locationPackagingCents: loc.packagingFeeCents, serviceFeeWaived: !!membership?.benefits.serviceFeeWaived });
     const serviceFeeCents = fees.serviceFeeCents;
@@ -297,6 +305,7 @@ export class QuoteService {
       taxRateBps: loc.taxRateBps,
       terms: { contractId: terms.contractId, planCode: terms.planCode, commissionBps: terms.commissionBps, processingBps: terms.processingBps, processingFixedCents: terms.processingFixedCents },
       commissionCents,
+      seller: firstParty ? { firstParty: true, label: fpRules?.label || 'Sold by Gutad' } : null,
       couponId,
       promotions: promo.applied,
       promotionIds: promo.applied.map((p) => p.promotionId),
@@ -341,7 +350,7 @@ export class QuoteService {
   }
 
   present(q: typeof quotes.$inferSelect, warnings: string[] = []) {
-    const s = q.snapshot as { chef?: { freeCancelUntil: string | null; lateRefundPct: number }; lines: QuoteSnapshotLine[]; creditsCents: number; loyaltyCents: number; giftCents?: number; commissionCents: number; promotions?: AppliedPromotion[] };
+    const s = q.snapshot as { seller?: { firstParty: boolean; label: string } | null; chef?: { freeCancelUntil: string | null; lateRefundPct: number }; lines: QuoteSnapshotLine[]; creditsCents: number; loyaltyCents: number; giftCents?: number; commissionCents: number; promotions?: AppliedPromotion[] };
     return {
       id: q.id,
       locationId: q.locationId,
@@ -369,6 +378,7 @@ export class QuoteService {
       expiresAt: q.expiresAt.toISOString(),
       deliveryQuoteId: q.deliveryQuoteId,
       // Gutad Chef Network: charged now; full refund until freeCancelUntil, then lateRefundPct
+      seller: s.seller ?? null,
       chefTerms: s.chef ? { chargedNow: true, freeCancelUntil: s.chef.freeCancelUntil, lateRefundPct: s.chef.lateRefundPct } : null,
       warnings,
     };

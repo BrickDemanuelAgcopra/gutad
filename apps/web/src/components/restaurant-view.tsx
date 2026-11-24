@@ -51,6 +51,7 @@ export function RestaurantView({ loc, channel, src, branded, initialTab, initial
           <p className="mt-1 text-sm text-white/80">{loc.cuisine.join(' · ')} · {loc.addressLine1}, {loc.city} {loc.rating ? `· ★ ${loc.rating.toFixed(1)} (${loc.ratingCount})` : ''}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {loc.platformOperated && <MadeAtGutad tone="dark" />}
+            {loc.firstParty && loc.sellerLabel && <span className="rounded-full bg-white/90 px-2 py-0.5 text-[11px] font-semibold text-ink-900" title="Gutad is the seller of this food">{loc.sellerLabel}</span>}
             <Badge tone={loc.isOpenNow ? 'good' : 'bad'}>{loc.isOpenNow ? 'Open now' : 'Closed'}</Badge>
             {loc.isPaused && <Badge tone="warn">{loc.pausedReason || 'Paused'}</Badge>}
           </div>

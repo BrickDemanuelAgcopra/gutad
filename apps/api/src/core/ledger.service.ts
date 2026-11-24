@@ -5,6 +5,7 @@ import { DEFAULT_LEDGER_LOCK, type LedgerLockConfig } from '@gutad/shared';
 import { DB, Db, DbOrTx } from '../db/db.module';
 import { closePeriods, journalEntries } from '../db/schema';
 import { SettingsService } from './settings.service';
+import { FirstPartyService } from './first-party.service';
 
 export type LedgerAccount = (typeof journalEntries.account.enumValues)[number];
 
@@ -45,7 +46,7 @@ const periodOf = (d: Date) => d.toISOString().slice(0, 7);
 export class LedgerService {
   private readonly log = new Logger('LedgerService');
   private closedCache: { at: number; periods: Set<string> } | null = null;
-  constructor(@Inject(DB) private readonly db: Db, private readonly settings: SettingsService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly settings: SettingsService, private readonly firstParty: FirstPartyService) {}
 
   /** Closed months (cached 30 s; `invalidateClosedPeriods` after a close or reopen). */
   async closedPeriods(): Promise<Set<string>> {
@@ -63,6 +64,12 @@ export class LedgerService {
 
   /** Like `post`, also saying which month the batch landed in and whether a closed month redirected it. */
   async postDetailed(ref: PostingRef, lines: JournalLine[], tx: DbOrTx = this.db): Promise<PostingResult> {
+    // Gutad first-party: Gutad is the seller of record and is never owed a payout, so any merchant-payable line for its
+    // own organization (delivery costs, deposits, chargebacks, adjustments) lands in platform adjustments instead
+    if (lines.some((l) => l.account === 'MERCHANT_PAYABLE')) {
+      const own = await this.firstParty.platformOrgIds();
+      if (own.length) lines = lines.map((l) => (l.account === 'MERCHANT_PAYABLE' && own.includes(l.partyId || l.organizationId || '') ? { ...l, account: 'PLATFORM_ADJUSTMENTS' as const, partyId: null, memo: `First-party (Gutad seller of record): ${l.memo || 'merchant share'}` } : l));
+    }
     const now = new Date();
     const eff = ref.effectiveAt && ref.effectiveAt < now ? ref.effectiveAt : now;
     let postedAt = eff;

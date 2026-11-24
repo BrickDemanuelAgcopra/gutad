@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { FirstPartyService } from '../../core/first-party.service';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { customerCredits, disputes, journalEntries, inboxEvents, legalSellers, locations, orderPaymentAllocations, orders, payments, payouts, refunds } from '../../db/schema';
@@ -24,6 +25,7 @@ export class PaymentsService {
     private readonly audit: AuditService,
     private readonly approvals: ApprovalsService,
     private readonly settings: SettingsService,
+    private readonly firstParty: FirstPartyService,
   ) {}
 
   get providerName() {
@@ -33,11 +35,13 @@ export class PaymentsService {
   /** Resolve the connected payout account for a location's legal seller (destination charges). */
   async destinationFor(locationId: string, tx: DbOrTx = this.db): Promise<string | null> {
     const [row] = await tx
-      .select({ acct: legalSellers.payoutAccountId, state: legalSellers.payoutOnboardingState })
+      .select({ acct: legalSellers.payoutAccountId, state: legalSellers.payoutOnboardingState, orgId: locations.organizationId })
       .from(locations)
       .leftJoin(legalSellers, eq(legalSellers.id, locations.legalSellerId))
       .where(eq(locations.id, locationId))
       .limit(1);
+    // Gutad's own locations are charged straight to the platform account (Gutad is the seller of record)
+    if (row && (await this.firstParty.isFirstPartyOrg(row.orgId, tx))) return null;
     return row?.state === 'COMPLETE' && row.acct ? row.acct : null;
   }
 
@@ -199,6 +203,29 @@ export class PaymentsService {
     const merchantTip = isDelivery ? 0 : tip;
     const merchantPayable = food + tax + merchantTip + packagingFee - commission + merchantDiscountFunded;
     const platformDeliveryRevenue = isDelivery ? deliveryFee : 0;
+    // Gutad first-party: food (net of discount), packaging and pickup tips are Gutad's own sales; tax is Gutad's to
+    // remit. No merchant payable, no commission and no promotion re-credit (Gutad funds its own discounts).
+    if (await this.firstParty.isFirstPartyOrg(o.organizationId, tx)) {
+      const fpLines: Parameters<LedgerService['post']>[1] = [
+        prepaid ? { account: 'DEFERRED_REVENUE' as const, partyId: `order:${o.id}`, organizationId: o.organizationId, debitCents: captured, memo: `Completed ${o.number}` } : { account: 'PROCESSOR_CLEARING' as const, debitCents: captured, memo: `Capture ${o.number}` },
+        { account: 'GIFT_CARD_LIABILITY', partyId: 'gift-cards', debitCents: snap.giftCents || 0, memo: `Gift card used on ${o.number}` },
+        { account: 'PLATFORM_REVENUE_FOOD_SALES', creditCents: food + packagingFee + merchantTip, organizationId: o.organizationId, locationId: o.locationId, memo: `First-party sale ${o.number}` },
+        { account: 'TAX_PAYABLE', partyId: 'sales-tax', creditCents: tax, organizationId: o.organizationId, locationId: o.locationId, memo: `Sales tax ${o.number} (Gutad seller of record)` },
+        { account: 'PLATFORM_REVENUE_SERVICE_FEE', creditCents: serviceFee, organizationId: o.organizationId },
+        { account: 'PLATFORM_REVENUE_SERVICE_FEE', creditCents: smallOrderFee, organizationId: o.organizationId, memo: 'Small-order fee' },
+        { account: 'PLATFORM_REVENUE_DELIVERY', creditCents: platformDeliveryRevenue, organizationId: o.organizationId },
+        { account: 'DRIVER_PAYABLE', partyId: `order:${o.id}`, creditCents: driverPayable, memo: 'Courier tip' },
+        ...(prepaid ? [] : [
+          { account: 'PLATFORM_EXPENSE_PROCESSING' as const, debitCents: p.processingFeeCents, memo: 'Processor fee' },
+          { account: 'PROCESSOR_CLEARING' as const, creditCents: p.processingFeeCents, memo: 'Processor fee withheld' },
+        ]),
+      ];
+      const c = fpLines.reduce((a, l) => a + (l.creditCents || 0), 0);
+      const d = fpLines.reduce((a, l) => a + (l.debitCents || 0), 0);
+      if (d !== c) fpLines.push({ account: 'PLATFORM_REVENUE_FOOD_SALES', creditCents: d > c ? d - c : 0, debitCents: d < c ? c - d : 0, organizationId: o.organizationId, memo: 'Rounding' });
+      await this.ledger.post({ orderId: o.id, paymentId: p.id, currency: p.currency }, fpLines, tx);
+      return;
+    }
     const lines: Parameters<LedgerService['post']>[1] = [
       prepaid ? { account: 'DEFERRED_REVENUE' as const, partyId: `order:${o.id}`, organizationId: o.organizationId, debitCents: captured, memo: `Completed ${o.number}` } : { account: 'PROCESSOR_CLEARING' as const, debitCents: captured, memo: `Capture ${o.number}` },
       // 25.9 the gift-card share of the order leaves the gift liability when the order is captured
@@ -343,8 +370,10 @@ export class PaymentsService {
       const [o] = await tx.select({ organizationId: orders.organizationId }).from(orders).where(eq(orders.id, p.orderId)).limit(1);
       orgId = o?.organizationId ?? null;
     }
+    // a "merchant-funded" refund on Gutad's own sale is Gutad's cost (there is no merchant payable to debit)
+    const merchantFunded = input.funder === 'MERCHANT' && !(await this.firstParty.isFirstPartyOrg(orgId, tx));
     const funderLine =
-      input.funder === 'MERCHANT'
+      merchantFunded
         ? { account: 'MERCHANT_PAYABLE' as const, partyId: orgId ?? 'unknown', organizationId: orgId, debitCents: input.amountCents, memo: `Refund ${input.reason}` }
         : input.funder === 'PROVIDER'
           ? { account: 'PROVIDER_PAYABLE' as const, partyId: 'delivery-provider', debitCents: input.amountCents, memo: `Refund ${input.reason}` }

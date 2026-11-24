@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { addOns, contractLocations, features, locations, merchantContracts, orgAddOns, orgMemberships, organizations, platformSettings } from '../../db/schema';
 import { PlansService } from '../contracts/plans.service';
+import { FIRST_PARTY_ORG_KIND } from '@gutad/shared';
 
 export type FeatureValue = boolean | number;
 
@@ -85,8 +86,10 @@ export class EntitlementsService {
     return this.namesCache.names.get(key) || key.replace(/_/g, ' ');
   }
 
-  private build(contract: typeof merchantContracts.$inferSelect | undefined, overrides: Record<string, FeatureValue>, def: Awaited<ReturnType<EntitlementsService['defaultPlan']>>, extras: { code: string; features: Record<string, FeatureValue>; quantity: number }[] = []): Entitlements {
+  private build(contract: typeof merchantContracts.$inferSelect | undefined, overrides: Record<string, FeatureValue>, def: Awaited<ReturnType<EntitlementsService['defaultPlan']>>, extras: { code: string; features: Record<string, FeatureValue>; quantity: number }[] = [], orgKind?: string | null): Entitlements {
     const addOnCodes = extras.map((x) => x.code);
+    // Gutad's own organization (first-party) is not on a merchant plan: everything allowed, no limits, no billing
+    if (orgKind === FIRST_PARTY_ORG_KIND) return { source: 'PLAN', planCode: 'GUTAD_FIRST_PARTY', planName: 'Gutad first-party', contractId: null, unrestricted: true, features: {}, overrides, addOns: addOnCodes };
     if (contract && !contract.planVersionId) return { source: 'LEGACY', planCode: contract.planCode, planName: contract.name, contractId: contract.id, unrestricted: true, features: {}, overrides, addOns: addOnCodes };
     if (contract) return { source: 'PLAN', planCode: contract.planCode, planName: contract.name, contractId: contract.id, unrestricted: false, features: mergeAddOns((contract.features as Record<string, FeatureValue>) || {}, extras), overrides, addOns: addOnCodes };
     if (def) return { source: 'DEFAULT', planCode: def.code, planName: def.name, contractId: null, unrestricted: false, features: mergeAddOns(def.features, extras), overrides, addOns: addOnCodes };
@@ -112,7 +115,7 @@ export class EntitlementsService {
   async forLocations(locationIds: string[], at = new Date(), tx: DbOrTx = this.db): Promise<Map<string, Entitlements>> {
     const out = new Map<string, Entitlements>();
     if (!locationIds.length) return out;
-    const locs = await tx.select({ id: locations.id, orgId: locations.organizationId, flags: organizations.featureFlags }).from(locations).innerJoin(organizations, eq(organizations.id, locations.organizationId)).where(inArray(locations.id, locationIds));
+    const locs = await tx.select({ id: locations.id, orgId: locations.organizationId, flags: organizations.featureFlags, kind: organizations.kind }).from(locations).innerJoin(organizations, eq(organizations.id, locations.organizationId)).where(inArray(locations.id, locationIds));
     const rows = await tx
       .select({ locationId: contractLocations.locationId, c: merchantContracts })
       .from(contractLocations)
@@ -123,7 +126,7 @@ export class EntitlementsService {
     const extras = await this.addOnsFor([...new Set(locs.map((l) => l.orgId))], at, tx);
     for (const l of locs) {
       const contract = rows.find((r) => r.locationId === l.id)?.c;
-      out.set(l.id, this.build(contract, this.cleanOverrides(l.flags), def, extras.filter((x) => x.orgId === l.orgId) as { code: string; features: Record<string, FeatureValue>; quantity: number }[]));
+      out.set(l.id, this.build(contract, this.cleanOverrides(l.flags), def, extras.filter((x) => x.orgId === l.orgId) as { code: string; features: Record<string, FeatureValue>; quantity: number }[], l.kind));
     }
     return out;
   }
@@ -136,7 +139,7 @@ export class EntitlementsService {
 
   /** Organization-level view (limits, org-wide features like ads): the org's current contract. */
   async forOrg(orgId: string, at = new Date(), tx: DbOrTx = this.db): Promise<Entitlements> {
-    const [org] = await tx.select({ flags: organizations.featureFlags }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
+    const [org] = await tx.select({ flags: organizations.featureFlags, kind: organizations.kind }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
     const [c] = await tx
       .select()
       .from(merchantContracts)
@@ -144,7 +147,7 @@ export class EntitlementsService {
       .orderBy(desc(merchantContracts.version))
       .limit(1);
     const extras = (await this.addOnsFor([orgId], at, tx)) as { code: string; features: Record<string, FeatureValue>; quantity: number }[];
-    return this.build(c, this.cleanOverrides(org?.flags), await this.defaultPlan(), extras);
+    return this.build(c, this.cleanOverrides(org?.flags), await this.defaultPlan(), extras, org?.kind);
   }
 
   private async deny(e: Entitlements, key: string, audience: 'merchant' | 'customer'): Promise<never> {
