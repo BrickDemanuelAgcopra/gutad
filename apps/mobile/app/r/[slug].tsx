@@ -8,7 +8,7 @@ import { useCart } from '@/cart';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s } from '@/ui';
 import { GBadge, MadeAtGutad } from '@/made-at-gutad';
 
-interface Loc { id: string; slug: string; name: string; description: string | null; heroImageUrl: string | null; cuisine: string[]; isOpenNow: boolean; acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; addressLine1: string; city: string; rating: number | null; platformOperated?: boolean; experiences: { id: string; name: string; priceCents: number; pricingMode: string }[]; currency: string }
+interface Loc { id: string; slug: string; name: string; description: string | null; heroImageUrl: string | null; cuisine: string[]; isOpenNow: boolean; acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; addressLine1: string; city: string; rating: number | null; platformOperated?: boolean; firstParty?: boolean; sellerLabel?: string | null; experiences: { id: string; name: string; priceCents: number; pricingMode: string }[]; currency: string }
 
 export default function Restaurant() {
   const { slug, brand } = useLocalSearchParams<{ slug: string; brand?: string }>();
@@ -43,6 +43,7 @@ export default function Restaurant() {
         <View style={s.pad}>
           <View style={s.row}><Text style={{ fontSize: 22, fontWeight: '700', flex: 1 }}>{loc.name}</Text><Badge text={loc.isOpenNow ? 'OPEN' : 'CLOSED'} tone={loc.isOpenNow ? 'good' : 'bad'} /></View>
           {loc.platformOperated && <View style={{ marginTop: 4 }}><MadeAtGutad /></View>}
+          {loc.firstParty && loc.sellerLabel ? <Text style={{ marginTop: 4, fontWeight: '700', fontSize: 13 }} accessibilityHint="Gutad is the seller of this food">{loc.sellerLabel}</Text> : null}
           <Muted>{loc.cuisine.join(' · ')} · {loc.addressLine1}, {loc.city}{loc.rating ? ` · ★ ${loc.rating.toFixed(1)}` : ''}</Muted>
           {loc.description && <Text style={{ marginTop: 6, color: C.ink7 }}>{loc.description}</Text>}
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>

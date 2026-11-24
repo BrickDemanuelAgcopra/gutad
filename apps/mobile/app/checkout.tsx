@@ -34,7 +34,7 @@ export default function Checkout() {
   const [saveCard, setSaveCard] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [utensils, setUtensils] = useState(false);
-  const [quote, setQuote] = useState<(Quote & { chefTerms?: ChefTerms | null }) | null>(null);
+  const [quote, setQuote] = useState<(Quote & { seller?: { firstParty: boolean; label: string } | null; chefTerms?: ChefTerms | null }) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idem = useRef(newIdempotencyKey());
@@ -149,6 +149,7 @@ export default function Checkout() {
         {(!user || !cards?.length || savedId === 'new') && <CardField value={card} onChange={(t) => { setCard(t); setDeclined(false); }} />}
         {user && (!cards?.length || savedId === 'new') && <Button title={saveCard ? 'Will save this card ✓' : 'Save this card for next time'} variant="ghost" onPress={() => setSaveCard(!saveCard)} />}
         {declined && <Text style={{ color: C.bad, marginBottom: 6 }}>That card was declined. Your order is held at the same price; choose another card and try again.</Text>}
+        {quote?.seller?.firstParty ? <Text style={{ fontWeight: '600', marginBottom: 4 }}>{quote.seller.label}. Gutad prepares and sells this food and is responsible for it.</Text> : null}
         <Muted>{quote?.chefTerms ? chefTermsText(quote.chefTerms, loc?.timezone || avail?.timezone) : loc?.chefKitchen ? 'Charged now. Full refund if the chef declines or doesn’t confirm.' : 'Authorized now, captured when the restaurant accepts.'}</Muted>
       </Card>
       <Card title="Summary">

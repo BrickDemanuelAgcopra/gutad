@@ -12,16 +12,18 @@ export default function Discover() {
   const [city, setCity] = useState('New York');
   const [near, setNear] = useState<{ lat: number; lng: number } | null>(null);
   const [service, setService] = useState<string>('');
+  const [seller, setSeller] = useState<string>('');
   const [data, setData] = useState<Paginated<LocationSummary> | null>(null);
   useEffect(() => {
     const p = new URLSearchParams();
     if (q) p.set('q', q);
     if (city && !near) p.set('city', city);
     if (service) p.set('service', service);
+    if (seller) p.set('seller', seller);
     if (near) { p.set('lat', String(near.lat)); p.set('lng', String(near.lng)); p.set('radiusKm', '15'); }
     const t = setTimeout(() => api.get<Paginated<LocationSummary>>(`/public/search?${p}`).then(setData).catch(() => setData({ items: [], total: 0, page: 1, pageSize: 20 })), 300);
     return () => clearTimeout(t);
-  }, [q, city, near, service]);
+  }, [q, city, near, service, seller]);
   const locate = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
@@ -40,6 +42,9 @@ export default function Discover() {
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
           {[['', 'All'], ['pickup', 'Pickup'], ['delivery', 'Delivery'], ['reservations', 'Tables'], ['events', 'Experiences']].map(([v, l]) => <Pressable key={v} onPress={() => setService(v)} style={{ backgroundColor: service === v ? C.brand : C.white, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: C.ink1 }}><Text style={{ color: service === v ? C.white : C.ink7, fontSize: 12, fontWeight: '600' }}>{l}</Text></Pressable>)}
         </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }} accessibilityLabel="Sold by">
+          {[['', 'All sellers'], ['gutad', 'Gutad Kitchens'], ['merchants', 'Restaurants only']].map(([v, l]) => <Pressable key={v || 'any'} accessibilityRole="button" accessibilityState={{ selected: seller === v }} onPress={() => setSeller(v)} style={{ backgroundColor: seller === v ? C.ink : C.white, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: C.ink1 }}><Text style={{ color: seller === v ? C.white : C.ink7, fontSize: 12, fontWeight: '600' }}>{l}</Text></Pressable>)}
+        </View>
       </View>
       {!data ? <Loading /> : (
         <FlatList data={data.items} keyExtractor={(i) => `${i.id}:${i.brand?.id ?? ''}`} contentContainerStyle={s.pad} ListEmptyComponent={<Muted>No restaurants match. Try another city.</Muted>} renderItem={({ item: l }) => (
@@ -49,6 +54,7 @@ export default function Discover() {
               <View style={{ padding: 12 }}>
                 <View style={s.row}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>{l.platformOperated && <GBadge />}<Text style={{ fontWeight: '700', fontSize: 16 }}>{l.name}</Text></View><Badge text={l.isOpenNow ? 'OPEN' : 'CLOSED'} tone={l.isOpenNow ? 'good' : 'bad'} /></View>
                 <Muted>{l.brand ? `Made at Gutad · ${l.foodHallName}` : `${l.platformOperated ? 'Made at Gutad · ' : ''}${l.cuisine.join(' · ')}`} · {l.city}{typeof l.distanceKm === 'number' ? ` · ${l.distanceKm.toFixed(1)} km` : ''}{l.rating ? ` · ★ ${l.rating.toFixed(1)}` : ''}</Muted>
+                {l.firstParty && l.sellerLabel ? <Text style={{ fontWeight: '700', fontSize: 12, color: C.ink, marginTop: 2 }}>{l.sellerLabel}</Text> : null}
                 <View style={{ flexDirection: 'row', gap: 4, marginTop: 6 }}>{l.acceptsPickup && <Badge text="Pickup" />}{l.acceptsDelivery && <Badge text="Delivery" />}{l.acceptsReservations && <Badge text="Tables" />}{l.acceptsEvents && <Badge text="Events" />}{l.sponsored && <Badge text="Sponsored" tone="info" />}</View>
               </View>
             </Pressable>
