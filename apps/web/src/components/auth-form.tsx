@@ -6,8 +6,9 @@ import { useApi } from '@/lib/hooks';
 import { Alert, Button, Card, Input } from '@/components/ui';
 import { SmsNotice } from '@/components/legal';
 
-/** Sign in / create account / recover, with MFA and SSO. */
-export function AuthForm({ initialMode = 'login', title }: { initialMode?: 'login' | 'register'; title?: string } = {}) {
+/** Sign in / create account / recover, with MFA and SSO. `audience="courier"` drops the customer-only bits: restaurant marketing opt-in and demo-account hints. */
+export function AuthForm({ initialMode = 'login', title, audience = 'customer' }: { initialMode?: 'login' | 'register'; title?: string; audience?: 'customer' | 'courier' } = {}) {
+  const customer = audience === 'customer';
   const [mode, setMode] = useState<'login' | 'register' | 'recover'>(initialMode);
   const [f, setF] = useState({ email: '', password: '', name: '', phone: '', marketingConsent: false });
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +52,7 @@ export function AuthForm({ initialMode = 'login', title }: { initialMode?: 'logi
           {mode !== 'recover' && <Input label="Password" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && submit()} />}
           {mode === 'register' && <Input label="Phone (for SMS updates)" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />}
           {mode === 'register' && <SmsNotice />}
-          {mode === 'register' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.marketingConsent} onChange={(e) => setF({ ...f, marketingConsent: e.target.checked })} /> Send me offers from restaurants I order from</label>}
+          {mode === 'register' && customer && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.marketingConsent} onChange={(e) => setF({ ...f, marketingConsent: e.target.checked })} /> Send me offers from restaurants I order from</label>}
           {error && <Alert>{error}</Alert>}
           {info && <Alert tone="info">{info}</Alert>}
           <Button className="w-full" onClick={submit}>{mode === 'login' ? 'Sign in' : mode === 'register' ? 'Create account' : 'Send reset link'}</Button>
@@ -62,7 +63,7 @@ export function AuthForm({ initialMode = 'login', title }: { initialMode?: 'logi
           </div>
         </div>
       </Card>
-      <p className="mt-4 text-center text-xs text-ink-500">Demo accounts: customer@demo.gutad.io / customer12345 · owner@demo.gutad.io / merchant12345</p>
+      {customer && <p className="mt-4 text-center text-xs text-ink-500">Demo accounts: customer@demo.gutad.io / customer12345 · owner@demo.gutad.io / merchant12345</p>}
     </div>
   );
 }

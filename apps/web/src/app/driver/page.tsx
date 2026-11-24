@@ -1,10 +1,10 @@
 'use client';
-import Link from 'next/link';
 import { useState } from 'react';
 import { COURIER_DOC_LABELS, type CourierDocKind } from '@gutad/shared';
 import { api } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { Alert, Card, Spinner, Tabs } from '@/components/ui';
+import { AuthForm } from '@/components/auth-form';
 import { type Onboarding } from '@/components/courier/common';
 import { OnboardingWizard } from '@/components/courier/onboarding';
 import { Documents, FirstDeliveryGuide, ShiftsCard, StatusCard, type CourierStatus, type Standing } from '@/components/courier/work';
@@ -18,7 +18,15 @@ export default function DriverPage() {
   const { user, ready } = useSession();
   const { data: ob, error, reload } = useApi<Onboarding>(user ? '/driver/onboarding' : null, { deps: [user?.id] });
   if (!ready) return <Spinner />;
-  if (!user) return <Alert tone="info">Please <Link className="underline" href="/account">sign in</Link> to deliver with Gutad.</Alert>;
+  if (!user) return (
+    <div className="space-y-4">
+      <div className="mx-auto max-w-md text-center">
+        <h1 className="text-2xl font-bold">Deliver with Gutad</h1>
+        <p className="text-sm text-ink-500">Create an account to start your courier application. Already have one? Sign in and pick up where you left off.</p>
+      </div>
+      <AuthForm initialMode="register" title="Create your courier account" audience="courier" />
+    </div>
+  );
   if (!ob) return error ? <Alert>{error}</Alert> : <Spinner />;
   if (!ob.driver || ob.driver.applicationStatus !== 'APPROVED') return <OnboardingWizard ob={ob} reload={reload} />;
   return <CourierConsole />;
