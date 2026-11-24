@@ -66,7 +66,7 @@ export function describeFirstPartyRules(r: FirstPartyRules): string[] {
   if (r.ranking === 'EXCLUDED') out.push('Gutad results are left out of search.');
   if (r.ranking !== 'EXCLUDED' && r.maxFirstPageSharePct < 100) out.push(`Gutad results take at most ${r.maxFirstPageSharePct}% of the first page.`);
   out.push(r.allowSponsored ? 'Gutad may buy sponsored placements on the same terms as restaurants; they are marked Sponsored.' : 'Gutad does not buy sponsored placements.');
-  out.push("Gutad's own kitchens never see individual restaurants' sales, menus performance or customer data.");
+  out.push("Gutad's own kitchens never see individual restaurants' sales, menu performance or customer data.");
   return out;
 }
 
