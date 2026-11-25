@@ -44,8 +44,12 @@ export interface PaymentProvider {
   refund(providerIntentId: string, amountCents: number, reason: string, idempotencyKey?: string): Promise<{ providerRefundId: string; status: 'succeeded' | 'pending' | 'failed' }>;
   /** Save a card for guarantees without charging. */
   createSetup(customerEmail: string | null): Promise<SetupResult>;
-  /** Create a connected account for a legal seller and return an onboarding link. */
-  createConnectedAccount(input: { legalName: string; email: string; country: string; returnUrl: string; refreshUrl: string }): Promise<{ accountId: string; onboardingUrl: string | null }>;
+  /**
+   * Create a connected account for a legal seller and return an onboarding link.
+   * With `existingAccountId`, no account is created: a fresh onboarding link is issued for that account
+   * (onboarding left unfinished, an expired link, or requirements to fix).
+   */
+  createConnectedAccount(input: { legalName: string; email: string; country: string; returnUrl: string; refreshUrl: string; existingAccountId?: string | null }): Promise<{ accountId: string; onboardingUrl: string | null }>;
   transfer(input: { accountId: string; amountCents: number; currency: string; idempotencyKey: string; description: string }): Promise<{ transferId: string; status: 'paid' | 'pending' | 'failed'; failureReason?: string }>;
   /** Verify and parse a webhook. Returns a normalized event or null when the signature fails. */
   parseWebhook(rawBody: Buffer, signature: string | undefined): Promise<ProviderEvent | null>;
@@ -68,6 +72,8 @@ export interface ProviderEvent {
   providerIntentId?: string;
   providerTransferId?: string;
   accountId?: string;
+  /** `account.updated`: whether the connected account can receive the platform's transfers, resolved by the provider. */
+  accountState?: 'COMPLETE' | 'PENDING' | 'RESTRICTED';
   amountCents?: number;
   raw: unknown;
 }

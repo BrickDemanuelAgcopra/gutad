@@ -6,8 +6,25 @@ import type { CardDetails, CreateIntentInput, IntentResult, PaymentProvider, Pro
 /**
  * Stripe Connect adapter using destination charges: the platform is the merchant of record for the charge,
  * funds flow to the connected account minus `application_fee_amount`.
- * Docs: https://docs.stripe.com/connect/charges (destination charges), https://docs.stripe.com/payments/place-a-hold-on-a-payment-method
+ * Connected accounts are Accounts v2 (`/v2/core/accounts`): Stripe refuses v1 account creation for new Connect
+ * platforms. Sellers get the `recipient` configuration (they receive transfers, they never charge cards), the
+ * Express Dashboard, and the platform carries fees and losses. v2 accounts still emit v1 `account.updated`.
+ * Docs: https://docs.stripe.com/connect/charges (destination charges), https://docs.stripe.com/payments/place-a-hold-on-a-payment-method,
+ * https://docs.stripe.com/api/v2/core/accounts/create, https://docs.stripe.com/api/v2/core/account-links/create
  */
+
+/** v2 endpoints need an API version that has them; v1 calls stay on the version pinned in the constructor. */
+const V2_API_VERSION = '2026-11-18.endive';
+
+type V2Account = { id: string; configuration?: { recipient?: { capabilities?: { stripe_balance?: { stripe_transfers?: { status?: string } } } } } };
+
+/** Capability status (v2 `stripe_transfers` or its v1 twin `transfers`) to the seller's payout onboarding state. */
+function stateOf(status: string | undefined): ProviderEvent['accountState'] {
+  if (!status) return undefined;
+  if (status === 'active') return 'COMPLETE';
+  if (status === 'pending' || status === 'inactive') return 'PENDING';
+  return 'RESTRICTED';
+}
 @Injectable()
 export class StripePaymentProvider implements PaymentProvider {
   readonly name = 'stripe';
@@ -117,10 +134,45 @@ export class StripePaymentProvider implements PaymentProvider {
     return { paymentMethodId: pm.id, brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year, customerRef: typeof pm.customer === 'string' ? pm.customer : pm.customer?.id || null };
   }
 
-  async createConnectedAccount(input: { legalName: string; email: string; country: string; returnUrl: string; refreshUrl: string }) {
-    const acct = await this.stripe.accounts.create({ type: 'express', country: input.country, email: input.email, business_profile: { name: input.legalName }, capabilities: { card_payments: { requested: true }, transfers: { requested: true } } });
-    const link = await this.stripe.accountLinks.create({ account: acct.id, type: 'account_onboarding', return_url: input.returnUrl, refresh_url: input.refreshUrl });
-    return { accountId: acct.id, onboardingUrl: link.url };
+  private async v2<T>(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<T> {
+    return (await this.stripe.rawRequest(method, path, body, { apiVersion: V2_API_VERSION })) as unknown as T;
+  }
+
+  async createConnectedAccount(input: { legalName: string; email: string; country: string; returnUrl: string; refreshUrl: string; existingAccountId?: string | null }) {
+    const accountId =
+      input.existingAccountId ||
+      (
+        await this.v2<V2Account>('POST', '/v2/core/accounts', {
+          contact_email: input.email,
+          display_name: input.legalName,
+          dashboard: 'express',
+          identity: { country: input.country.toLowerCase() },
+          configuration: { recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } } },
+          // required with the Express Dashboard, and what Stripe recommends for destination charges
+          defaults: { responsibilities: { fees_collector: 'application', losses_collector: 'application' } },
+        })
+      ).id;
+    const onboarding: Record<string, unknown> = { return_url: input.returnUrl, refresh_url: input.refreshUrl };
+    const link = (configurations?: string[]) =>
+      this.v2<{ url: string }>('POST', '/v2/core/account_links', { account: accountId, use_case: { type: 'account_onboarding', account_onboarding: configurations ? { ...onboarding, configurations } : onboarding } });
+    // Stripe's reference request omits `configurations`, but answers `configs_must_match_to_use_account_links` when it needs them
+    const l = await link().catch((e: Error & { code?: string }) => {
+      if (!/configs_must_match/.test(`${e.code ?? ''} ${e.message}`)) throw e;
+      return link(['recipient']);
+    });
+    return { accountId, onboardingUrl: l.url };
+  }
+
+  /** Whether the platform can transfer to the account. `snapshot` is the v1 account from `account.updated`, used if the v2 read fails. */
+  private async accountState(accountId: string, snapshot?: Record<string, unknown>): Promise<ProviderEvent['accountState']> {
+    try {
+      const a = await this.v2<V2Account>('GET', `/v2/core/accounts/${encodeURIComponent(accountId)}?include=configuration.recipient`);
+      const s = stateOf(a.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status);
+      if (s) return s;
+    } catch (e) {
+      this.log.warn(`v2 account ${accountId}: ${(e as Error).message}`);
+    }
+    return stateOf((snapshot?.capabilities as Record<string, string> | undefined)?.transfers);
   }
 
   async transfer(input: { accountId: string; amountCents: number; currency: string; idempotencyKey: string; description: string }) {
@@ -150,8 +202,15 @@ export class StripePaymentProvider implements PaymentProvider {
       this.log.warn(`webhook signature failed: ${lastErr}`);
       return null;
     }
-    const obj = ev.data.object as unknown as Record<string, unknown>;
     const base = { id: ev.id, raw: ev };
+    // v2 "thin" events (a v2 event destination) carry no data.object, only the related object's id
+    const thin = ev as unknown as { object?: string; type: string; related_object?: { id?: string } | null };
+    if (thin.object === 'v2.core.event') {
+      const acct = thin.related_object?.id;
+      if (thin.type.startsWith('v2.core.account') && acct?.startsWith('acct_')) return { ...base, type: 'account.updated', accountId: acct, accountState: await this.accountState(acct) };
+      return { ...base, type: 'other' };
+    }
+    const obj = ev.data.object as unknown as Record<string, unknown>;
     switch (ev.type as string) {
       case 'payment_intent.succeeded':
         return { ...base, type: 'payment.captured', providerIntentId: obj.id as string, amountCents: obj.amount_received as number };
@@ -168,7 +227,7 @@ export class StripePaymentProvider implements PaymentProvider {
       case 'transfer.failed':
         return { ...base, type: 'transfer.failed', providerTransferId: obj.id as string };
       case 'account.updated':
-        return { ...base, type: 'account.updated', accountId: obj.id as string };
+        return { ...base, type: 'account.updated', accountId: obj.id as string, accountState: await this.accountState(obj.id as string, obj) };
       default:
         return { ...base, type: 'other' };
     }

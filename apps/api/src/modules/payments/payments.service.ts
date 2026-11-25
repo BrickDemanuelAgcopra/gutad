@@ -457,13 +457,16 @@ export class PaymentsService {
       return this.approvals.submit(user, { kind: 'BANK_ACCOUNT_CHANGE', summary: `Replace the payout account of ${s.legalName}`, organizationId: s.organizationId, subjectType: 'legal_seller', subjectId: s.id, payload: { sellerId: s.id, reconnect: true }, reason: opts?.reason || 'Merchant asked to connect a different payout account', dedupeKey: `bank:${s.id}` });
     }
     const web = loadConfig().PUBLIC_WEB_URL;
-    const res = await this.provider.createConnectedAccount({ legalName: s.legalName, email: s.billingContact || user.email, country: s.country, returnUrl: `${web}${opts?.returnPath || '/merchant/payouts'}?done=1`, refreshUrl: `${web}${opts?.returnPath || '/merchant/payouts'}?refresh=1` });
+    // Unfinished or restricted onboarding resumes on the same processor account instead of opening another one;
+    // an approved reconnect of a COMPLETE account gets a new account.
+    const resume = s.payoutAccountId && s.payoutProvider === this.provider.name && s.payoutOnboardingState !== 'COMPLETE' ? s.payoutAccountId : null;
+    const res = await this.provider.createConnectedAccount({ legalName: s.legalName, email: s.billingContact || user.email, country: s.country, returnUrl: `${web}${opts?.returnPath || '/merchant/payouts'}?done=1`, refreshUrl: `${web}${opts?.returnPath || '/merchant/payouts'}?refresh=1`, existingAccountId: resume });
     const complete = !res.onboardingUrl; // mock completes instantly
     await this.db
       .update(legalSellers)
       .set({ payoutProvider: this.provider.name, payoutAccountId: res.accountId, payoutOnboardingState: complete ? 'COMPLETE' : 'PENDING' })
       .where(eq(legalSellers.id, legalSellerId));
-    await this.audit.log({ organizationId: s.organizationId, actorId: user.sub, action: 'seller.payout_onboard', entityType: 'legal_seller', entityId: s.id, after: { accountId: res.accountId } });
+    await this.audit.log({ organizationId: s.organizationId, actorId: user.sub, action: 'seller.payout_onboard', entityType: 'legal_seller', entityId: s.id, after: { accountId: res.accountId, resumed: !!resume } });
     return { accountId: res.accountId, onboardingUrl: res.onboardingUrl, state: complete ? 'COMPLETE' : 'PENDING' };
   }
 
@@ -525,9 +528,11 @@ export class PaymentsService {
       }
     }
     if (ev.type === 'account.updated' && ev.accountId) {
+      // Sellers are transfer recipients (Accounts v2): they never charge cards, so `charges_enabled` stays false.
+      // The provider resolves the transfer capability; the flag check remains for the mock and events stored before.
       const raw = ev.raw as { data?: { object?: { charges_enabled?: boolean; payouts_enabled?: boolean } } };
-      const ok = raw?.data?.object?.charges_enabled && raw?.data?.object?.payouts_enabled;
-      await this.db.update(legalSellers).set({ payoutOnboardingState: ok ? 'COMPLETE' : 'RESTRICTED' }).where(eq(legalSellers.payoutAccountId, ev.accountId));
+      const state = ev.accountState ?? (raw?.data?.object?.charges_enabled && raw?.data?.object?.payouts_enabled ? 'COMPLETE' : 'RESTRICTED');
+      await this.db.update(legalSellers).set({ payoutOnboardingState: state }).where(eq(legalSellers.payoutAccountId, ev.accountId));
     }
   }
 
