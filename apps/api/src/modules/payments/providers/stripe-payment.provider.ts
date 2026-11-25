@@ -163,16 +163,22 @@ export class StripePaymentProvider implements PaymentProvider {
     return { accountId, onboardingUrl: l.url };
   }
 
-  /** Whether the platform can transfer to the account. `snapshot` is the v1 account from `account.updated`, used if the v2 read fails. */
+  /**
+   * Whether the platform can transfer to the account. `snapshot` is the v1 account carried by `account.updated`: signed,
+   * and taken when the change happened, so its `transfers` capability wins. A separate v2 read made at that moment
+   * reported the capability as not active while the event already said active (2026-11-25), so the v2 read is only
+   * for thin events, which carry no account.
+   */
   private async accountState(accountId: string, snapshot?: Record<string, unknown>): Promise<ProviderEvent['accountState']> {
+    const fromSnapshot = stateOf((snapshot?.capabilities as Record<string, string> | undefined)?.transfers);
+    if (fromSnapshot) return fromSnapshot;
     try {
       const a = await this.v2<V2Account>('GET', `/v2/core/accounts/${encodeURIComponent(accountId)}?include=configuration.recipient`);
-      const s = stateOf(a.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status);
-      if (s) return s;
+      return stateOf(a.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status);
     } catch (e) {
       this.log.warn(`v2 account ${accountId}: ${(e as Error).message}`);
+      return undefined;
     }
-    return stateOf((snapshot?.capabilities as Record<string, string> | undefined)?.transfers);
   }
 
   async transfer(input: { accountId: string; amountCents: number; currency: string; idempotencyKey: string; description: string }) {

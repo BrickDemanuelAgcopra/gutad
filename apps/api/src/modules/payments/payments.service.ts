@@ -531,8 +531,10 @@ export class PaymentsService {
       // Sellers are transfer recipients (Accounts v2): they never charge cards, so `charges_enabled` stays false.
       // The provider resolves the transfer capability; the flag check remains for the mock and events stored before.
       const raw = ev.raw as { data?: { object?: { charges_enabled?: boolean; payouts_enabled?: boolean } } };
-      const state = ev.accountState ?? (raw?.data?.object?.charges_enabled && raw?.data?.object?.payouts_enabled ? 'COMPLETE' : 'RESTRICTED');
-      await this.db.update(legalSellers).set({ payoutOnboardingState: state }).where(eq(legalSellers.payoutAccountId, ev.accountId));
+      const obj = raw?.data?.object;
+      // unknown (a thin event whose account could not be read): leave the state as it is
+      const state = ev.accountState ?? (obj ? (obj.charges_enabled && obj.payouts_enabled ? 'COMPLETE' : 'RESTRICTED') : null);
+      if (state) await this.db.update(legalSellers).set({ payoutOnboardingState: state }).where(eq(legalSellers.payoutAccountId, ev.accountId));
     }
   }
 
