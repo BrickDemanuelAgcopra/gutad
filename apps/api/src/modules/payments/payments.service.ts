@@ -35,14 +35,16 @@ export class PaymentsService {
   /** Resolve the connected payout account for a location's legal seller (destination charges). */
   async destinationFor(locationId: string, tx: DbOrTx = this.db): Promise<string | null> {
     const [row] = await tx
-      .select({ acct: legalSellers.payoutAccountId, state: legalSellers.payoutOnboardingState, orgId: locations.organizationId })
+      .select({ acct: legalSellers.payoutAccountId, state: legalSellers.payoutOnboardingState, payoutProvider: legalSellers.payoutProvider, orgId: locations.organizationId })
       .from(locations)
       .leftJoin(legalSellers, eq(legalSellers.id, locations.legalSellerId))
       .where(eq(locations.id, locationId))
       .limit(1);
     // Gutad's own locations are charged straight to the platform account (Gutad is the seller of record)
     if (row && (await this.firstParty.isFirstPartyOrg(row.orgId, tx))) return null;
-    return row?.state === 'COMPLETE' && row.acct ? row.acct : null;
+    // an account made with another processor (e.g. seeded mock accounts on a Stripe deployment) can't receive this one's
+    // destination charges: charge the platform instead and settle the seller through payouts
+    return row?.state === 'COMPLETE' && row.acct && row.payoutProvider === this.provider.name ? row.acct : null;
   }
 
   /**
