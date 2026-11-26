@@ -10,7 +10,7 @@ import { PrintButton } from '@/components/capacity-printers';
 import { CourierArrivals, RunningLate } from '@/components/courier-arrivals';
 
 interface Line { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null; status: string; label: string | null }
-interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; scheduledFor: string | null; createdAt: string; pickupCode: string | null; specialInstructions: string | null; lines: Line[]; delivery: { status: string; driverId: string | null } | null; deliveryAddress: { line1?: string; city?: string; postalCode?: string; instructions?: string } | null }
+interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; scheduledFor: string | null; createdAt: string; pickupCode: string | null; specialInstructions: string | null; lines: Line[]; delivery: { status: string; driverId: string | null; fleet?: string } | null; deliveryAddress: { line1?: string; city?: string; postalCode?: string; instructions?: string } | null }
 
 /** Tablet inbox: acknowledge, accept/reject, adjust time, mark ready, hand off, throttle/pause. Polls every 4s; the layout's NewOrderAlarm rings for new orders. */
 export default function OrdersInbox() {
@@ -107,7 +107,8 @@ const COURIER_STATUS: Record<string, { text: string; tone: string }> = {
 function FulfillmentBanner({ o }: { o: Order }) {
   if (o.fulfillmentType === 'DELIVERY') {
     const a = o.deliveryAddress;
-    const c = o.delivery ? COURIER_STATUS[o.delivery.status] : o.status === 'SUBMITTED' ? COURIER_STATUS.QUOTED : null;
+    const partner = o.delivery?.fleet === 'PARTNER';
+    const c = o.delivery ? (partner && ['REQUESTED', 'UNASSIGNED'].includes(o.delivery.status) ? { text: 'Courier requested from the delivery partner; waiting for them to assign one', tone: 'text-amber-700' } : partner && o.delivery.status === 'ASSIGNED' ? { text: 'Partner courier assigned and on the way to you', tone: 'text-green-700' } : COURIER_STATUS[o.delivery.status]) : o.status === 'SUBMITTED' ? COURIER_STATUS.QUOTED : null;
     return (
       <div className="my-2 rounded-lg border-2 border-blue-200 bg-blue-50 px-3 py-2">
         <div className="text-sm font-extrabold tracking-wide text-blue-800">🛵 DELIVERY</div>

@@ -18,7 +18,7 @@ interface Track {
   };
   ended: boolean; finished: boolean; stages: Stage[];
   next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | null };
-  courier: { status: string; firstName: string | null; vehicleType: string | null; etaAt: string | null; fleet: string; location: { lat: number; lng: number; at: string } | null; trackingUrl: string | null } | null;
+  courier: { status: string; assigned: boolean; partner: string | null; firstName: string | null; vehicleType: string | null; etaAt: string | null; fleet: string; location: { lat: number; lng: number; at: string } | null; trackingUrl: string | null } | null;
   review: { rating: number | null; body: string | null; reply: string | null; courierRating: number | null; foodRating: number | null; packagingRating: number | null; comment: string | null; at: string } | null;
 }
 
@@ -111,16 +111,16 @@ export default function MerchantOrderTrack() {
         <div className="space-y-4 md:col-span-2">
           {delivery && (
             <Card title="🛵 Courier">
-              {courier?.firstName ? (
+              {courier?.firstName || courier?.assigned ? (
                 <div className="space-y-1 text-sm">
-                  <div className="text-base font-semibold">{courier.firstName}{courier.vehicleType ? <span className="font-normal text-ink-500"> · {courier.vehicleType.toLowerCase()}</span> : null}</div>
+                  <div className="text-base font-semibold">{courier.firstName || 'Courier'}{courier.partner ? <span className="font-normal text-ink-500"> · via {courier.partner}</span> : null}{courier.vehicleType ? <span className="font-normal text-ink-500"> · {courier.vehicleType.toLowerCase()}</span> : null}</div>
                   <div>{courier.status === 'ASSIGNED' ? 'Heading to you' : courier.status === 'PICKED_UP' ? 'On the way to the customer' : courier.status === 'DELIVERED' ? 'Delivered' : courier.status}</div>
                   {courier.etaAt && courier.status !== 'DELIVERED' && <div className="text-ink-600">ETA {t(courier.etaAt)}</div>}
                   {courier.location && <div className="text-xs text-ink-500">Location updated {ago(courier.location.at)}</div>}
                   {courier.trackingUrl && <a className="text-xs text-brand-600 underline" href={courier.trackingUrl} target="_blank" rel="noreferrer">Live map</a>}
                 </div>
               ) : (
-                <p className="text-sm text-ink-600">{courier?.status === 'FAILED' ? 'No courier found. Support has been alerted.' : 'Not assigned yet. Offers go out as the food nears ready; Mark ready sends them right away.'}</p>
+                <p className="text-sm text-ink-600">{courier?.status === 'FAILED' ? 'No courier found. Support has been alerted.' : courier?.partner ? `Requested from ${courier.partner}; waiting for them to assign a courier.` : 'Not assigned yet. Offers go out as the food nears ready; Mark ready sends them right away.'}</p>
               )}
               {a?.line1 && <div className="mt-2 border-t border-ink-100 pt-2 text-sm"><div className="text-xs font-semibold uppercase text-ink-500">Drop-off</div>{a.line1}{a.line2 ? `, ${a.line2}` : ''}{a.city ? `, ${a.city}` : ''}{a.postalCode ? ` ${a.postalCode}` : ''}{a.instructions && <div className="text-xs italic text-ink-600">“{a.instructions}”</div>}</div>}
             </Card>

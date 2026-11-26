@@ -17,7 +17,7 @@ interface Track {
   };
   ended: boolean; finished: boolean; stages: Stage[];
   next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | null };
-  courier: { status: string; firstName: string | null; vehicleType: string | null; etaAt: string | null; location: { at: string } | null } | null;
+  courier: { status: string; assigned: boolean; partner: string | null; firstName: string | null; vehicleType: string | null; etaAt: string | null; location: { at: string } | null } | null;
   review: { rating: number | null; body: string | null; courierRating: number | null; foodRating: number | null; comment: string | null } | null;
 }
 
@@ -110,13 +110,13 @@ function MerchantOrderTrack() {
 
       {delivery && (
         <Card title="🛵 Courier">
-          {courier?.firstName ? (
+          {courier?.firstName || courier?.assigned ? (
             <>
-              <Text style={{ fontWeight: '700', fontSize: 16 }}>{courier.firstName}{courier.vehicleType ? ` · ${courier.vehicleType.toLowerCase()}` : ''}</Text>
+              <Text style={{ fontWeight: '700', fontSize: 16 }}>{courier.firstName || 'Courier'}{courier.partner ? ` · via ${courier.partner}` : ''}{courier.vehicleType ? ` · ${courier.vehicleType.toLowerCase()}` : ''}</Text>
               <Text>{courier.status === 'ASSIGNED' ? 'Heading to you' : courier.status === 'PICKED_UP' ? 'On the way to the customer' : courier.status === 'DELIVERED' ? 'Delivered' : courier.status}</Text>
               {!!courier.etaAt && courier.status !== 'DELIVERED' && <Muted>ETA {t(courier.etaAt)}</Muted>}
             </>
-          ) : <Muted>{courier?.status === 'FAILED' ? 'No courier found. Support has been alerted.' : 'Not assigned yet. Offers go out as the food nears ready; Mark ready sends them right away.'}</Muted>}
+          ) : <Muted>{courier?.status === 'FAILED' ? 'No courier found. Support has been alerted.' : courier?.partner ? `Requested from ${courier.partner}; waiting for them to assign a courier.` : 'Not assigned yet. Offers go out as the food nears ready; Mark ready sends them right away.'}</Muted>}
           {!!o.deliveryAddress?.line1 && <Text style={{ marginTop: 6 }}>Drop-off: {o.deliveryAddress.line1}{o.deliveryAddress.city ? `, ${o.deliveryAddress.city}` : ''}{o.deliveryAddress.instructions ? `\n“${o.deliveryAddress.instructions}”` : ''}</Text>}
         </Card>
       )}

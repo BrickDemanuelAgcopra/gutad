@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx, Tx } from '../../db/db.module';
-import { checkoutGroups, journalEntries, orderPaymentAllocations, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods, reviews, deliveryReviews } from '../../db/schema';
+import { checkoutGroups, journalEntries, orderPaymentAllocations, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods, reviews, deliveryReviews, deliveryEvents } from '../../db/schema';
 import { chefCancellationRefund, DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
@@ -42,6 +42,9 @@ export interface CheckoutInput {
 
 /** Internal actor for automatic transitions (auto-accept). */
 const SYSTEM_ACTOR = { sub: null as unknown as string, email: 'system', roles: ['PLATFORM_ADMIN'], orgs: {} } as JwtPayload;
+
+/** How partner fleets are named to restaurant staff. */
+const PARTNER_LABEL: Record<string, string> = { mock: 'the test courier service', 'mock-b': 'the test courier service', doordash: 'DoorDash', uber: 'Uber' };
 
 @Injectable()
 export class OrdersService {
@@ -342,13 +345,17 @@ export class OrdersService {
     const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
     const tracking = job ? await this.delivery.track(job.id).catch(() => null) : null;
     const courier = job?.driverId ? (await this.db.select({ name: users.name, vehicleType: drivers.vehicleType }).from(drivers).innerJoin(users, eq(users.id, drivers.userId)).where(eq(drivers.id, job.driverId)).limit(1))[0] ?? null : null;
+    // a partner courier (DoorDash Drive, Uber Direct, the mock) is not a Gutad driver: its name arrives on the delivery events
+    const assigned = !!job && ['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(job.status);
+    const partnerName = job && !courier && assigned ? ((await this.db.select({ n: sql<string | null>`${deliveryEvents.data}->>'driverName'` }).from(deliveryEvents).where(and(eq(deliveryEvents.deliveryJobId, job.id), sql`${deliveryEvents.data} ? 'driverName'`)).orderBy(desc(deliveryEvents.createdAt)).limit(1))[0]?.n ?? null) : null;
     const [rev] = await this.db.select({ id: reviews.id, rating: reviews.rating, body: reviews.body, reply: reviews.merchantReply, at: reviews.createdAt }).from(reviews).where(eq(reviews.orderId, orderId)).orderBy(desc(reviews.createdAt)).limit(1);
     const [drev] = await this.db.select({ rating: deliveryReviews.rating, foodRating: deliveryReviews.foodRating, packagingRating: deliveryReviews.packagingRating, comment: deliveryReviews.comment, at: deliveryReviews.createdAt }).from(deliveryReviews).where(eq(deliveryReviews.orderId, orderId)).orderBy(desc(deliveryReviews.createdAt)).limit(1);
     const reviewAt = rev?.at ?? drev?.at ?? null;
     const done = ['COLLECTED', 'COMPLETED', 'PARTIALLY_FULFILLED'].includes(o.status);
     const ended = ['REJECTED', 'CANCELED'].includes(o.status);
     const delivery = o.fulfillmentType === 'DELIVERY';
-    const firstName = courier?.name?.split(' ')[0] ?? null;
+    const firstName = courier?.name?.split(' ')[0] ?? partnerName?.split(' ')[0] ?? null;
+    const partnerLabel = job?.fleet === 'PARTNER' ? PARTNER_LABEL[job.provider] ?? 'delivery partner' : null;
 
     const stages: { key: string; label: string; at: Date | null; detail?: string | null }[] = [
       { key: 'PLACED', label: 'Order placed', at: o.createdAt },
@@ -357,7 +364,7 @@ export class OrdersService {
     ];
     if (delivery) {
       stages.push(
-        { key: 'COURIER_ASSIGNED', label: 'Courier assigned', at: job?.assignedAt ?? null, detail: courier ? `${firstName ?? 'Courier'} · ${courier.vehicleType.toLowerCase()}` : null },
+        { key: 'COURIER_ASSIGNED', label: 'Courier assigned', at: job?.assignedAt ?? null, detail: courier ? `${firstName ?? 'Courier'} · ${courier.vehicleType.toLowerCase()}` : partnerLabel && assigned ? `${partnerName ?? 'Courier'} · via ${partnerLabel}` : null },
         { key: 'COURIER_ARRIVED', label: 'Courier at your restaurant', at: job?.arrivedPickupAt ?? null },
         { key: 'PICKED_UP', label: 'Courier picked up the order', at: job?.pickedUpAt ?? o.collectedAt ?? null },
         { key: 'DELIVERED', label: 'Delivered to the customer', at: job?.deliveredAt ?? null },
@@ -375,7 +382,7 @@ export class OrdersService {
     if (ended) next = { text: o.status === 'REJECTED' ? `Rejected${o.rejectReason ? `: ${o.rejectReason}` : ''}. The customer's payment hold was released.` : `Canceled${o.cancelReason ? `: ${o.cancelReason}` : ''}.`, action: null };
     else if (o.status === 'SUBMITTED') next = { text: 'New order: check the items, pick a ready time and accept.', action: 'ACCEPT' };
     else if (['ACCEPTED', 'PREPARING'].includes(o.status)) next = { text: delivery ? 'Cook the order, then tap Mark ready. Marking ready also sends courier offers right away.' : 'Cook the order, then tap Mark ready so the customer knows to come in.', action: 'READY' };
-    else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : { text: 'Bag the order and keep it warm. We are finding a courier.', action: 'HANDOFF' };
+    else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : job?.status === 'PICKED_UP' || job?.status === 'DELIVERED' ? { text: 'The courier has the order. Tap Courier collected to close it on your side.', action: 'HANDOFF' } : { text: partnerLabel ? `Bag the order and keep it warm. A courier has been requested from ${partnerLabel}.` : 'Bag the order and keep it warm. We are finding a courier.', action: 'HANDOFF' };
     else if (o.status === 'READY') next = { text: o.fulfillmentType === 'DINE_IN' ? 'Serve it, then tap Served.' : `Waiting for the customer. Check their pickup code${o.pickupCode ? ` (${o.pickupCode})` : ''}, then tap Handed to customer.`, action: 'HANDOFF' };
     else if (delivery && !finished) next = { text: 'Out for delivery. Nothing to do; this page updates when it arrives.', action: null };
     else if (!reviewAt) next = { text: 'All done. The customer has been asked for a review; it shows here when they leave one.', action: null };
@@ -387,7 +394,7 @@ export class OrdersService {
       finished,
       stages: stages.map((st, i) => ({ ...st, state: ended ? (st.at ? 'done' : 'skipped') : i < current ? 'done' : i === current ? 'current' : 'todo' })),
       next,
-      courier: job ? { status: job.status, firstName, vehicleType: courier?.vehicleType ?? null, etaAt: job.etaAt, fleet: job.fleet, location: tracking?.courierLocation ?? null, trackingUrl: job.trackingUrl } : null,
+      courier: job ? { status: job.status, assigned, partner: partnerLabel, firstName, vehicleType: courier?.vehicleType ?? null, etaAt: job.etaAt, fleet: job.fleet, location: tracking?.courierLocation ?? null, trackingUrl: job.trackingUrl } : null,
       review: rev || drev ? { rating: rev?.rating ?? null, body: rev?.body ?? null, reply: rev?.reply ?? null, reviewId: rev?.id ?? null, courierRating: drev?.rating ?? null, foodRating: drev?.foodRating ?? null, packagingRating: drev?.packagingRating ?? null, comment: drev?.comment ?? null, at: reviewAt } : null,
     };
   }
