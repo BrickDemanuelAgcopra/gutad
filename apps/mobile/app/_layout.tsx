@@ -20,6 +20,7 @@ export default function RootLayout() {
         <Stack.Screen name="merchant/index" options={{ title: 'Merchant tablet' }} />
         <Stack.Screen name="merchant/host" options={{ title: 'Host stand' }} />
         <Stack.Screen name="merchant/kitchen" options={{ title: 'Kitchen' }} />
+        <Stack.Screen name="merchant/order/[id]" options={{ title: 'Order tracking' }} />
         <Stack.Screen name="driver/index" options={{ title: 'Courier' }} />
         <Stack.Screen name="kiosk/[slug]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="ops/index" options={{ title: 'Gutad Ops' }} />

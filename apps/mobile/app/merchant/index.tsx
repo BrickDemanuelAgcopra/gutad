@@ -1,7 +1,8 @@
 import { WorkspaceGate } from '@/ops';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
-import { Link } from 'expo-router';
+import { Link, router } from 'expo-router';
+import { MerchantOrderAlarm } from '@/merchant-order-alarm';
 import { api, money, when } from '@/api';
 import { useAction, useApi } from '@/hooks';
 import { useMerchantLocation } from '@/merchant';
@@ -34,12 +35,14 @@ function MerchantInbox() {
           {o.lines.map((l) => <Text key={l.id} style={{ marginTop: 4 }}><Text style={{ fontWeight: '700' }}>{l.quantity}× </Text>{l.name}{l.modifiers?.length ? <Text style={{ color: C.ink5 }}> — {l.modifiers.map((m) => m.name).join(', ')}</Text> : null}{l.specialInstructions ? <Text style={{ color: C.warn }}> “{l.specialInstructions}”</Text> : null}</Text>)}
           <View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>{money(o.totalCents)}</Text>{o.pickupCode && <Text style={{ fontFamily: 'monospace' }}>code {o.pickupCode}</Text>}</View>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-            {o.status === 'SUBMITTED' && (<><Button title="Accept" onPress={() => act(() => api.post(`/orders/${o.id}/accept`, { prepMinutes: Number(prep) || 20 }))} /><Button title="Reject" variant="danger" onPress={() => act(() => api.post(`/orders/${o.id}/reject`, { reason: 'Too busy' }))} /></>)}
+            {o.status === 'SUBMITTED' && (<><Button title="Accept" onPress={() => act(async () => { await api.post(`/orders/${o.id}/accept`, { prepMinutes: Number(prep) || 20 }); router.push(`/merchant/order/${o.id}`); })} /><Button title="Reject" variant="danger" onPress={() => act(() => api.post(`/orders/${o.id}/reject`, { reason: 'Too busy' }))} /></>)}
             {['ACCEPTED', 'PREPARING'].includes(o.status) && (<><Button title="Ready" onPress={() => act(() => api.post(`/orders/${o.id}/ready`, {}))} /><Button title="+15 min" variant="secondary" onPress={() => act(() => api.post(`/orders/${o.id}/prep-time`, { prepMinutes: 15 }))} /></>)}
+            <Button title={o.status === 'SUBMITTED' ? 'Details' : 'Track →'} variant="ghost" onPress={() => router.push(`/merchant/order/${o.id}`)} />
             {o.status === 'READY' && <Button title={o.fulfillmentType === 'DELIVERY' ? 'Courier collected' : 'Handed off'} onPress={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))} />}
           </View>
         </Card>
       )} />
+      <MerchantOrderAlarm />
     </View>
   );
 }

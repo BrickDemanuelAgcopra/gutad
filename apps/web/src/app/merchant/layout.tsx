@@ -20,7 +20,8 @@ const NAV = [
 
 export default function MerchantLayout({ children }: { children: React.ReactNode }) {
   const { user, ready, isStaff, can } = useSession();
-  const path = usePathname();
+  // a detail page (e.g. /merchant/orders/<id>) belongs to its section for role checks, plan locks and the nav highlight
+  const path = ((p: string) => (p.startsWith('/merchant/orders/') ? '/merchant/orders' : p))(usePathname() || '');
   const sup = user?.supportAccess && new Date(user.supportAccess.until) > new Date() ? user.supportAccess : null;
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(true);

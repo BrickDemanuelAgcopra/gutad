@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx, Tx } from '../../db/db.module';
-import { checkoutGroups, journalEntries, orderPaymentAllocations, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods } from '../../db/schema';
+import { checkoutGroups, journalEntries, orderPaymentAllocations, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods, reviews, deliveryReviews } from '../../db/schema';
 import { chefCancellationRefund, DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
@@ -318,15 +318,78 @@ export class OrdersService {
     if (!locs.length) return [];
     const soon = new Date(Date.now() + 45 * 60_000);
     const rows = await this.db.select().from(orders).where(and(inArray(orders.locationId, locs.map((l) => l.id)), eq(orders.status, 'SUBMITTED'), or(isNull(orders.scheduledFor), lt(orders.scheduledFor, soon)))).orderBy(orders.createdAt).limit(50);
-    const lines = rows.length ? await this.db.select({ orderId: orderLines.orderId, name: orderLines.name, quantity: orderLines.quantity }).from(orderLines).where(inArray(orderLines.orderId, rows.map((r) => r.id))) : [];
+    const lines = rows.length ? await this.db.select({ orderId: orderLines.orderId, name: orderLines.name, quantity: orderLines.quantity, modifiers: orderLines.modifiers, specialInstructions: orderLines.specialInstructions, lineTotalCents: orderLines.lineTotalCents, allergens: orderLines.allergens }).from(orderLines).where(inArray(orderLines.orderId, rows.map((r) => r.id))) : [];
     return rows.map((o) => {
       const l = locs.find((x) => x.id === o.locationId)!;
       return {
         id: o.id, number: o.number, locationId: o.locationId, locationName: l.name, fulfillmentType: o.fulfillmentType, channel: o.channel, guestName: o.guestName, totalCents: o.totalCents,
         createdAt: o.createdAt, scheduledFor: o.scheduledFor, rejectAt: o.scheduledFor ? null : new Date(o.createdAt.getTime() + l.timeout * 4 * 60_000),
-        lines: lines.filter((x) => x.orderId === o.id).map((x) => ({ name: x.name, quantity: x.quantity })),
+        subtotalCents: o.subtotalCents, taxCents: o.taxCents, deliveryFeeCents: o.deliveryFeeCents, tipCents: o.tipCents, discountCents: o.discountCents,
+        specialInstructions: o.specialInstructions, deliveryAddress: o.deliveryAddress as { line1?: string; line2?: string; city?: string; postalCode?: string; instructions?: string } | null,
+        lines: lines.filter((x) => x.orderId === o.id).map((x) => ({ name: x.name, quantity: x.quantity, modifiers: ((x.modifiers as { name: string }[] | null) || []).map((m) => m.name), specialInstructions: x.specialInstructions, lineTotalCents: x.lineTotalCents, allergens: x.allergens })),
       };
     });
+  }
+
+  /**
+   * Merchant tracking for one order, from acceptance to the customer's review: the stages it goes through (with times),
+   * the one thing the kitchen should do next, the courier's progress, and the review once it lands. Polled by the
+   * tracking page on web and mobile.
+   */
+  async trackForMerchant(user: JwtPayload, orderId: string) {
+    const o = await this.requireStaffOrder(user, orderId);
+    const order = await this.present(orderId);
+    const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+    const tracking = job ? await this.delivery.track(job.id).catch(() => null) : null;
+    const courier = job?.driverId ? (await this.db.select({ name: users.name, vehicleType: drivers.vehicleType }).from(drivers).innerJoin(users, eq(users.id, drivers.userId)).where(eq(drivers.id, job.driverId)).limit(1))[0] ?? null : null;
+    const [rev] = await this.db.select({ id: reviews.id, rating: reviews.rating, body: reviews.body, reply: reviews.merchantReply, at: reviews.createdAt }).from(reviews).where(eq(reviews.orderId, orderId)).orderBy(desc(reviews.createdAt)).limit(1);
+    const [drev] = await this.db.select({ rating: deliveryReviews.rating, foodRating: deliveryReviews.foodRating, packagingRating: deliveryReviews.packagingRating, comment: deliveryReviews.comment, at: deliveryReviews.createdAt }).from(deliveryReviews).where(eq(deliveryReviews.orderId, orderId)).orderBy(desc(deliveryReviews.createdAt)).limit(1);
+    const reviewAt = rev?.at ?? drev?.at ?? null;
+    const done = ['COLLECTED', 'COMPLETED', 'PARTIALLY_FULFILLED'].includes(o.status);
+    const ended = ['REJECTED', 'CANCELED'].includes(o.status);
+    const delivery = o.fulfillmentType === 'DELIVERY';
+    const firstName = courier?.name?.split(' ')[0] ?? null;
+
+    const stages: { key: string; label: string; at: Date | null; detail?: string | null }[] = [
+      { key: 'PLACED', label: 'Order placed', at: o.createdAt },
+      { key: 'ACCEPTED', label: 'Accepted, kitchen preparing', at: o.acceptedAt },
+      { key: 'READY', label: delivery ? 'Food ready for the courier' : o.fulfillmentType === 'DINE_IN' ? 'Food ready to serve' : 'Ready for the customer to collect', at: o.readyAt },
+    ];
+    if (delivery) {
+      stages.push(
+        { key: 'COURIER_ASSIGNED', label: 'Courier assigned', at: job?.assignedAt ?? null, detail: courier ? `${firstName ?? 'Courier'} · ${courier.vehicleType.toLowerCase()}` : null },
+        { key: 'COURIER_ARRIVED', label: 'Courier at your restaurant', at: job?.arrivedPickupAt ?? null },
+        { key: 'PICKED_UP', label: 'Courier picked up the order', at: job?.pickedUpAt ?? o.collectedAt ?? null },
+        { key: 'DELIVERED', label: 'Delivered to the customer', at: job?.deliveredAt ?? null },
+      );
+    } else {
+      stages.push({ key: 'COLLECTED', label: o.fulfillmentType === 'DINE_IN' ? 'Served' : 'Collected by the customer', at: o.collectedAt ?? (done ? o.completedAt : null) });
+    }
+    stages.push({ key: 'REVIEWED', label: 'Customer review', at: reviewAt });
+    // a later stage that happened implies the earlier ones did, even when a timestamp was never written (e.g. no arrival scan)
+    let current = stages.findIndex((st, i) => !st.at && !stages.slice(i + 1).some((x) => x.at));
+    if (current === -1) current = stages.length;
+    const finished = delivery ? job?.status === 'DELIVERED' || (done && !job) : done;
+
+    let next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | null } = { text: '', action: null };
+    if (ended) next = { text: o.status === 'REJECTED' ? `Rejected${o.rejectReason ? `: ${o.rejectReason}` : ''}. The customer's payment hold was released.` : `Canceled${o.cancelReason ? `: ${o.cancelReason}` : ''}.`, action: null };
+    else if (o.status === 'SUBMITTED') next = { text: 'New order: check the items, pick a ready time and accept.', action: 'ACCEPT' };
+    else if (['ACCEPTED', 'PREPARING'].includes(o.status)) next = { text: delivery ? 'Cook the order, then tap Mark ready. Marking ready also sends courier offers right away.' : 'Cook the order, then tap Mark ready so the customer knows to come in.', action: 'READY' };
+    else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : { text: 'Bag the order and keep it warm. We are finding a courier.', action: 'HANDOFF' };
+    else if (o.status === 'READY') next = { text: o.fulfillmentType === 'DINE_IN' ? 'Serve it, then tap Served.' : `Waiting for the customer. Check their pickup code${o.pickupCode ? ` (${o.pickupCode})` : ''}, then tap Handed to customer.`, action: 'HANDOFF' };
+    else if (delivery && !finished) next = { text: 'Out for delivery. Nothing to do; this page updates when it arrives.', action: null };
+    else if (!reviewAt) next = { text: 'All done. The customer has been asked for a review; it shows here when they leave one.', action: null };
+    else next = { text: 'All done and reviewed.', action: null };
+
+    return {
+      order,
+      ended,
+      finished,
+      stages: stages.map((st, i) => ({ ...st, state: ended ? (st.at ? 'done' : 'skipped') : i < current ? 'done' : i === current ? 'current' : 'todo' })),
+      next,
+      courier: job ? { status: job.status, firstName, vehicleType: courier?.vehicleType ?? null, etaAt: job.etaAt, fleet: job.fleet, location: tracking?.courierLocation ?? null, trackingUrl: job.trackingUrl } : null,
+      review: rev || drev ? { rating: rev?.rating ?? null, body: rev?.body ?? null, reply: rev?.reply ?? null, reviewId: rev?.id ?? null, courierRating: drev?.rating ?? null, foodRating: drev?.foodRating ?? null, packagingRating: drev?.packagingRating ?? null, comment: drev?.comment ?? null, at: reviewAt } : null,
+    };
   }
 
   async inbox(user: JwtPayload, locationId: string, status?: OrderStatus[]) {

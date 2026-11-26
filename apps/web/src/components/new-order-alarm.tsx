@@ -6,7 +6,40 @@ import { useApi, useLocalState } from '@/lib/hooks';
 
 export interface PendingOrder {
   id: string; number: string; locationId: string; locationName: string; fulfillmentType: string; channel: string; guestName: string | null;
-  totalCents: number; createdAt: string; scheduledFor: string | null; rejectAt: string | null; lines: { name: string; quantity: number }[];
+  totalCents: number; createdAt: string; scheduledFor: string | null; rejectAt: string | null;
+  subtotalCents?: number; taxCents?: number; deliveryFeeCents?: number; tipCents?: number; discountCents?: number; specialInstructions?: string | null;
+  deliveryAddress?: { line1?: string; line2?: string; city?: string; postalCode?: string; instructions?: string } | null;
+  lines: { name: string; quantity: number; modifiers?: string[]; specialInstructions?: string | null; lineTotalCents?: number; allergens?: string[] | null }[];
+}
+
+const PREP_CHOICES = [10, 15, 20, 30, 45];
+const REJECT_REASONS = ['Too busy', 'Item unavailable', 'Closing soon', 'Cannot fulfill delivery'];
+
+/** Everything needed to decide: items with options and notes, allergens, the drop-off address and the money. Collapsed when several orders wait. */
+function OrderDetails({ o, full }: { o: PendingOrder; full: boolean }) {
+  const a = o.deliveryAddress;
+  const lines = full ? o.lines : o.lines.slice(0, 4);
+  return (
+    <>
+      {o.fulfillmentType === 'DELIVERY' && a?.line1 && <div className="text-sm text-ink-800">To {a.line1}{a.line2 ? `, ${a.line2}` : ''}{a.city ? `, ${a.city}` : ''}{full && a.instructions ? <span className="block text-xs italic text-ink-600">“{a.instructions}”</span> : null}</div>}
+      <ul className="space-y-0.5 text-sm text-ink-800">
+        {lines.map((l, i) => (
+          <li key={i} className="flex justify-between gap-2">
+            <span>
+              <b>{l.quantity}×</b> {l.name}
+              {full && l.modifiers?.length ? <span className="text-ink-500"> — {l.modifiers.join(', ')}</span> : null}
+              {full && l.specialInstructions ? <span className="block text-xs italic text-amber-700">“{l.specialInstructions}”</span> : null}
+              {full && l.allergens?.length ? <span className="block text-xs text-red-700">Allergens: {l.allergens.join(', ')}</span> : null}
+            </span>
+            {full && l.lineTotalCents != null && <span className="text-ink-500">{money(l.lineTotalCents)}</span>}
+          </li>
+        ))}
+        {!full && o.lines.length > 4 && <li className="text-ink-500">+{o.lines.length - 4} more</li>}
+      </ul>
+      {full && o.specialInstructions && <div className="rounded bg-amber-50 px-2 py-1 text-sm italic text-amber-800">Order note: {o.specialInstructions}</div>}
+      {full && o.subtotalCents != null && <div className="text-xs text-ink-500">Subtotal {money(o.subtotalCents)} · tax {money(o.taxCents || 0)}{o.deliveryFeeCents ? ` · delivery ${money(o.deliveryFeeCents)}` : ''}{o.tipCents ? ` · tip ${money(o.tipCents)}` : ''}{o.discountCents ? ` · discount −${money(o.discountCents)}` : ''}</div>}
+    </>
+  );
 }
 
 /** Orders waiting for acceptance at every location this person works at, polled every 5 s. */
@@ -32,6 +65,9 @@ export function NewOrderAlarm({ pending, reload, onView }: { pending: PendingOrd
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [prep, setPrep] = useState<Record<string, number>>({});
+  const [details, setDetails] = useState<Set<string>>(new Set());
+  const [rejecting, setRejecting] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
   const notified = useRef<Set<string>>(new Set());
 
@@ -110,11 +146,22 @@ export function NewOrderAlarm({ pending, reload, onView }: { pending: PendingOrd
   const ack = (ids: string[]) => setAcked((a) => new Set([...a, ...ids]));
   const accept = async (o: PendingOrder) => {
     setBusy(o.id); setErr(null);
-    try { await api.post(`/orders/${o.id}/accept`, { prepMinutes: 20 }); ack([o.id]); await reload(); }
-    catch (e) { setErr((e as Error).message || 'Could not accept the order'); }
+    try {
+      await api.post(`/orders/${o.id}/accept`, { prepMinutes: prep[o.id] ?? 20 });
+      ack([o.id]); await reload();
+      // straight to the order's tracking page, so it's clear what happens next
+      onView(o); router.push(`/merchant/orders/${o.id}`);
+    } catch (e) { setErr((e as Error).message || 'Could not accept the order'); }
     finally { setBusy(null); }
   };
-  const view = (o: PendingOrder) => { ack(open.map((x) => x.id)); onView(o); router.push('/merchant/orders'); };
+  const reject = async (o: PendingOrder, reason: string) => {
+    setBusy(o.id); setErr(null);
+    try { await api.post(`/orders/${o.id}/reject`, { reason }); setRejecting(null); ack([o.id]); await reload(); }
+    catch (e) { setErr((e as Error).message || 'Could not reject the order'); }
+    finally { setBusy(null); }
+  };
+  const toggleDetails = (id: string) => setDetails((d) => { const n = new Set(d); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const view = (o: PendingOrder) => { ack(open.map((x) => x.id)); onView(o); router.push(`/merchant/orders/${o.id}`); };
   const enableAlerts = () => {
     setSoundOn(true);
     const a = audio.current || (audio.current = new Audio('/sounds/new-order.wav'));
@@ -145,12 +192,25 @@ export function NewOrderAlarm({ pending, reload, onView }: { pending: PendingOrd
                     </div>
                     <div className={`inline-block rounded-md px-2 py-0.5 text-sm font-extrabold tracking-wide ${o.fulfillmentType === 'DELIVERY' ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'}`}>{o.fulfillmentType === 'DELIVERY' ? '🛵 DELIVERY' : o.fulfillmentType === 'DINE_IN' ? '🍽️ DINE IN' : '🛍️ PICKUP'}</div>
                     <div className="text-sm text-ink-600">{o.locationName}{o.guestName ? ` · ${o.guestName}` : ''}{o.scheduledFor ? ` · scheduled ${new Date(o.scheduledFor).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}</div>
-                    <ul className="text-sm text-ink-800">{o.lines.slice(0, 5).map((l, i) => <li key={i}>{l.quantity} × {l.name}</li>)}{o.lines.length > 5 && <li className="text-ink-500">+{o.lines.length - 5} more</li>}</ul>
+                    <OrderDetails o={o} full={open.length === 1 || details.has(o.id)} />
+                    {open.length > 1 && <button className="text-sm font-semibold text-brand-600 underline" onClick={() => toggleDetails(o.id)}>{details.has(o.id) ? 'Hide details' : 'View details'}</button>}
                     {left !== null && <div className={`text-sm font-semibold ${left < 5 * 60_000 ? 'text-red-600' : 'text-ink-600'}`}>Auto-rejects in {Math.floor(left / 60_000)}:{String(Math.floor((left % 60_000) / 1000)).padStart(2, '0')}</div>}
-                    <div className="flex gap-2 pt-1">
-                      <button disabled={busy === o.id} onClick={() => void accept(o)} className="flex-1 rounded-xl bg-green-600 px-4 py-3 text-base font-bold text-white hover:bg-green-700 disabled:opacity-60">{busy === o.id ? 'Accepting…' : 'Accept (20 min)'}</button>
-                      <button onClick={() => view(o)} className="flex-1 rounded-xl border-2 border-ink-200 px-4 py-3 text-base font-semibold text-ink-800 hover:bg-ink-50">View order</button>
-                    </div>
+                    {rejecting === o.id ? (
+                      <div className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-2">
+                        <div className="text-sm font-semibold text-red-800">Why are you rejecting it? The customer is told and their payment hold is released.</div>
+                        <div className="flex flex-wrap gap-1">{REJECT_REASONS.map((r) => <button key={r} disabled={busy === o.id} onClick={() => void reject(o, r)} className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60">{r}</button>)}</div>
+                        <button className="text-xs text-ink-500 underline" onClick={() => setRejecting(null)}>Back</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex flex-wrap items-center gap-1 text-sm"><span className="mr-1 text-ink-600">Ready in</span>{PREP_CHOICES.map((m) => <button key={m} onClick={() => setPrep({ ...prep, [o.id]: m })} className={`rounded-lg px-2.5 py-1 font-semibold ${(prep[o.id] ?? 20) === m ? 'bg-ink-900 text-white' : 'bg-ink-100 text-ink-700 hover:bg-ink-200'}`}>{m}m</button>)}</div>
+                        <div className="flex gap-2 pt-1">
+                          <button disabled={busy === o.id} onClick={() => void accept(o)} className="flex-[2] rounded-xl bg-green-600 px-4 py-3 text-base font-bold text-white hover:bg-green-700 disabled:opacity-60">{busy === o.id ? 'Accepting…' : `Accept · ready in ${prep[o.id] ?? 20} min`}</button>
+                          <button onClick={() => view(o)} className="flex-1 rounded-xl border-2 border-ink-200 px-3 py-3 text-sm font-semibold text-ink-800 hover:bg-ink-50">Open order</button>
+                          <button onClick={() => setRejecting(o.id)} className="rounded-xl border-2 border-red-200 px-3 py-3 text-sm font-semibold text-red-700 hover:bg-red-50">Reject</button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 );
               })}

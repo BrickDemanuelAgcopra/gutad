@@ -1,5 +1,7 @@
 'use client';
 import { useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { api, money, when, ago } from '@/lib/api';
 import { useApi, useAction } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, statusTone, Tabs } from '@/components/ui';
@@ -13,6 +15,7 @@ interface Order { id: string; number: string; status: string; channel: string; f
 /** Tablet inbox: acknowledge, accept/reject, adjust time, mark ready, hand off, throttle/pause. Polls every 4s; the layout's NewOrderAlarm rings for new orders. */
 export default function OrdersInbox() {
   const { loc, reload: reloadLoc } = useMerchant();
+  const router = useRouter();
   const [tab, setTab] = useState('active');
   const status = tab === 'active' ? 'SUBMITTED,ACCEPTED,PREPARING,READY' : tab === 'scheduled' ? 'SUBMITTED' : 'COMPLETED,COLLECTED,CANCELED,REJECTED';
   const { data, reload } = useApi<Order[]>(loc ? `/locations/${loc.id}/orders?status=${status}` : null, { poll: 4000, deps: [loc?.id, status] });
@@ -44,8 +47,9 @@ export default function OrdersInbox() {
             <ul className="mt-2 space-y-1 text-sm">{o.lines.map((l) => <li key={l.id} className={l.status === 'UNAVAILABLE' ? 'text-red-600 line-through' : ''}><b>{l.quantity}×</b> {l.name}{l.label ? ` [${l.label}]` : ''}{l.modifiers?.length ? <span className="text-ink-500"> — {l.modifiers.map((m) => m.name).join(', ')}</span> : null}{l.specialInstructions && <div className="text-xs italic text-amber-700">“{l.specialInstructions}”</div>}</li>)}</ul>
             {o.specialInstructions && <p className="mt-1 text-xs italic text-amber-700">Order note: {o.specialInstructions}</p>}
             <div className="mt-2 flex items-center justify-between text-sm"><span className="font-semibold">{money(o.totalCents)}</span>{o.pickupCode && <span className="font-mono text-xs">code {o.pickupCode}</span>}</div>
+            <Link href={`/merchant/orders/${o.id}`} className="mt-2 block text-sm font-semibold text-brand-600 hover:underline">{o.status === 'SUBMITTED' ? 'View full details →' : 'Track order →'}</Link>
             <div className="mt-3 flex flex-wrap gap-1">
-              {o.status === 'SUBMITTED' && (<><Select value={prep} onChange={(e) => setPrep(Number(e.target.value))} className="w-24">{[10, 15, 20, 30, 45, 60].map((m) => <option key={m} value={m}>{m} min</option>)}</Select><Button disabled={busy} onClick={() => act(() => api.post(`/orders/${o.id}/accept`, { prepMinutes: prep }))}>Accept</Button><Button variant="danger" onClick={() => setReject(o)}>Reject</Button></>)}
+              {o.status === 'SUBMITTED' && (<><Select value={prep} onChange={(e) => setPrep(Number(e.target.value))} className="w-24">{[10, 15, 20, 30, 45, 60].map((m) => <option key={m} value={m}>{m} min</option>)}</Select><Button disabled={busy} onClick={() => act(async () => { await api.post(`/orders/${o.id}/accept`, { prepMinutes: prep }); router.push(`/merchant/orders/${o.id}`); })}>Accept</Button><Button variant="danger" onClick={() => setReject(o)}>Reject</Button></>)}
               {['ACCEPTED', 'PREPARING'].includes(o.status) && (<><Button onClick={() => act(() => api.post(`/orders/${o.id}/ready`, {}))}>Mark ready</Button><Button variant="secondary" onClick={() => act(() => api.post(`/orders/${o.id}/prep-time`, { prepMinutes: 15 }))}>+15 min</Button><PrintButton path={`/orders/${o.id}/print-tickets`} label="Print tickets" size="md" /></>)}
               {['ACCEPTED', 'PREPARING'].includes(o.status) && o.fulfillmentType === 'DELIVERY' && o.delivery && <div className="w-full"><RunningLate orderId={o.id} onDone={() => void reload()} /></div>}
               {o.status === 'READY' && <Button onClick={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))}>{o.fulfillmentType === 'DELIVERY' ? 'Courier collected' : 'Handed to customer'}</Button>}
