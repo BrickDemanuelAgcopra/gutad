@@ -288,6 +288,8 @@ export class CustomersService {
       const d = await this.cardSetup.describe(input.paymentMethodId);
       if (!d) throw new BadRequestException('The processor does not recognise this card');
       if (d.customerRef) await this.db.update(users).set({ paymentCustomerRef: d.customerRef }).where(and(eq(users.id, user.sub), isNull(users.paymentCustomerRef)));
+      // a card tokenized for one payment (checkout's "save this card") is single-use until it belongs to a customer
+      else await this.cardSetup.attach(user.sub, input.paymentMethodId).catch(() => { throw new BadRequestException({ message: 'This card can’t be saved. Enter it again to save it.', code: 'CARD_NOT_REUSABLE' }); });
       input = { ...input, brand: d.brand || 'card', last4: d.last4 || undefined, expMonth: d.expMonth ?? undefined, expYear: d.expYear ?? undefined };
     }
     const last4 = input.last4 || input.paymentMethodId.match(/(\d{4})$/)?.[1] || null;

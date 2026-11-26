@@ -68,6 +68,15 @@ export class CardSetupService {
     return { ...cfg, mode: 'elements' as const, setupIntentId: si.providerSetupId, clientSecret: si.clientSecret };
   }
 
+  /** Make a card tokenized at checkout reusable: attach it to this person's processor customer. */
+  async attach(userId: string, paymentMethodId: string): Promise<string> {
+    if (!this.provider.attachToCustomer) throw new BadRequestException('This processor cannot save cards');
+    const u = await this.customer(userId);
+    const r = await this.provider.attachToCustomer({ paymentMethodId, email: u.email, customerRef: u.ref });
+    await this.rememberCustomer(userId, r.customerRef, u.ref);
+    return r.customerRef;
+  }
+
   /** Finish a hosted setup: the processor says which card was saved; Gutad gets the token and masked details. */
   async complete(user: JwtPayload, sessionId: string) {
     if (!this.live || !this.provider.completeHostedSetup) throw new BadRequestException('Nothing to complete in test mode');

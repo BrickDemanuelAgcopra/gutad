@@ -108,6 +108,12 @@ export class StripePaymentProvider implements PaymentProvider {
     return (await this.stripe.customers.create(email ? { email } : {})).id;
   }
 
+  async attachToCustomer(input: { paymentMethodId: string; email: string | null; customerRef: string | null }) {
+    const customer = await this.customerFor(input.email, input.customerRef);
+    await this.stripe.paymentMethods.attach(input.paymentMethodId, { customer });
+    return { customerRef: customer };
+  }
+
   async setupForCustomer(input: { email: string | null; customerRef: string | null; idempotencyKey?: string }) {
     const customer = await this.customerFor(input.email, input.customerRef);
     const si = await this.stripe.setupIntents.create({ customer, usage: 'off_session', payment_method_types: ['card'] }, input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined);

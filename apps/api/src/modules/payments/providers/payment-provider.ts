@@ -60,6 +60,11 @@ export interface PaymentProvider {
   hostedSetup?(input: { email: string | null; customerRef: string | null; successUrl: string; cancelUrl: string }): Promise<{ sessionId: string; url: string; customerRef: string | null }>;
   /** The card saved by a finished hosted setup, or null while it is not complete. */
   completeHostedSetup?(sessionId: string): Promise<{ paymentMethodId: string; customerRef: string | null } | null>;
+  /**
+   * Attach a card tokenized for a one-off payment to the processor customer (created when `customerRef` is null), so it
+   * can be charged again. Fails when the token was already spent on a payment without a customer.
+   */
+  attachToCustomer?(input: { paymentMethodId: string; email: string | null; customerRef: string | null }): Promise<{ customerRef: string }>;
   /** Masked details of a tokenized card, as the processor reports them. */
   describePaymentMethod?(paymentMethodId: string): Promise<CardDetails | null>;
 }
