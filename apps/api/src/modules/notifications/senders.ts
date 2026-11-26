@@ -25,6 +25,10 @@ export function toE164(phone: string): string {
  * - Push: Expo.
  * A thrown error marks the notification FAILED; failed rows are retried for a day.
  */
+
+/** Expo push delivery hints: Android channel, sound file bundled in the app, delivery priority. */
+export interface PushOptions { channelId?: string; sound?: string; priority?: 'default' | 'normal' | 'high' }
+
 @Injectable()
 export class Senders {
   private readonly log = new Logger('Notify');
@@ -112,13 +116,13 @@ export class Senders {
     return { provider: 'log' };
   }
 
-  async push(token: string, r: Rendered, data: Record<string, unknown>): Promise<void> {
+  async push(token: string, r: Rendered, data: Record<string, unknown>, opts?: PushOptions): Promise<void> {
     const cfg = loadConfig();
     if (token.startsWith('ExponentPushToken')) {
       const res = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(cfg.EXPO_ACCESS_TOKEN ? { Authorization: `Bearer ${cfg.EXPO_ACCESS_TOKEN}` } : {}) },
-        body: JSON.stringify({ to: token, title: r.subject, body: r.sms, data }),
+        body: JSON.stringify({ to: token, title: r.subject, body: r.sms, data, ...(opts?.sound ? { sound: opts.sound } : {}), ...(opts?.channelId ? { channelId: opts.channelId } : {}), ...(opts?.priority ? { priority: opts.priority } : {}) }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`expo push ${res.status}`);

@@ -63,7 +63,8 @@
         "expo-notifications",
         {
           "icon": "./assets/notification-icon.png",
-          "color": "#f45d0a"
+          "color": "#f45d0a",
+          "sounds": ["./assets/sounds/new_order.wav"]
         }
       ],
       "expo-secure-store"

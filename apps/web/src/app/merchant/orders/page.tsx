@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { api, money, when, ago } from '@/lib/api';
 import { useApi, useAction } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Modal, Select, statusTone, Tabs } from '@/components/ui';
@@ -10,7 +10,7 @@ import { CourierArrivals, RunningLate } from '@/components/courier-arrivals';
 interface Line { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null; status: string; label: string | null }
 interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; scheduledFor: string | null; createdAt: string; pickupCode: string | null; specialInstructions: string | null; lines: Line[]; delivery: { status: string } | null }
 
-/** Tablet inbox: acknowledge, accept/reject, adjust time, mark ready, hand off, throttle/pause. Polls every 4s and chimes on new orders. */
+/** Tablet inbox: acknowledge, accept/reject, adjust time, mark ready, hand off, throttle/pause. Polls every 4s; the layout's NewOrderAlarm rings for new orders. */
 export default function OrdersInbox() {
   const { loc, reload: reloadLoc } = useMerchant();
   const [tab, setTab] = useState('active');
@@ -21,14 +21,6 @@ export default function OrdersInbox() {
   const [reason, setReason] = useState('');
   const [prep, setPrep] = useState(20);
   const [counter, setCounter] = useState(false);
-  const seen = useRef<Set<string>>(new Set());
-  const [chime, setChime] = useState(false);
-  useEffect(() => {
-    if (!data) return;
-    const fresh = data.filter((o) => o.status === 'SUBMITTED' && !seen.current.has(o.id));
-    if (fresh.length && seen.current.size) setChime(true);
-    data.forEach((o) => seen.current.add(o.id));
-  }, [data]);
   if (!loc) return null;
   const act = (fn: () => Promise<unknown>) => run(async () => { await fn(); await reload(); });
   const orders = (data || []).filter((o) => (tab === 'scheduled' ? !!o.scheduledFor : tab === 'active' ? !o.scheduledFor || new Date(o.scheduledFor).getTime() - Date.now() < 45 * 60_000 : true));
@@ -41,7 +33,6 @@ export default function OrdersInbox() {
           <Button variant="secondary" onClick={() => setCounter(true)}>Counter / phone order</Button>
         </div>
       </div>
-      {chime && <Alert tone="info"><button onClick={() => setChime(false)}>New order received — tap to dismiss.</button></Alert>}
       {error && <Alert>{error}</Alert>}
       <Tabs tabs={[{ id: 'active', label: 'Active' }, { id: 'scheduled', label: 'Scheduled' }, { id: 'done', label: 'History' }]} active={tab} onChange={setTab} />
       {tab === 'active' && <CourierArrivals locationId={loc.id} />}

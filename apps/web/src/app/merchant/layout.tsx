@@ -8,6 +8,7 @@ import { api, session } from '@/lib/api';
 import { useLocalState, useSession } from '@/lib/hooks';
 import { Alert, Button, Card, Input, Spinner } from '@/components/ui';
 import { AccessBanner, adoptTokens } from '@/components/admin-ui';
+import { NewOrderAlarm, usePendingOrders } from '@/components/new-order-alarm';
 
 
 /** Nav items that need a plan feature (any one of the listed keys unlocks the page). */
@@ -46,6 +47,9 @@ export default function MerchantLayout({ children }: { children: React.ReactNode
   const viaSupport = !!sup && !memberRoles.length;
   const roleOk = (h: string) => viaSupport || merchantPageAllowed(h, memberRoles);
   const nav = NAV.filter(([h]) => roleOk(h));
+  // new-order alarm: the restaurant's own team (not support sessions) whose role covers the order inbox
+  const alarmOn = !!user && !viaSupport && Object.keys(user.memberRoles || {}).length > 0 && roleOk('/merchant/orders');
+  const { pending, reload: reloadPending } = usePendingOrders(alarmOn);
   if (!ready || loading) return <Spinner />;
   if (!user) return <Alert tone="info">Sign in with a merchant account to use the portal. <Link className="underline" href="/account">Sign in</Link></Alert>;
   if (!orgs.length && isStaff) return <SupportGate initialOrg={typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('support') : null} canWrite={can('merchants.manage')} onStarted={load} />;
@@ -56,7 +60,8 @@ export default function MerchantLayout({ children }: { children: React.ReactNode
       <div className="grid gap-6 md:grid-cols-[200px_1fr]">
         <aside className="space-y-2">
           <select className="w-full rounded-lg border border-ink-100 bg-white px-2 py-2 text-sm" value={loc?.id || ''} onChange={(e) => setLocId(e.target.value)}>{all.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
-          <nav className="flex flex-row flex-wrap gap-1 md:flex-col">{nav.map(([h, l]) => <Link key={h} href={h} className={`flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-sm ${path === h ? 'bg-brand-50 font-medium text-brand-700' : locked(h) ? 'text-ink-300 hover:bg-ink-50' : 'text-ink-700 hover:bg-ink-50'}`}>{l}{locked(h) && <span aria-label="Not in your plan" title="Not in your plan">🔒</span>}</Link>)}</nav>
+          <nav className="flex flex-row flex-wrap gap-1 md:flex-col">{nav.map(([h, l]) => <Link key={h} href={h} className={`flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-sm ${path === h ? 'bg-brand-50 font-medium text-brand-700' : locked(h) ? 'text-ink-300 hover:bg-ink-50' : 'text-ink-700 hover:bg-ink-50'}`}>{l}{h === '/merchant/orders' && pending.length > 0 && <span className="animate-pulse rounded-full bg-red-600 px-2 py-0.5 text-xs font-bold text-white" aria-label={`${pending.length} orders waiting`}>{pending.length}</span>}{locked(h) && <span aria-label="Not in your plan" title="Not in your plan">🔒</span>}</Link>)}</nav>
+          {alarmOn && <NewOrderAlarm pending={pending} reload={reloadPending} onView={(o) => setLocId(o.locationId)} />}
           {ent && <div className="text-xs text-ink-500">Plan: <b>{ent.planName || 'Default'}</b>{ent.source === 'LEGACY' ? ' (all features)' : ''}</div>}
           {loc && <div className="text-xs text-ink-500">Status: {loc.status}{loc.isPaused ? ' · paused' : ''}</div>}
         </aside>

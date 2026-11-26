@@ -306,6 +306,29 @@ export class OrdersService {
 
   // ───── 08 merchant intake ─────
 
+  /**
+   * Orders waiting for acceptance at the caller's member locations (staff support sessions are left out: the alarm is for the
+   * restaurant's own team). Scheduled orders join once they are within 45 minutes; `rejectAt` is when the sweep auto-rejects.
+   */
+  async pendingForMerchant(user: JwtPayload) {
+    const orgIds = Object.keys(user.orgs || {});
+    if (!orgIds.length) return [];
+    const locs = (await this.db.select({ id: locations.id, name: locations.name, orgId: locations.organizationId, timeout: locations.acceptTimeoutMinutes }).from(locations).where(inArray(locations.organizationId, orgIds)))
+      .filter((l) => { const m = user.orgs[l.orgId]; return !!m && (!m.locationIds.length || m.locationIds.includes(l.id)); });
+    if (!locs.length) return [];
+    const soon = new Date(Date.now() + 45 * 60_000);
+    const rows = await this.db.select().from(orders).where(and(inArray(orders.locationId, locs.map((l) => l.id)), eq(orders.status, 'SUBMITTED'), or(isNull(orders.scheduledFor), lt(orders.scheduledFor, soon)))).orderBy(orders.createdAt).limit(50);
+    const lines = rows.length ? await this.db.select({ orderId: orderLines.orderId, name: orderLines.name, quantity: orderLines.quantity }).from(orderLines).where(inArray(orderLines.orderId, rows.map((r) => r.id))) : [];
+    return rows.map((o) => {
+      const l = locs.find((x) => x.id === o.locationId)!;
+      return {
+        id: o.id, number: o.number, locationId: o.locationId, locationName: l.name, fulfillmentType: o.fulfillmentType, channel: o.channel, guestName: o.guestName, totalCents: o.totalCents,
+        createdAt: o.createdAt, scheduledFor: o.scheduledFor, rejectAt: o.scheduledFor ? null : new Date(o.createdAt.getTime() + l.timeout * 4 * 60_000),
+        lines: lines.filter((x) => x.orderId === o.id).map((x) => ({ name: x.name, quantity: x.quantity })),
+      };
+    });
+  }
+
   async inbox(user: JwtPayload, locationId: string, status?: OrderStatus[]) {
     const [loc] = await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
     if (!loc) throw new NotFoundException();

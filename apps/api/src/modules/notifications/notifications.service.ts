@@ -5,7 +5,7 @@ import { locations, notifications, orders, orgMemberships, outboxEvents, reserva
 import { NotifyService } from '../../core/notify.service';
 import { JwtPayload } from '../../common/auth';
 import { render } from './templates';
-import { Senders } from './senders';
+import { Senders, type PushOptions } from './senders';
 
 /**
  * 23 — turns domain events (outbox) into deduplicated, consent-aware notifications, then delivers them.
@@ -104,7 +104,12 @@ export class NotificationsService {
         if (p.organizationId) await this.notifyOrgOwners(p.organizationId as string, topic, p, dedupe);
         return;
       case 'integration.failed': {
-        if (p.kind === 'order.unacknowledged') await this.notifyMerchantStaff(p.locationId as string, 'merchant.unacknowledged', p, `${dedupe}:${Math.floor(Date.now() / 600_000)}`, true);
+        if (p.kind === 'order.unacknowledged') {
+          const d = `${dedupe}:${Math.floor(Date.now() / 600_000)}`;
+          await this.notifyMerchantStaff(p.locationId as string, 'merchant.unacknowledged', p, d, true);
+          // the tablet may be unattended: reach the owners on their own phone and inbox too
+          await this.notifyLocationOwners(p.locationId as string, 'merchant.unacknowledged', p, `${d}:owner`, ['SMS', 'EMAIL']);
+        }
         return;
       }
       default:
@@ -147,6 +152,18 @@ export class NotificationsService {
     if (includeFallbackPhone && loc.tabletFallbackPhone) await this.notify.queue({ phone: loc.tabletFallbackPhone, template, payload: p, dedupeKey: `${dedupe}:fallback`, channels: ['SMS'] });
   }
 
+  /** Owners of the location's organization (respecting per-location memberships) on the given channels. */
+  private async notifyLocationOwners(locationId: string, template: string, p: Record<string, unknown>, dedupe: string, channels: ('SMS' | 'EMAIL' | 'PUSH')[]) {
+    if (!locationId) return;
+    const [loc] = await this.db.select({ orgId: locations.organizationId }).from(locations).where(eq(locations.id, locationId)).limit(1);
+    if (!loc) return;
+    const owners = await this.db.select({ userId: orgMemberships.userId, locationIds: orgMemberships.locationIds }).from(orgMemberships).where(and(eq(orgMemberships.organizationId, loc.orgId), eq(orgMemberships.role, 'MERCHANT_OWNER')));
+    for (const o of owners) {
+      if (o.locationIds.length && !o.locationIds.includes(locationId)) continue;
+      await this.notify.queue({ userId: o.userId, template, payload: p, dedupeKey: `${dedupe}:${o.userId}`, channels });
+    }
+  }
+
   private async notifyOrgOwners(orgId: string, template: string, p: Record<string, unknown>, dedupe: string) {
     const owners = await this.db.select({ userId: orgMemberships.userId }).from(orgMemberships).where(and(eq(orgMemberships.organizationId, orgId), eq(orgMemberships.role, 'MERCHANT_OWNER')));
     for (const o of owners) await this.notify.queue({ userId: o.userId, template, payload: p, dedupeKey: `${dedupe}:${o.userId}`, channels: ['EMAIL', 'IN_APP'] });
@@ -163,7 +180,7 @@ export class NotificationsService {
         const r = render(row.template, row.payload as Record<string, unknown>, { recipient: row.recipient });
         if (row.channel === 'EMAIL') await this.senders.email(row.recipient, r);
         else if (row.channel === 'SMS') await this.senders.sms(row.recipient, r);
-        else if (row.channel === 'PUSH') await this.senders.push(row.recipient, r, pushData(row.payload as Record<string, unknown>));
+        else if (row.channel === 'PUSH') await this.senders.push(row.recipient, r, { ...pushData(row.payload as Record<string, unknown>), ...(row.template.startsWith('merchant.') ? { kind: row.template } : {}) }, pushOptions(row.template));
         await this.db.update(notifications).set({ status: 'SENT', sentAt: new Date() }).where(eq(notifications.id, row.id));
         n++;
       } catch (e) {
@@ -197,6 +214,12 @@ export class NotificationsService {
  * Push data is visible to Expo/APNs/FCM and on the lock screen's payload, so send only what the app
  * needs to navigate — never the full event payload (which can hold emails, phones and user ids).
  */
+/** New and unanswered orders ring on the app's loud "orders" channel (Android) with the order sound (iOS). */
+export function pushOptions(template: string): PushOptions | undefined {
+  if (template === 'merchant.new_order' || template === 'merchant.unacknowledged') return { channelId: 'orders', sound: 'new_order.wav', priority: 'high' };
+  return undefined;
+}
+
 export function pushData(payload: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of ['topic', 'aggregateId', 'orderId', 'confirmationCode', 'number']) {
