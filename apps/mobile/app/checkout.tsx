@@ -21,6 +21,9 @@ export default function Checkout() {
   const { user } = useSession();
   const router = useRouter();
   const [fulfillment, setFulfillment] = useState<'PICKUP' | 'DELIVERY'>('PICKUP');
+  // start on delivery when the place delivers; a tap always wins
+  const pickedFulfillment = useRef(false);
+  const pickFulfillment = (f: 'PICKUP' | 'DELIVERY') => { pickedFulfillment.current = true; setFulfillment(f); };
   const [tip, setTip] = useState(15);
   const [promo, setPromo] = useState('');
   const [useGift, setUseGift] = useState(false);
@@ -40,7 +43,11 @@ export default function Checkout() {
   const idem = useRef(newIdempotencyKey());
   const tipCents = Math.round((subtotal * tip) / 100);
   // scheduled orders (required for Gutad Chef Network dishes, which need notice)
-  const { data: loc } = useApi<{ id: string; chefKitchen?: boolean; timezone?: string; pickupTimes: { date: string; slots: string[] }[] }>(cart.locationId ? `/public/locations/${cart.locationId}` : null, { deps: [cart.locationId] });
+  const { data: loc } = useApi<{ id: string; name?: string; acceptsDelivery?: boolean; acceptsPickup?: boolean; chefKitchen?: boolean; timezone?: string; pickupTimes: { date: string; slots: string[] }[] }>(cart.locationId ? `/public/locations/${cart.locationId}` : null, { deps: [cart.locationId] });
+  useEffect(() => {
+    if (!loc || pickedFulfillment.current) return;
+    setFulfillment(loc.acceptsDelivery === false ? 'PICKUP' : 'DELIVERY');
+  }, [loc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [schedule, setSchedule] = useState<{ date: string; time: string } | null>(null);
   const [scheduledFor, setScheduledFor] = useState<string | undefined>(undefined);
   const days = (loc?.pickupTimes || []).filter((d) => d.slots.length);
@@ -133,8 +140,11 @@ export default function Checkout() {
           </>
         )}
       </Card>
-      <Card title="Fulfillment">
-        <View style={{ flexDirection: 'row', gap: 8 }}><Button title="Pickup" variant={fulfillment === 'PICKUP' ? 'primary' : 'secondary'} onPress={() => setFulfillment('PICKUP')} /><Button title="Delivery" variant={fulfillment === 'DELIVERY' ? 'primary' : 'secondary'} onPress={() => setFulfillment('DELIVERY')} /></View>
+      <Card title="How do you want it?">
+        <View style={{ gap: 8 }} accessibilityRole="radiogroup">
+          {loc?.acceptsDelivery !== false && <FulfillmentChoice on={fulfillment === 'DELIVERY'} onPick={() => pickFulfillment('DELIVERY')} icon="🛵" title="Delivery" sub="A courier brings it to your address" />}
+          {loc?.acceptsPickup !== false && <FulfillmentChoice on={fulfillment === 'PICKUP'} onPick={() => pickFulfillment('PICKUP')} icon="🛍️" title="Pickup" sub={`You collect it at ${loc?.name || 'the restaurant'}`} />}
+        </View>
         <Button title={utensils ? 'Utensils & napkins included ✓' : 'Include utensils & napkins'} variant="ghost" onPress={() => setUtensils(!utensils)} />
         {fulfillment === 'DELIVERY' && (<View style={{ marginTop: 8 }}><Input label="Street" value={addr.line1} onChangeText={(v) => setAddr({ ...addr, line1: v })} /><Input label="City" value={addr.city} onChangeText={(v) => setAddr({ ...addr, city: v })} /><View style={{ flexDirection: 'row', gap: 8 }}><View style={{ flex: 1 }}><Input label="State" value={addr.region} onChangeText={(v) => setAddr({ ...addr, region: v })} /></View><View style={{ flex: 1 }}><Input label="ZIP" value={addr.postalCode} onChangeText={(v) => setAddr({ ...addr, postalCode: v })} /></View></View><Button title={addr.lat ? 'Location set ✓' : 'Use my location'} variant="secondary" onPress={useMyLocation} /></View>)}
       </Card>
@@ -154,9 +164,20 @@ export default function Checkout() {
       </Card>
       <Card title="Summary">
         <ErrorText msg={error} />
-        {quote && (<View>{[['Subtotal', quote.subtotalCents], ...(quote.promotions?.length ? quote.promotions.map((p) => [p.name, -p.discountCents] as [string, number]) : [['Promo', -quote.discountCents] as [string, number]]), ['Tax', quote.taxCents], ['Service fee', quote.serviceFeeCents], ['Delivery', quote.deliveryFeeCents], ['Tip', quote.tipCents]].filter(([, v]) => v !== 0).map(([l, v]) => <View key={String(l)} style={s.row}><Muted>{String(l)}</Muted><Text>{money(Number(v))}</Text></View>)}{quote.paymentMix && quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents > 0 && (<View style={{ marginTop: 6 }}><View style={s.row}><Text>Order total</Text><Text>{money(quote.totalCents + quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents)}</Text></View>{quote.paymentMix.creditsCents > 0 && <View style={s.row}><Muted>Gutad credits</Muted><Text>{money(-quote.paymentMix.creditsCents)}</Text></View>}{quote.paymentMix.loyaltyCents > 0 && <View style={s.row}><Muted>Points</Muted><Text>{money(-quote.paymentMix.loyaltyCents)}</Text></View>}{quote.paymentMix.giftCents > 0 && <View style={s.row}><Muted>Gift card</Muted><Text>{money(-quote.paymentMix.giftCents)}</Text></View>}</View>)}<View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>{quote.paymentMix && quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents > 0 ? 'Card pays' : 'Total'}</Text><Text style={{ fontWeight: '700' }}>{money(quote.totalCents)}</Text></View><Muted>{quote.promiseAt ? `Estimated: ${when(quote.promiseAt)}` : ''}</Muted>{quote.warnings.map((w) => <Text key={w} style={{ color: C.warn }}>{w}</Text>)}<Button title={busy ? 'Placing…' : `Place order · ${money(quote.totalCents)}`} disabled={busy || (!user && (!guest.email || !guest.name))} onPress={place} /></View>)}
+        {quote && (<View>{[['Subtotal', quote.subtotalCents], ...(quote.promotions?.length ? quote.promotions.map((p) => [p.name, -p.discountCents] as [string, number]) : [['Promo', -quote.discountCents] as [string, number]]), ['Tax', quote.taxCents], ['Service fee', quote.serviceFeeCents], ['Delivery', quote.deliveryFeeCents], ['Tip', quote.tipCents]].filter(([, v]) => v !== 0).map(([l, v]) => <View key={String(l)} style={s.row}><Muted>{String(l)}</Muted><Text>{money(Number(v))}</Text></View>)}{quote.paymentMix && quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents > 0 && (<View style={{ marginTop: 6 }}><View style={s.row}><Text>Order total</Text><Text>{money(quote.totalCents + quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents)}</Text></View>{quote.paymentMix.creditsCents > 0 && <View style={s.row}><Muted>Gutad credits</Muted><Text>{money(-quote.paymentMix.creditsCents)}</Text></View>}{quote.paymentMix.loyaltyCents > 0 && <View style={s.row}><Muted>Points</Muted><Text>{money(-quote.paymentMix.loyaltyCents)}</Text></View>}{quote.paymentMix.giftCents > 0 && <View style={s.row}><Muted>Gift card</Muted><Text>{money(-quote.paymentMix.giftCents)}</Text></View>}</View>)}<View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>{quote.paymentMix && quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents > 0 ? 'Card pays' : 'Total'}</Text><Text style={{ fontWeight: '700' }}>{money(quote.totalCents)}</Text></View><Muted>{quote.promiseAt ? `Estimated: ${when(quote.promiseAt)}` : ''}</Muted>{quote.warnings.map((w) => <Text key={w} style={{ color: C.warn }}>{w}</Text>)}<Button title={busy ? 'Placing…' : `${fulfillment === 'DELIVERY' ? `Place delivery order to ${addr.line1 || 'your address'}` : 'Place pickup order'} · ${money(quote.totalCents)}`} disabled={busy || (!user && (!guest.email || !guest.name))} onPress={place} /></View>)}
         {!quote && !error && <Muted>{fulfillment === 'DELIVERY' && !addr.lat ? 'Set your location for a delivery quote.' : 'Calculating…'}</Muted>}
       </Card>
     </ScrollView>
+  );
+}
+
+/** One big pickup/delivery option, so the choice can't be missed. */
+function FulfillmentChoice({ on, onPick, icon, title, sub }: { on: boolean; onPick: () => void; icon: string; title: string; sub: string }) {
+  return (
+    <Pressable accessibilityRole="radio" accessibilityState={{ checked: on }} onPress={onPick} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 2, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, borderColor: on ? C.brand : '#e5e7eb', backgroundColor: on ? '#fff4ec' : '#fff' }}>
+      <Text style={{ fontSize: 24 }}>{icon}</Text>
+      <View style={{ flex: 1 }}><Text style={{ fontWeight: '700', color: C.ink, fontSize: 16 }}>{title}</Text><Muted>{sub}</Muted></View>
+      <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: on ? C.brand : '#9ca3af', backgroundColor: on ? C.brand : 'transparent' }} />
+    </Pressable>
   );
 }

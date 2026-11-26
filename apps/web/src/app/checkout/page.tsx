@@ -18,6 +18,9 @@ export default function CheckoutPage() {
   const { user, ready } = useSession();
   const router = useRouter();
   const [fulfillment, setFulfillment] = useState<Fulfillment>('PICKUP');
+  // start on delivery when the place delivers (a table/QR order stays as it is); a tap always wins
+  const pickedFulfillment = useRef(false);
+  const pickFulfillment = (f: Fulfillment) => { pickedFulfillment.current = true; setFulfillment(f); };
   const [schedule, setSchedule] = useState<{ date: string; time: string } | null>(null);
   const [tip, setTip] = useState(15);
   const [promo, setPromo] = useState('');
@@ -43,6 +46,10 @@ export default function CheckoutPage() {
   const [giftMsg, setGiftMsg] = useState<string | null>(null);
   const addGift = async () => { try { const r = await api.post<{ walletCents: number }>('/me/gift-cards/claim', { code: giftCode }); setGiftCode(''); setGiftMsg(`Gift balance ${money(r.walletCents)} ready to use.`); setUseGift(true); reloadGifts(); } catch (e) { setGiftMsg((e as Error).message); } };
   const { data: cards } = useApi<{ id: string; brand: string | null; last4: string | null; isDefault: boolean }[]>(user ? '/me/payment-methods' : null);
+  useEffect(() => {
+    if (!loc || pickedFulfillment.current || cart.channel === 'QR' || table) return;
+    setFulfillment(loc.acceptsDelivery ? 'DELIVERY' : 'PICKUP');
+  }, [loc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // Gutad Chef Network: chef dishes are cooked to order on a chosen day. The cart's calendar applies the strictest
   // dish's notice and cutoff and every daily limit; quotes hold the portions for this checkout (holdKey).
   const holdKey = useRef(newIdempotencyKey());
@@ -168,11 +175,11 @@ export default function CheckoutPage() {
             ))}
           </ul>
         </Card>
-        <Card title="Fulfillment">
-          <div className="flex gap-2">
-            {loc?.acceptsPickup !== false && <Button variant={fulfillment === 'PICKUP' ? 'primary' : 'secondary'} onClick={() => setFulfillment('PICKUP')}>Pickup</Button>}
-            {loc?.acceptsDelivery && <Button variant={fulfillment === 'DELIVERY' ? 'primary' : 'secondary'} onClick={() => setFulfillment('DELIVERY')}>Delivery</Button>}
-            {(cart.channel === 'QR' || !!table) && loc?.acceptsDineIn !== false && <Button variant={fulfillment === 'DINE_IN' ? 'primary' : 'secondary'} onClick={() => setFulfillment('DINE_IN')}>Dine in</Button>}
+        <Card title="How do you want it?">
+          <div role="radiogroup" aria-label="Pickup or delivery" className="grid gap-2 sm:grid-cols-2">
+            {loc?.acceptsDelivery && <FulfillmentChoice on={fulfillment === 'DELIVERY'} onPick={() => pickFulfillment('DELIVERY')} icon="🛵" title="Delivery" sub="A courier brings it to your address" />}
+            {loc?.acceptsPickup !== false && <FulfillmentChoice on={fulfillment === 'PICKUP'} onPick={() => pickFulfillment('PICKUP')} icon="🛍️" title="Pickup" sub={`You collect it at ${loc?.name || 'the restaurant'}`} />}
+            {(cart.channel === 'QR' || !!table) && loc?.acceptsDineIn !== false && <FulfillmentChoice on={fulfillment === 'DINE_IN'} onPick={() => pickFulfillment('DINE_IN')} icon="🍽️" title="Dine in" sub="Served at your table" />}
           </div>
           {fulfillment === 'DINE_IN' && <Input className="mt-3 w-40" label="Table number" value={table} onChange={(e) => setTable(e.target.value)} />}
           {fulfillment !== 'DINE_IN' && <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={utensils} onChange={(e) => setUtensils(e.target.checked)} /> Include utensils and napkins</label>}
@@ -259,7 +266,7 @@ export default function CheckoutPage() {
               <p className="pt-1 text-xs text-ink-500">{quote.promiseAt ? `Estimated ${fulfillment === 'DELIVERY' ? 'delivery' : 'ready'}: ${when(quote.promiseAt)}` : ''}</p>
               {fulfillment === 'DELIVERY' && quote.serviceFeeCents > 0 && <p className="text-xs text-ink-500">Delivery is free. Delivery orders carry a service fee, waived for Gutad+ members. Pickup has no service fee.</p>}
               {quote.warnings.map((w) => <p key={w} className="text-xs text-amber-700">{w}</p>)}
-              <Button className="mt-3 w-full" size="lg" disabled={busy} onClick={place}>{busy ? 'Placing…' : `Place order · ${money(quote.totalCents)}`}</Button>
+              <Button className="mt-3 w-full" size="lg" disabled={busy} onClick={place}>{busy ? 'Placing…' : `${fulfillment === 'DELIVERY' ? `Place delivery order to ${address.line1 || 'your address'}` : fulfillment === 'DINE_IN' ? 'Place dine-in order' : 'Place pickup order'} · ${money(quote.totalCents)}`}</Button>
               <p className="text-[11px] text-ink-300">Quote valid until {when(quote.expiresAt)}; prices revalidate automatically.</p>
             </div>
           ) : blocked ? (
@@ -296,4 +303,15 @@ const CAPACITY_CODES = ['DISH_CAPACITY_FULL', 'KITCHEN_CAPACITY_FULL', 'CHEF_CUT
 
 function Row({ l, v }: { l: string; v: string }) {
   return <div className="flex justify-between"><span className="text-ink-500">{l}</span><span>{v}</span></div>;
+}
+
+/** One big pickup/delivery option, so the choice can't be missed. */
+function FulfillmentChoice({ on, onPick, icon, title, sub }: { on: boolean; onPick: () => void; icon: string; title: string; sub: string }) {
+  return (
+    <button type="button" role="radio" aria-checked={on} onClick={onPick} className={`flex items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition ${on ? 'border-brand-500 bg-brand-50' : 'border-ink-100 bg-white hover:border-ink-300'}`}>
+      <span className="text-2xl" aria-hidden>{icon}</span>
+      <span className="flex-1"><span className="block font-semibold">{title}</span><span className="block text-xs text-ink-500">{sub}</span></span>
+      <span className={`h-5 w-5 rounded-full border-2 ${on ? 'border-brand-500 bg-brand-500 shadow-[inset_0_0_0_3px_white]' : 'border-ink-300'}`} aria-hidden />
+    </button>
+  );
 }

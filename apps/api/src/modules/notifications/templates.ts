@@ -356,6 +356,10 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
       });
 
     // ── Merchants ───────────────────────────────────────────────────────────
+    case 'courier.offer':
+      return sub(`New delivery offer${typeof p.payCents === 'number' ? `: ${money(p.payCents as number)}` : ''}`, `Pickup at ${(p.pickupAt as string) || 'a nearby restaurant'}. Open Gutad to accept before it expires.`, {
+        audience: 'courier', eyebrow: 'Delivery offer', heading: 'New delivery offer', paragraphs: ['Open the Gutad app to accept it before it expires.'],
+      });
     case 'merchant.new_order':
       return sub(`New order ${num}`, `New order ${num} waiting for acceptance.`, {
         audience: 'merchant', eyebrow: 'New order', heading: `New order ${num}`, paragraphs: ['A new order is waiting for you to accept it.'],
@@ -628,6 +632,7 @@ export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'incident.resolved': { remedy: 'PARTIAL_REFUND', cents: 650, orderNumber: 'G-10482', orderId: 'sample' },
   'case.reply': { category: 'PAYOUT_QUESTION', body: 'Your March payout was delayed by a bank holiday. It will arrive tomorrow.' },
   campaign: { subject: 'Weekend special: 20% off family platters', body: 'This weekend only, family platters are 20% off at Mama Put Kitchen.' },
+  'courier.offer': { payCents: 875, pickupAt: '400 W 14th St', expiresAt: new Date().toISOString() },
   'merchant.new_order': { number: 'G-10482' },
   'merchant.unacknowledged': { number: 'G-10482', offline: true },
   'payout.paid': { amountCents: 482350, period: 'Nov 3 – Nov 9' },

@@ -8,7 +8,7 @@ import { useMerchantLocation } from '@/merchant';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
 import { PlanSummary } from '@/plan';
 
-interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; createdAt: string; pickupCode: string | null; lines: { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null }[]; delivery: { status: string } | null }
+interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; deliveryAddress?: { line1?: string; city?: string; instructions?: string } | null; guestName: string | null; totalCents: number; promiseAt: string | null; createdAt: string; pickupCode: string | null; lines: { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null }[]; delivery: { status: string } | null }
 
 /** Tablet order inbox: acknowledge/accept/reject, prep time, ready, handoff, pause. Polls every 4 s. */
 function MerchantInbox() {
@@ -29,7 +29,8 @@ function MerchantInbox() {
       <FlatList contentContainerStyle={s.pad} ListHeaderComponent={<PlanSummary orgId={loc.organizationId} />} data={data || []} keyExtractor={(o) => o.id} ListEmptyComponent={<Muted>No active orders.</Muted>} renderItem={({ item: o }) => (
         <Card style={o.status === 'SUBMITTED' ? { borderColor: C.brand, borderWidth: 2 } : undefined}>
           <View style={s.row}><Text style={{ fontWeight: '700', fontSize: 16 }}>{o.number}</Text><Badge text={o.status} tone={tone(o.status)} /></View>
-          <Muted>{o.guestName || 'Customer'} · {o.channel} · {o.fulfillmentType} · {o.promiseAt ? `due ${when(o.promiseAt)}` : when(o.createdAt)}{o.delivery ? ` · courier ${o.delivery.status}` : ''}</Muted>
+          <FulfillmentTag o={o} />
+          <Muted>{o.guestName || 'Customer'} · {o.channel} · {o.promiseAt ? `due ${when(o.promiseAt)}` : when(o.createdAt)}</Muted>
           {o.lines.map((l) => <Text key={l.id} style={{ marginTop: 4 }}><Text style={{ fontWeight: '700' }}>{l.quantity}× </Text>{l.name}{l.modifiers?.length ? <Text style={{ color: C.ink5 }}> — {l.modifiers.map((m) => m.name).join(', ')}</Text> : null}{l.specialInstructions ? <Text style={{ color: C.warn }}> “{l.specialInstructions}”</Text> : null}</Text>)}
           <View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>{money(o.totalCents)}</Text>{o.pickupCode && <Text style={{ fontFamily: 'monospace' }}>code {o.pickupCode}</Text>}</View>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
@@ -45,4 +46,26 @@ function MerchantInbox() {
 
 export default function Screen() {
   return <WorkspaceGate page="/merchant/orders"><MerchantInbox /></WorkspaceGate>;
+}
+
+const COURIER_TEXT: Record<string, string> = {
+  REQUESTED: 'Finding a courier (Mark ready sends offers now)', UNASSIGNED: 'Finding a courier (Mark ready sends offers now)',
+  ASSIGNED: 'Courier assigned, on the way to you', PICKED_UP: 'Courier has the order', DELIVERED: 'Delivered',
+  FAILED: 'No courier found: support alerted', QUOTE_EXPIRED: 'Courier quote expired: support alerted', CANCELED: 'Delivery canceled', RETURNED: 'Returned to the restaurant',
+};
+
+/** Big PICKUP / DELIVERY label with the drop-off address and courier progress. */
+function FulfillmentTag({ o }: { o: { fulfillmentType: string; status: string; pickupCode: string | null; deliveryAddress?: { line1?: string; city?: string; instructions?: string } | null; delivery?: { status: string } | null } }) {
+  const del = o.fulfillmentType === 'DELIVERY';
+  const a = o.deliveryAddress;
+  const courier = o.delivery ? COURIER_TEXT[o.delivery.status] : null;
+  return (
+    <View style={{ marginVertical: 6, borderRadius: 10, borderWidth: 2, paddingHorizontal: 10, paddingVertical: 6, borderColor: del ? '#bfdbfe' : '#fde68a', backgroundColor: del ? '#eff6ff' : '#fffbeb' }}>
+      <Text style={{ fontWeight: '800', letterSpacing: 0.5, color: del ? '#1e40af' : '#92400e' }}>{del ? '🛵 DELIVERY' : o.fulfillmentType === 'DINE_IN' ? '🍽️ DINE IN' : '🛍️ PICKUP'}</Text>
+      {del && !!a?.line1 && <Text style={{ color: C.ink }}>To {a.line1}{a.city ? `, ${a.city}` : ''}</Text>}
+      {del && !!a?.instructions && <Muted>“{a.instructions}”</Muted>}
+      {del && !!courier && <Muted>{courier}</Muted>}
+      {!del && <Muted>{o.fulfillmentType === 'DINE_IN' ? 'Serve at the table.' : `Customer collects it here; no courier.${o.pickupCode ? ` Code ${o.pickupCode}.` : ''}`}</Muted>}
+    </View>
+  );
 }

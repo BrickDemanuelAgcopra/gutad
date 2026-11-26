@@ -918,6 +918,8 @@ export class DeliveryService {
       rowsOut.push({ driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents + incentiveCents + specialCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market, incentives, special }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail });
     }
     await tx.insert(driverOffers).values(rowsOut);
+    // ring each offered courier's phone: offers expire in seconds, the app may be closed
+    for (const r of rowsOut) await this.outbox.publish('courier.offer', job.id, { userId: pick.find((p) => p.d.id === r.driverId)!.d.userId, payCents: r.payCents, expiresAt: r.expiresAt.toISOString(), pickupAt: pickup.line1 ?? null }, tx);
     await this.event(job.id, 'OFFERED', { round: attempts, couriers: pick.map((r) => ({ driverId: r.d.id, score: r.score })) }, tx);
     return pick;
   }

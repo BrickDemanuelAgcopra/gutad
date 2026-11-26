@@ -14,6 +14,7 @@ import { CourierEarnings, CourierFeedback } from '@/courier/earnings';
 import { BusyTimes, Incentives, ReviewNotices } from '@/courier/incentives';
 import { useQueue } from '@/courier/queue';
 import { Certifications } from '@/courier/special';
+import { OfferAlarm } from '@/courier/offer-alarm';
 
 interface Standing { status: string; suspendedReason: string | null; appealStatus: string; appealDecisionNote: string | null; missingDocs: string[]; metrics?: { acceptanceRate: number | null; completionRate: number | null; onTimeRate: number | null; delivered: number } }
 
@@ -56,6 +57,7 @@ function Work({ onboarding }: { onboarding: Onboarding }) {
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       {queue.count > 0 && <Card style={{ backgroundColor: '#fffbeb' }}><Text style={{ color: C.warn, fontWeight: '600' }}>{queue.count} action{queue.count === 1 ? '' : 's'} waiting to send</Text><Muted>We’ll send {queue.count === 1 ? 'it' : 'them'} as soon as you’re back online.</Muted><Button title="Try now" variant="secondary" onPress={() => void queue.flush()} /></Card>}
       {queue.refused.length > 0 && <Card><Text style={{ color: C.bad, fontWeight: '600' }}>Some offline actions weren’t accepted</Text>{queue.refused.map((r, i) => <Muted key={i}>{r}</Muted>)}<Button title="OK" variant="ghost" onPress={queue.clearRefused} /></Card>}
+      <OfferAlarm offers={offers || []} onDone={refresh} />
       {st ? <StatusPanel st={st} onChange={refresh} /> : <Loading />}
       {st && <LifecycleNotice st={st} onChange={() => void reloadSt()} />}
       <ReviewNotices />

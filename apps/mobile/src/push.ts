@@ -27,6 +27,12 @@ async function register(): Promise<void> {
   // Android 13+ only shows the permission prompt once a channel exists.
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('default', { name: 'Orders & reservations', importance: Notifications.AndroidImportance.HIGH, lightColor: '#f45d0a', vibrationPattern: [0, 250, 250, 250] });
+    // Couriers: delivery offers expire in seconds, so they ring like an incoming call (server sends channelId 'offers')
+    await Notifications.setNotificationChannelAsync('offers', {
+      name: 'Delivery offers (courier)', description: 'Rings when a delivery offer is waiting for you',
+      importance: Notifications.AndroidImportance.MAX, sound: 'new_order.wav', vibrationPattern: [0, 700, 400, 700, 400, 700],
+      lightColor: '#f45d0a', bypassDnd: true, lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC, enableVibrate: true,
+    });
     // Restaurant staff: new and unanswered orders ring loudly on their own channel (the server sends channelId 'orders').
     // A channel's sound is fixed once created, so a changed sound needs a new channel id.
     await Notifications.setNotificationChannelAsync('orders', {
@@ -47,6 +53,7 @@ export function routeFor(data: Record<string, unknown> | undefined): Href | null
   if (!data) return null;
   const topic = typeof data.topic === 'string' ? data.topic : '';
   const orderId = typeof data.orderId === 'string' ? data.orderId : topic.startsWith('order.') && typeof data.aggregateId === 'string' ? data.aggregateId : null;
+  if (data.kind === 'courier.offer') return '/driver';
   if (topic === 'order.submitted' || data.kind === 'merchant.new_order' || data.kind === 'merchant.unacknowledged') return '/merchant';
   if (orderId) return { pathname: '/order/[id]', params: { id: orderId } };
   if (/^(reservation|waitlist|ticket)\./.test(topic)) return '/reservations';

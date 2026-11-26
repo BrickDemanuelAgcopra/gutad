@@ -143,7 +143,8 @@ export function NewOrderAlarm({ pending, reload, onView }: { pending: PendingOrd
                       <div className="text-lg font-bold">{o.number}</div>
                       <div className="text-lg font-bold">{money(o.totalCents)}</div>
                     </div>
-                    <div className="text-sm text-ink-600">{o.locationName} · {o.fulfillmentType.toLowerCase()}{o.guestName ? ` · ${o.guestName}` : ''}{o.scheduledFor ? ` · scheduled ${new Date(o.scheduledFor).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}</div>
+                    <div className={`inline-block rounded-md px-2 py-0.5 text-sm font-extrabold tracking-wide ${o.fulfillmentType === 'DELIVERY' ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'}`}>{o.fulfillmentType === 'DELIVERY' ? '🛵 DELIVERY' : o.fulfillmentType === 'DINE_IN' ? '🍽️ DINE IN' : '🛍️ PICKUP'}</div>
+                    <div className="text-sm text-ink-600">{o.locationName}{o.guestName ? ` · ${o.guestName}` : ''}{o.scheduledFor ? ` · scheduled ${new Date(o.scheduledFor).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}</div>
                     <ul className="text-sm text-ink-800">{o.lines.slice(0, 5).map((l, i) => <li key={i}>{l.quantity} × {l.name}</li>)}{o.lines.length > 5 && <li className="text-ink-500">+{o.lines.length - 5} more</li>}</ul>
                     {left !== null && <div className={`text-sm font-semibold ${left < 5 * 60_000 ? 'text-red-600' : 'text-ink-600'}`}>Auto-rejects in {Math.floor(left / 60_000)}:{String(Math.floor((left % 60_000) / 1000)).padStart(2, '0')}</div>}
                     <div className="flex gap-2 pt-1">

@@ -8,7 +8,7 @@ import { PrintButton } from '@/components/capacity-printers';
 import { CourierArrivals, RunningLate } from '@/components/courier-arrivals';
 
 interface Line { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null; status: string; label: string | null }
-interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; scheduledFor: string | null; createdAt: string; pickupCode: string | null; specialInstructions: string | null; lines: Line[]; delivery: { status: string } | null }
+interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; guestName: string | null; totalCents: number; promiseAt: string | null; scheduledFor: string | null; createdAt: string; pickupCode: string | null; specialInstructions: string | null; lines: Line[]; delivery: { status: string; driverId: string | null } | null; deliveryAddress: { line1?: string; city?: string; postalCode?: string; instructions?: string } | null }
 
 /** Tablet inbox: acknowledge, accept/reject, adjust time, mark ready, hand off, throttle/pause. Polls every 4s; the layout's NewOrderAlarm rings for new orders. */
 export default function OrdersInbox() {
@@ -39,7 +39,8 @@ export default function OrdersInbox() {
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {orders.map((o) => (
           <Card key={o.id} className={o.status === 'SUBMITTED' ? 'ring-2 ring-brand-400' : ''} title={<span>{o.number} <span className="text-xs font-normal text-ink-500">· {o.channel} · {o.fulfillmentType}</span></span>} action={<Badge tone={statusTone(o.status)}>{o.status}</Badge>}>
-            <div className="text-xs text-ink-500">{o.guestName || 'Customer'} · {ago(o.createdAt)} · {o.scheduledFor ? `scheduled ${when(o.scheduledFor)}` : o.promiseAt ? `promise ${when(o.promiseAt)}` : ''}{o.delivery ? ` · courier ${o.delivery.status}` : ''}</div>
+            <FulfillmentBanner o={o} />
+            <div className="text-xs text-ink-500">{o.guestName || 'Customer'} · {ago(o.createdAt)} · {o.scheduledFor ? `scheduled ${when(o.scheduledFor)}` : o.promiseAt ? `promise ${when(o.promiseAt)}` : ''}</div>
             <ul className="mt-2 space-y-1 text-sm">{o.lines.map((l) => <li key={l.id} className={l.status === 'UNAVAILABLE' ? 'text-red-600 line-through' : ''}><b>{l.quantity}×</b> {l.name}{l.label ? ` [${l.label}]` : ''}{l.modifiers?.length ? <span className="text-ink-500"> — {l.modifiers.map((m) => m.name).join(', ')}</span> : null}{l.specialInstructions && <div className="text-xs italic text-amber-700">“{l.specialInstructions}”</div>}</li>)}</ul>
             {o.specialInstructions && <p className="mt-1 text-xs italic text-amber-700">Order note: {o.specialInstructions}</p>}
             <div className="mt-2 flex items-center justify-between text-sm"><span className="font-semibold">{money(o.totalCents)}</span>{o.pickupCode && <span className="font-mono text-xs">code {o.pickupCode}</span>}</div>
@@ -81,5 +82,42 @@ function CounterOrder({ open, onClose, locationId }: { open: boolean; onClose: (
       {error && <Alert>{error}</Alert>}
       <Button className="mt-3 w-full" disabled={!name} onClick={() => run(async () => { await api.post(`/locations/${locationId}/orders/counter`, { guestName: name, guestPhone: phone || undefined, channel, lines: Object.entries(picks).filter(([, q]) => q > 0).map(([menuItemId, quantity]) => { const it = items.find((x) => x.id === menuItemId)!; return { menuItemId, quantity, modifierOptionIds: it.modifierGroups.filter((g) => g.required).map((g) => g.options[0]?.id).filter(Boolean) }; }) }); setPicks({}); onClose(); })}>Create & accept</Button>
     </Modal>
+  );
+}
+
+/** What the courier side is doing, in words the kitchen can act on. */
+const COURIER_STATUS: Record<string, { text: string; tone: string }> = {
+  QUOTED: { text: 'Courier will be requested when you accept', tone: 'text-ink-600' },
+  REQUESTED: { text: 'Finding a courier: offers go out as the food nears ready (tap Mark ready to send them now)', tone: 'text-amber-700' },
+  UNASSIGNED: { text: 'Finding a courier: offers go out as the food nears ready (tap Mark ready to send them now)', tone: 'text-amber-700' },
+  ASSIGNED: { text: 'Courier assigned and on the way to you', tone: 'text-green-700' },
+  PICKED_UP: { text: 'Courier has the order and is heading to the customer', tone: 'text-green-700' },
+  DELIVERED: { text: 'Delivered', tone: 'text-green-700' },
+  FAILED: { text: 'No courier found: support has been alerted', tone: 'text-red-600' },
+  QUOTE_EXPIRED: { text: 'Courier quote expired: support has been alerted', tone: 'text-red-600' },
+  CANCELED: { text: 'Delivery canceled', tone: 'text-ink-500' },
+  RETURNED: { text: 'Returned to the restaurant', tone: 'text-red-600' },
+};
+
+/** Big PICKUP / DELIVERY label, the drop-off address and the courier's progress, so nobody has to guess. */
+function FulfillmentBanner({ o }: { o: Order }) {
+  if (o.fulfillmentType === 'DELIVERY') {
+    const a = o.deliveryAddress;
+    const c = o.delivery ? COURIER_STATUS[o.delivery.status] : o.status === 'SUBMITTED' ? COURIER_STATUS.QUOTED : null;
+    return (
+      <div className="my-2 rounded-lg border-2 border-blue-200 bg-blue-50 px-3 py-2">
+        <div className="text-sm font-extrabold tracking-wide text-blue-800">🛵 DELIVERY</div>
+        {a?.line1 && <div className="text-sm text-ink-800">To {a.line1}{a.city ? `, ${a.city}` : ''}{a.postalCode ? ` ${a.postalCode}` : ''}</div>}
+        {a?.instructions && <div className="text-xs italic text-ink-600">“{a.instructions}”</div>}
+        {c && <div className={`mt-1 text-xs font-medium ${c.tone}`}>{c.text}</div>}
+      </div>
+    );
+  }
+  const label = o.fulfillmentType === 'DINE_IN' ? '🍽️ DINE IN' : '🛍️ PICKUP';
+  return (
+    <div className="my-2 rounded-lg border-2 border-amber-200 bg-amber-50 px-3 py-2">
+      <div className="text-sm font-extrabold tracking-wide text-amber-800">{label}</div>
+      <div className="text-xs text-ink-600">{o.fulfillmentType === 'DINE_IN' ? 'Serve at the table.' : 'The customer collects it here; no courier.'}{o.pickupCode ? ` Pickup code ${o.pickupCode}.` : ''}</div>
+    </div>
   );
 }

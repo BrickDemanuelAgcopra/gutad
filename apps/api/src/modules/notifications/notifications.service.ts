@@ -51,6 +51,10 @@ export class NotificationsService {
     const phone = (p.phone as string) || null;
     const dedupe = `${topic}:${aggregateId}`;
     switch (topic) {
+      case 'courier.offer': {
+        if (p.userId) await this.notify.queue({ userId: p.userId as string, template: 'courier.offer', payload: p, dedupeKey: `${dedupe}:${p.userId}:${p.expiresAt}`, channels: ['PUSH'] });
+        return;
+      }
       case 'order.submitted': {
         if (userId) await this.notify.queue({ userId, template: topic, payload: p, dedupeKey: dedupe });
         await this.notifyMerchantStaff(p.locationId as string, 'merchant.new_order', p, dedupe);
@@ -180,7 +184,7 @@ export class NotificationsService {
         const r = render(row.template, row.payload as Record<string, unknown>, { recipient: row.recipient });
         if (row.channel === 'EMAIL') await this.senders.email(row.recipient, r);
         else if (row.channel === 'SMS') await this.senders.sms(row.recipient, r);
-        else if (row.channel === 'PUSH') await this.senders.push(row.recipient, r, { ...pushData(row.payload as Record<string, unknown>), ...(row.template.startsWith('merchant.') ? { kind: row.template } : {}) }, pushOptions(row.template));
+        else if (row.channel === 'PUSH') await this.senders.push(row.recipient, r, { ...pushData(row.payload as Record<string, unknown>), ...(row.template.startsWith('merchant.') || row.template === 'courier.offer' ? { kind: row.template } : {}) }, pushOptions(row.template));
         await this.db.update(notifications).set({ status: 'SENT', sentAt: new Date() }).where(eq(notifications.id, row.id));
         n++;
       } catch (e) {
@@ -217,6 +221,7 @@ export class NotificationsService {
 /** New and unanswered orders ring on the app's loud "orders" channel (Android) with the order sound (iOS). */
 export function pushOptions(template: string): PushOptions | undefined {
   if (template === 'merchant.new_order' || template === 'merchant.unacknowledged') return { channelId: 'orders', sound: 'new_order.wav', priority: 'high' };
+  if (template === 'courier.offer') return { channelId: 'offers', sound: 'new_order.wav', priority: 'high' };
   return undefined;
 }
 
