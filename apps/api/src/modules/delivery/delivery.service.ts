@@ -639,8 +639,9 @@ export class DeliveryService {
     for (const j of waiting) {
       const [live] = await this.db.select({ id: driverOffers.id }).from(driverOffers).where(and(eq(driverOffers.deliveryJobId, j.id), eq(driverOffers.status, 'OFFERED'))).limit(1);
       if (live) continue;
-      const [last] = await this.db.select({ type: deliveryEvents.type, at: deliveryEvents.createdAt }).from(deliveryEvents).where(eq(deliveryEvents.deliveryJobId, j.id)).orderBy(desc(deliveryEvents.createdAt)).limit(1);
-      if (!last || last.type !== 'NO_COURIER' || now.getTime() - last.at.getTime() < minAgeMs) continue;
+      // the last search (an empty round, or offers that have all lapsed); kitchen events in between don't matter
+      const [last] = await this.db.select({ at: deliveryEvents.createdAt }).from(deliveryEvents).where(and(eq(deliveryEvents.deliveryJobId, j.id), inArray(deliveryEvents.type, ['NO_COURIER', 'OFFERED']))).orderBy(desc(deliveryEvents.createdAt)).limit(1);
+      if (!last || now.getTime() - last.at.getTime() < minAgeMs) continue;
       await this.db.transaction(async (tx) => {
         const [cur] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.id, j.id)).for('update');
         if (!cur || cur.status !== 'REQUESTED' || cur.driverId) return;
