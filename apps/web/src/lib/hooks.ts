@@ -74,9 +74,13 @@ export function useAction() {
   return { busy, error, run, setError };
 }
 
+/** Same-tab subscribers per key: every component using a key sees each write (the header's cart badge and checkout share one cart). */
+const localSubs = new Map<string, Set<(v: unknown) => void>>();
+
 export function useLocalState<T>(key: string, initial: T): [T, (v: T | ((p: T) => T)) => void] {
   const [v, setV] = useState<T>(initial);
-  const loaded = useRef(false);
+  // this instance's subscriber (stable), so a write isn't echoed back to the component that made it
+  const sub = useRef<(v: unknown) => void>((nv: unknown) => setV(nv as T)).current;
   useEffect(() => {
     try {
       const raw = localStorage.getItem(key);
@@ -84,8 +88,17 @@ export function useLocalState<T>(key: string, initial: T): [T, (v: T | ((p: T) =
     } catch {
       /* ignore */
     }
-    loaded.current = true;
-  }, [key]);
+    const subs = localSubs.get(key) || new Set();
+    subs.add(sub);
+    localSubs.set(key, subs);
+    // other tabs
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== key) return;
+      try { setV(e.newValue ? (JSON.parse(e.newValue) as T) : initial); } catch { /* ignore */ }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => { subs.delete(sub); window.removeEventListener('storage', onStorage); };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = useCallback(
     (nv: T | ((p: T) => T)) => {
       setV((p) => {
@@ -95,10 +108,12 @@ export function useLocalState<T>(key: string, initial: T): [T, (v: T | ((p: T) =
         } catch {
           /* ignore */
         }
+        // tell the other components using this key, after this render pass
+        queueMicrotask(() => localSubs.get(key)?.forEach((fn) => { if (fn !== sub) fn(next); }));
         return next;
       });
     },
-    [key],
+    [key, sub],
   );
   return [v, set];
 }

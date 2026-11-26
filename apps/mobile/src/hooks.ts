@@ -72,15 +72,33 @@ export function useAction() {
   return { busy, error, run };
 }
 
+/** Subscribers per key: every screen using a key sees each write (a restaurant screen under checkout shows the same cart). */
+const storedSubs = new Map<string, Set<(v: unknown) => void>>();
+
 export function useStored<T>(key: string, initial: T): [T, (v: T | ((p: T) => T)) => void, boolean] {
   const [v, setV] = useState<T>(initial);
   const [loaded, setLoaded] = useState(false);
+  // this instance's subscriber (stable), so a write isn't echoed back to the screen that made it
+  const fresh = useRef(false); // a write arrived before the stored value was read: the read is stale
+  const sub = useRef<(v: unknown) => void>((nv: unknown) => { fresh.current = true; setV(nv as T); }).current;
   useEffect(() => {
+    let alive = true;
     AsyncStorage.getItem(key).then((raw) => {
-      if (raw) setV(JSON.parse(raw) as T);
+      if (!alive) return;
+      if (raw && !fresh.current) setV(JSON.parse(raw) as T);
       setLoaded(true);
     });
-  }, [key]);
-  const set = useCallback((nv: T | ((p: T) => T)) => setV((p) => { const next = typeof nv === 'function' ? (nv as (p: T) => T)(p) : nv; void AsyncStorage.setItem(key, JSON.stringify(next)); return next; }), [key]);
+    const subs = storedSubs.get(key) || new Set();
+    subs.add(sub);
+    storedSubs.set(key, subs);
+    return () => { alive = false; subs.delete(sub); };
+  }, [key, sub]);
+  const set = useCallback((nv: T | ((p: T) => T)) => setV((p) => {
+    fresh.current = true;
+    const next = typeof nv === 'function' ? (nv as (p: T) => T)(p) : nv;
+    void AsyncStorage.setItem(key, JSON.stringify(next));
+    queueMicrotask(() => storedSubs.get(key)?.forEach((fn) => { if (fn !== sub) fn(next); }));
+    return next;
+  }), [key, sub]);
   return [v, set, loaded];
 }
