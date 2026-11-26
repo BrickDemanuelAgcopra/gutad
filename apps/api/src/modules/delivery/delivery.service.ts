@@ -24,6 +24,9 @@ import { CourierSpecialService, type SpecialPremium } from './courier-special.se
 
 type Status = (typeof deliveryJobs.status.enumValues)[number];
 
+/** How long an own-fleet job keeps looking for an online courier (after the food is due) before failing over. */
+const NO_COURIER_GIVE_UP_MINUTES = 20;
+
 @Injectable()
 export class DeliveryService {
   private readonly log = new Logger(DeliveryService.name);
@@ -626,6 +629,28 @@ export class DeliveryService {
   }
 
   /** Every minute: held own-fleet jobs whose time has come get their first offer round. */
+  /**
+   * Own-fleet jobs whose last offer round found nobody (no live offers, not held) get another round once a minute, or
+   * straight away when `minAgeMs` is 0 (a courier just came online). Without this a job that found nobody waited forever.
+   */
+  async retryWaiting(now = new Date(), minAgeMs = 60_000) {
+    const waiting = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.fleet, 'PLATFORM'), eq(deliveryJobs.status, 'REQUESTED'), isNull(deliveryJobs.driverId), or(isNull(deliveryJobs.holdUntil), lte(deliveryJobs.holdUntil, now))));
+    let n = 0;
+    for (const j of waiting) {
+      const [live] = await this.db.select({ id: driverOffers.id }).from(driverOffers).where(and(eq(driverOffers.deliveryJobId, j.id), eq(driverOffers.status, 'OFFERED'))).limit(1);
+      if (live) continue;
+      const [last] = await this.db.select({ type: deliveryEvents.type, at: deliveryEvents.createdAt }).from(deliveryEvents).where(eq(deliveryEvents.deliveryJobId, j.id)).orderBy(desc(deliveryEvents.createdAt)).limit(1);
+      if (!last || last.type !== 'NO_COURIER' || now.getTime() - last.at.getTime() < minAgeMs) continue;
+      await this.db.transaction(async (tx) => {
+        const [cur] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.id, j.id)).for('update');
+        if (!cur || cur.status !== 'REQUESTED' || cur.driverId) return;
+        await this.offerRound(cur, tx);
+        n++;
+      });
+    }
+    return n;
+  }
+
   async releaseHeld(now = new Date()) {
     const due = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.status, 'REQUESTED'), isNull(deliveryJobs.driverId), isNotNull(deliveryJobs.holdUntil), lte(deliveryJobs.holdUntil, now)));
     let n = 0;
@@ -787,7 +812,11 @@ export class DeliveryService {
     const d = await this.myDriver(user);
     // Courier R3: an impossible jump since the last ping is a fraud signal (the move itself is still recorded)
     await this.fraud.onLocation(d, lat, lng).catch((e) => this.log.warn(`gps check: ${(e as Error).message}`));
+    const acfg = await this.availabilityCfg();
+    const wasStale = !d.lastSeenAt || Date.now() - d.lastSeenAt.getTime() > acfg.locationFreshMinutes * 60_000;
     await this.db.update(drivers).set({ lastLat: lat, lastLng: lng, lastSeenAt: new Date() }).where(eq(drivers.id, d.id));
+    // a courier who just came (back) online gets jobs that are waiting for somebody right away
+    if (wasStale && d.isAvailable) void this.retryWaiting(new Date(), 0).catch((e) => this.log.warn(`retry waiting: ${(e as Error).message}`));
     const active = await this.db.select().from(deliveryJobs).where(and(eq(deliveryJobs.driverId, d.id), inArray(deliveryJobs.status, ['ASSIGNED', 'PICKED_UP'])));
     const cfg = await this.dispatchCfg();
     for (const j of active) {
@@ -803,7 +832,10 @@ export class DeliveryService {
     }
     // 17.1-R push the position to live maps
     this.live.publish({ type: 'courier', driverId: d.id, lat, lng, isAvailable: d.isAvailable, jobIds: active.map((j) => j.id), locationIds: Array.from(new Set(active.map((j) => j.locationId))), at: new Date().toISOString() });
-    return { ok: true };
+    // tell the app how far the nearest restaurant using Gutad couriers is, so "no offers" has a visible reason
+    const spots = await this.db.select({ name: locations.name, lat: locations.lat, lng: locations.lng }).from(locations).where(and(eq(locations.deliveryFleet, 'PLATFORM'), isNotNull(locations.lat), isNotNull(locations.lng)));
+    const nearest = spots.map((l) => ({ name: l.name, km: Math.round(haversineKm(lat, lng, l.lat!, l.lng!) * 10) / 10 })).sort((a, b) => a.km - b.km)[0] ?? null;
+    return { ok: true, at: new Date().toISOString(), radiusKm: cfg.radiusKm, nearest };
   }
 
   /** 16.3 what a job needs from its courier: alcohol licence, large-order capacity, cold bag (soft). */
@@ -895,13 +927,18 @@ export class DeliveryService {
     }
     scored.sort((a, b) => a.score - b.score);
     const pick = scored.slice(0, cfg.offersPerRound);
-    const attempts = job.offerAttempts + 1;
-    await tx.update(deliveryJobs).set({ offerAttempts: attempts, requirements: reqs, holdUntil: null }).where(eq(deliveryJobs.id, job.id));
     if (!pick.length) {
-      await this.event(job.id, 'NO_COURIER', { round: attempts }, tx);
-      if (attempts >= cfg.maxOfferRounds) await this.failover({ ...job, offerAttempts: attempts }, tx, 'No courier accepted');
+      // nobody online nearby: an empty round doesn't use up the offer rounds. retryWaiting tries again every minute (and
+      // as soon as a courier comes online) until NO_COURIER_GIVE_UP_MINUTES after the food is due, then fails over.
+      await tx.update(deliveryJobs).set({ requirements: reqs, holdUntil: null }).where(eq(deliveryJobs.id, job.id));
+      const since = Math.max(job.createdAt.getTime(), readyAt.getTime());
+      const giveUp = Date.now() - since > NO_COURIER_GIVE_UP_MINUTES * 60_000;
+      await this.event(job.id, 'NO_COURIER', { round: job.offerAttempts, candidates: available.length, giveUp }, tx);
+      if (giveUp) await this.failover(job, tx, 'No courier online nearby');
       return [];
     }
+    const attempts = job.offerAttempts + 1;
+    await tx.update(deliveryJobs).set({ offerAttempts: attempts, requirements: reqs, holdUntil: null }).where(eq(deliveryJobs.id, job.id));
     // Courier R1 guaranteed pay from the versioned policy (distance and time are inside it, never added again later)
     const tripKm = job.distanceKm ?? (drop.lat !== undefined && drop.lng !== undefined && pickup.lat !== undefined && pickup.lng !== undefined ? haversineKm(pickup.lat, pickup.lng, drop.lat, drop.lng) : 3);
     const market = eff.market ? { id: eff.market.id, version: eff.market.version } : null;

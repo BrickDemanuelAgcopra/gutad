@@ -140,7 +140,7 @@ export class JobsService {
   @Interval(60_000) chefOrderDeadlines() { return this.locked('chef-order-deadlines', 60_000, async () => ({ ...(await this.orders.expireUnacceptedChefOrders()), ...(await this.orders.recognizeCompletedChefOrders()) })); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {
-    return this.locked('delivery', 60_000, async () => ({ expiredQuotes: await this.delivery.expireQuotes(), expiredOffers: await this.delivery.expireOffers(), released: await this.delivery.releaseHeld(), late: await this.delivery.flagLate(), simulated: await this.delivery.simulateMock(), noShows: await this.courier.markNoShows() }));
+    return this.locked('delivery', 60_000, async () => ({ expiredQuotes: await this.delivery.expireQuotes(), expiredOffers: await this.delivery.expireOffers(), released: await this.delivery.releaseHeld(), retried: await this.delivery.retryWaiting(), late: await this.delivery.flagLate(), simulated: await this.delivery.simulateMock(), noShows: await this.courier.markNoShows() }));
   }
   @Interval(30_000) reservationHousekeeping() {
     return this.locked('reservations', 60_000, async () => ({ holds: await this.reservations.expireHolds(), waitlist: await this.reservations.expireWaitlistOffers(), ticketHolds: await this.events.expireTicketHolds(), groupLocks: await this.groupOrders.lockPastCutoff() }));

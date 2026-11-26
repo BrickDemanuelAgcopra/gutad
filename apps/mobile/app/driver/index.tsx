@@ -7,7 +7,7 @@ import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s } from '@/u
 import { Pills } from '@/ops';
 import { mimeFor, pickFileOnWeb, uploadMultipart, type PickedFile } from '@/upload';
 import { ResponsibilityDisputes } from '@/responsibility';
-import { currentPos, type DriverStatus, type Job, type Offer, type Onboarding } from '@/courier/common';
+import { currentPos, locate, type LocateProblem, type DriverStatus, type Job, type Offer, type Onboarding } from '@/courier/common';
 import { CourierOnboarding } from '@/courier/onboarding';
 import { FirstDeliveryGuide, JobCard, LifecycleNotice, OfferCard, StatusPanel } from '@/courier/work';
 import { CourierEarnings, CourierFeedback } from '@/courier/earnings';
@@ -34,6 +34,60 @@ export default function Driver() {
   return <Work onboarding={ob} />;
 }
 
+interface Ping { at: string | null; problem: LocateProblem | 'SEND_FAILED' | null; error?: string; nearest: { name: string; km: number } | null; radiusKm: number | null; busy: boolean }
+
+/** While online: send the position right away, then every 20 s, and keep the outcome so the screen can show it. */
+function usePing(online: boolean) {
+  const [ping, setPing] = useState<Ping>({ at: null, problem: null, nearest: null, radiusKm: null, busy: false });
+  useEffect(() => {
+    if (!online) return;
+    let alive = true;
+    const send = async () => {
+      setPing((p) => ({ ...p, busy: true }));
+      const { pos, problem } = await locate();
+      if (!alive) return;
+      if (!pos) { setPing((p) => ({ ...p, problem, busy: false })); return; }
+      try {
+        const r = await api.post<{ at: string; nearest: { name: string; km: number } | null; radiusKm: number }>('/driver/location', pos);
+        if (alive) setPing({ at: r.at || new Date().toISOString(), problem: null, nearest: r.nearest ?? null, radiusKm: r.radiusKm ?? null, busy: false });
+      } catch (e) {
+        if (alive) setPing((p) => ({ ...p, problem: 'SEND_FAILED', error: (e as Error).message, busy: false }));
+      }
+    };
+    void send();
+    const t = setInterval(() => void send(), 20_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [online]);
+  return ping;
+}
+
+const PROBLEM_TEXT: Record<string, string> = {
+  PERMISSION: 'Location permission is off, so you get no offers. Allow location for Gutad in your phone settings.',
+  SERVICES_OFF: 'Your phone’s location (GPS) is turned off, so you get no offers. Turn it on in quick settings.',
+  NO_FIX: 'Can’t get a GPS fix yet. Step near a window or outside.',
+  SEND_FAILED: 'Couldn’t send your location to Gutad',
+};
+
+/** Why offers may not be arriving: location not shared, or too far from any restaurant that uses Gutad couriers. */
+function LocationStatus({ ping }: { ping: Ping }) {
+  const far = ping.nearest && ping.radiusKm != null && ping.nearest.km > ping.radiusKm;
+  const bad = !!ping.problem || far;
+  return (
+    <Card style={{ backgroundColor: bad ? '#fef2f2' : '#f0fdf4', borderColor: bad ? '#fecaca' : '#bbf7d0' }}>
+      {ping.problem ? (
+        <Text style={{ color: C.bad, fontWeight: '600' }}>📍 {PROBLEM_TEXT[ping.problem]}{ping.problem === 'SEND_FAILED' && ping.error ? `: ${ping.error}` : ''}</Text>
+      ) : ping.at ? (
+        <Text style={{ color: far ? C.bad : C.good, fontWeight: '600' }}>📍 Location shared {when(ping.at)}{ping.busy ? ' · updating…' : ''}</Text>
+      ) : <Muted>📍 Getting your location…</Muted>}
+      {ping.nearest && (
+        <Muted>{far
+          ? `You’re ${ping.nearest.km.toLocaleString()} km from the nearest restaurant using Gutad couriers (${ping.nearest.name}). Offers only go to couriers within ${ping.radiusKm} km.`
+          : `${ping.nearest.name} is ${ping.nearest.km} km away. Keep this screen open to get offers.`}</Muted>
+      )}
+    </Card>
+  );
+}
+
 function Work({ onboarding }: { onboarding: Onboarding }) {
   const [tab, setTab] = useState<'work' | 'incentives' | 'certs' | 'earnings' | 'feedback' | 'docs' | 'shifts'>('work');
   const { data: st, reload: reloadSt } = useApi<DriverStatus>('/driver/status', { poll: 15000 });
@@ -47,11 +101,7 @@ function Work({ onboarding }: { onboarding: Onboarding }) {
   const queue = useQueue(refresh);
   // retry queued trip actions alongside the job poll
   useEffect(() => { if (queue.count) void queue.flush(); }, [jobs]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!st?.isAvailable) return;
-    const t = setInterval(async () => { const l = await currentPos(); if (l) await api.post('/driver/location', l).catch(() => undefined); }, 20_000);
-    return () => clearInterval(t);
-  }, [st?.isAvailable]);
+  const ping = usePing(!!st?.isAvailable);
   const firstDeliveryAt = st ? st.firstDeliveryAt : onboarding.driver?.firstDeliveryAt;
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
@@ -59,6 +109,7 @@ function Work({ onboarding }: { onboarding: Onboarding }) {
       {queue.refused.length > 0 && <Card><Text style={{ color: C.bad, fontWeight: '600' }}>Some offline actions weren’t accepted</Text>{queue.refused.map((r, i) => <Muted key={i}>{r}</Muted>)}<Button title="OK" variant="ghost" onPress={queue.clearRefused} /></Card>}
       <OfferAlarm offers={offers || []} onDone={refresh} />
       {st ? <StatusPanel st={st} onChange={refresh} /> : <Loading />}
+      {st?.isAvailable && <LocationStatus ping={ping} />}
       {st && <LifecycleNotice st={st} onChange={() => void reloadSt()} />}
       <ReviewNotices />
       {standing?.status === 'SUSPENDED' && <Card title="Appeal">{standing.suspendedReason && <Muted>{standing.suspendedReason}</Muted>}{standing.appealStatus === 'PENDING' ? <Muted>Your appeal is being reviewed by someone who wasn’t involved in the suspension.</Muted> : <>{standing.appealDecisionNote && <Muted>Decision: {standing.appealDecisionNote}</Muted>}<Input label="Appeal" multiline value={appeal} onChangeText={setAppeal} /><ErrorText msg={error} /><Button title="Send appeal" disabled={appeal.length < 10} onPress={() => run(async () => { await api.post('/driver/appeal', { note: appeal }); setAppeal(''); await reloadStanding(); })} /></>}</Card>}

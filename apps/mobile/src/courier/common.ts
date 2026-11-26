@@ -74,15 +74,32 @@ export function readyText(r: Readiness | null | undefined): { text: string; tone
 }
 export const label = (k: string) => k.charAt(0) + k.slice(1).toLowerCase().replace(/_/g, ' ');
 
-export async function currentPos(): Promise<{ lat: number; lng: number } | null> {
+export type LocateProblem = 'PERMISSION' | 'SERVICES_OFF' | 'NO_FIX';
+
+/**
+ * The phone's position, or why there isn't one. A fresh fix can hang indoors on Android, so it is capped at 15 s and
+ * falls back to the last known position (up to 10 min old).
+ */
+export async function locate(): Promise<{ pos: { lat: number; lng: number } | null; problem: LocateProblem | null }> {
   try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return null;
-    const p = await Location.getCurrentPositionAsync({});
-    return { lat: p.coords.latitude, lng: p.coords.longitude };
+    let { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== 'granted') ({ status } = await Location.requestForegroundPermissionsAsync());
+    if (status !== 'granted') return { pos: null, problem: 'PERMISSION' };
+    if (!(await Location.hasServicesEnabledAsync())) return { pos: null, problem: 'SERVICES_OFF' };
+    const fresh = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      new Promise<null>((r) => setTimeout(() => r(null), 15_000)),
+    ]).catch(() => null);
+    const p = fresh || (await Location.getLastKnownPositionAsync({ maxAge: 10 * 60_000 }).catch(() => null));
+    if (!p) return { pos: null, problem: 'NO_FIX' };
+    return { pos: { lat: p.coords.latitude, lng: p.coords.longitude }, problem: null };
   } catch {
-    return null;
+    return { pos: null, problem: 'NO_FIX' };
   }
+}
+
+export async function currentPos(): Promise<{ lat: number; lng: number } | null> {
+  return (await locate()).pos;
 }
 
 /** Seconds left until `iso`, ticking every second. */

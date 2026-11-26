@@ -351,6 +351,10 @@ export class OrdersService {
     const [rev] = await this.db.select({ id: reviews.id, rating: reviews.rating, body: reviews.body, reply: reviews.merchantReply, at: reviews.createdAt }).from(reviews).where(eq(reviews.orderId, orderId)).orderBy(desc(reviews.createdAt)).limit(1);
     const [drev] = await this.db.select({ rating: deliveryReviews.rating, foodRating: deliveryReviews.foodRating, packagingRating: deliveryReviews.packagingRating, comment: deliveryReviews.comment, at: deliveryReviews.createdAt }).from(deliveryReviews).where(eq(deliveryReviews.orderId, orderId)).orderBy(desc(deliveryReviews.createdAt)).limit(1);
     const reviewAt = rev?.at ?? drev?.at ?? null;
+    // own-fleet job still looking: was the last round empty (nobody online nearby) or are offers out?
+    const searching = !!job && job.fleet === 'PLATFORM' && job.status === 'REQUESTED' && !job.driverId;
+    const lastEv = searching ? (await this.db.select({ type: deliveryEvents.type }).from(deliveryEvents).where(and(eq(deliveryEvents.deliveryJobId, job!.id), inArray(deliveryEvents.type, ['NO_COURIER', 'OFFERED']))).orderBy(desc(deliveryEvents.createdAt)).limit(1))[0]?.type ?? null : null;
+    const searchText = !searching ? null : job!.holdUntil && job!.holdUntil > new Date() ? 'Offers go out as the food nears ready (Mark ready sends them now)' : lastEv === 'NO_COURIER' ? 'No courier is online near you yet. We try again every minute and the moment one comes online.' : lastEv === 'OFFERED' ? 'Offer sent to nearby couriers, waiting for one to accept' : null;
     const done = ['COLLECTED', 'COMPLETED', 'PARTIALLY_FULFILLED'].includes(o.status);
     const ended = ['REJECTED', 'CANCELED'].includes(o.status);
     const delivery = o.fulfillmentType === 'DELIVERY';
@@ -364,7 +368,7 @@ export class OrdersService {
     ];
     if (delivery) {
       stages.push(
-        { key: 'COURIER_ASSIGNED', label: 'Courier assigned', at: job?.assignedAt ?? null, detail: courier ? `${firstName ?? 'Courier'} · ${courier.vehicleType.toLowerCase()}` : partnerLabel && assigned ? `${partnerName ?? 'Courier'} · via ${partnerLabel}` : null },
+        { key: 'COURIER_ASSIGNED', label: job?.assignedAt || assigned ? 'Courier assigned' : 'Finding a courier', at: job?.assignedAt ?? null, detail: searchText ?? (courier ? `${firstName ?? 'Courier'} · ${courier.vehicleType.toLowerCase()}` : partnerLabel && assigned ? `${partnerName ?? 'Courier'} · via ${partnerLabel}` : null) },
         { key: 'COURIER_ARRIVED', label: 'Courier at your restaurant', at: job?.arrivedPickupAt ?? null },
         { key: 'PICKED_UP', label: 'Courier picked up the order', at: job?.pickedUpAt ?? o.collectedAt ?? null },
         { key: 'DELIVERED', label: 'Delivered to the customer', at: job?.deliveredAt ?? null },
@@ -382,7 +386,7 @@ export class OrdersService {
     if (ended) next = { text: o.status === 'REJECTED' ? `Rejected${o.rejectReason ? `: ${o.rejectReason}` : ''}. The customer's payment hold was released.` : `Canceled${o.cancelReason ? `: ${o.cancelReason}` : ''}.`, action: null };
     else if (o.status === 'SUBMITTED') next = { text: 'New order: check the items, pick a ready time and accept.', action: 'ACCEPT' };
     else if (['ACCEPTED', 'PREPARING'].includes(o.status)) next = { text: delivery ? 'Cook the order, then tap Mark ready. Marking ready also sends courier offers right away.' : 'Cook the order, then tap Mark ready so the customer knows to come in.', action: 'READY' };
-    else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : job?.status === 'PICKED_UP' || job?.status === 'DELIVERED' ? { text: 'The courier has the order. Tap Courier collected to close it on your side.', action: 'HANDOFF' } : { text: partnerLabel ? `Bag the order and keep it warm. A courier has been requested from ${partnerLabel}.` : 'Bag the order and keep it warm. We are finding a courier.', action: 'HANDOFF' };
+    else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : job?.status === 'PICKED_UP' || job?.status === 'DELIVERED' ? { text: 'The courier has the order. Tap Courier collected to close it on your side.', action: 'HANDOFF' } : { text: partnerLabel ? `Bag the order and keep it warm. A courier has been requested from ${partnerLabel}.` : `Bag the order and keep it warm. ${searchText ?? 'We are finding a courier.'}`, action: 'HANDOFF' };
     else if (o.status === 'READY') next = { text: o.fulfillmentType === 'DINE_IN' ? 'Serve it, then tap Served.' : `Waiting for the customer. Check their pickup code${o.pickupCode ? ` (${o.pickupCode})` : ''}, then tap Handed to customer.`, action: 'HANDOFF' };
     else if (delivery && !finished) next = { text: 'Out for delivery. Nothing to do; this page updates when it arrives.', action: null };
     else if (!reviewAt) next = { text: 'All done. The customer has been asked for a review; it shows here when they leave one.', action: null };
