@@ -212,6 +212,21 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
         paragraphs: [`Your courier can't complete the delivery (${human(p.kind)}). Please answer your phone or reply before ${when(p.waitUntil)}, or the order may be returned.`],
         cta: orderCta(),
       });
+    case 'delivery.no_courier':
+      return sub(`No courier nearby yet for order ${num}`, `We can't find a courier near the store right now. Open your order to pick it up yourself (delivery fee and tip refunded), cancel for a full refund, or keep waiting.`, {
+        eyebrow: 'Action needed', tone: 'warning', heading: 'No courier nearby yet',
+        paragraphs: ["We're sorry. No courier is available near the store right now. You can pick the order up yourself and we refund the delivery fee and tip, cancel for a full refund, or keep waiting while we keep looking."],
+        details: [['Order', num]],
+        cta: orderCta('Choose what to do'),
+      });
+    case 'order.switched_to_pickup':
+      return sub(`Order ${num} is now a pickup order`, `Pick up order ${num} at ${p.storeName}${p.storeAddress ? `, ${p.storeAddress}` : ''}${p.ready ? ' — it is ready now' : ' when it is ready'}. Show code ${p.pickupCode}.${(p.refundCents as number) > 0 ? ` We refunded ${money(p.refundCents as number)}.` : ''}`, {
+        eyebrow: 'Pickup', tone: 'success', heading: 'Your order is now a pickup order',
+        paragraphs: [`Collect it at ${p.storeName}${p.storeAddress ? `, ${p.storeAddress}` : ''}. ${p.ready ? 'It is ready now.' : "We'll tell you when it's ready."}`, (p.refundCents as number) > 0 ? `We refunded the delivery fee and courier tip (${money(p.refundCents as number)}) to your original payment method.` : ''].filter(Boolean),
+        code: p.pickupCode ? { label: 'Pickup code', value: String(p.pickupCode) } : undefined,
+        details: [['Order', num], ['Refund', (p.refundCents as number) > 0 ? money(p.refundCents as number) : '']],
+        cta: orderCta(),
+      });
     case 'delivery.failed':
       return sub('Delivery problem', `We hit a problem delivering your order (${p.reason || 'unassigned'}). Support is on it.`, {
         eyebrow: 'Delivery problem', tone: 'danger', heading: 'We hit a problem with your delivery',
@@ -363,6 +378,15 @@ Add it in Account → Rewards → Gift cards and use it at checkout.`, {
     case 'merchant.new_order':
       return sub(`New order ${num}`, `New order ${num} waiting for acceptance.`, {
         audience: 'merchant', eyebrow: 'New order', heading: `New order ${num}`, paragraphs: ['A new order is waiting for you to accept it.'],
+        cta: { label: 'Open orders', url: `${web}/merchant/orders` },
+      });
+    case 'merchant.delivery_choice':
+      if (p.choice === 'PICKUP') return sub(`Order ${num} is now pickup`, `No courier was available, so the customer will collect order ${num} themselves. Check code ${p.pickupCode} at handoff.`, {
+        audience: 'merchant', eyebrow: 'Order changed', heading: `Order ${num} switched to pickup`, paragraphs: [`No courier was available, so the customer is coming in to collect it. Check pickup code ${p.pickupCode} when you hand it over.`],
+        cta: { label: 'Open order', url: `${web}/merchant/orders/${p.aggregateId || ''}` },
+      });
+      return sub(`Order ${num} canceled: no courier`, `No courier was available and the customer canceled order ${num}.${p.storePaid ? ' You are still paid for it.' : ''}`, {
+        audience: 'merchant', eyebrow: 'Order canceled', tone: 'danger', heading: `Order ${num} was canceled`, paragraphs: [`No courier was available and the customer canceled.${p.storePaid ? ' This was not your fault: Gutad refunds the customer and you are still paid for the order.' : ''}`],
         cta: { label: 'Open orders', url: `${web}/merchant/orders` },
       });
     case 'merchant.unacknowledged':
@@ -613,6 +637,8 @@ export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'delivery.delivered': { proofPhotoUrl: 'x', orderId: 'sample' },
   'delivery.attempt': { kind: 'NO_ANSWER', waitUntil: new Date(Date.now() + 10 * 60_000).toISOString(), orderId: 'sample' },
   'delivery.failed': { reason: 'VEHICLE_ISSUE', orderId: 'sample' },
+  'delivery.no_courier': { number: 'G-10482', orderId: 'sample' },
+  'order.switched_to_pickup': { number: 'G-10482', storeName: 'Demo Bistro', storeAddress: '55 W 9th St, New York', pickupCode: '4821', refundCents: 799, ready: true, orderId: 'sample' },
   'delivery.late': { promiseAt: new Date(Date.now() + 30 * 60_000).toISOString(), orderId: 'sample' },
   'reservation.held': { locationName: 'Ember & Oak', startAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), partySize: 4, confirmationCode: 'K7Q2PX', holdExpiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
   'reservation.confirmed': { locationName: 'Ember & Oak', startAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), partySize: 4, confirmationCode: 'K7Q2PX' },
@@ -635,6 +661,7 @@ export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'courier.offer': { payCents: 875, pickupAt: '400 W 14th St', expiresAt: new Date().toISOString() },
   'merchant.new_order': { number: 'G-10482' },
   'merchant.unacknowledged': { number: 'G-10482', offline: true },
+  'merchant.delivery_choice': { number: 'G-10482', choice: 'PICKUP', pickupCode: '4821' },
   'payout.paid': { amountCents: 482350, period: 'Nov 3 – Nov 9' },
   'payout.failed': { amountCents: 482350, reason: 'Account closed' },
   'document.expiring': { docType: 'food handler certificate', expiresAt: new Date(Date.now() + 14 * 86_400_000).toISOString(), expired: false },

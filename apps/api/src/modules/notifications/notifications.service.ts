@@ -50,9 +50,20 @@ export class NotificationsService {
     const email = (p.email as string) || null;
     const phone = (p.phone as string) || null;
     const dedupe = `${topic}:${aggregateId}`;
+    // a courier booking canceled as part of something the customer already hears about (order canceled, switched to pickup)
+    if (topic === 'delivery.failed' && p.quiet) return;
     switch (topic) {
       case 'courier.offer': {
         if (p.userId) await this.notify.queue({ userId: p.userId as string, template: 'courier.offer', payload: p, dedupeKey: `${dedupe}:${p.userId}:${p.expiresAt}`, channels: ['PUSH'] });
+        return;
+      }
+      case 'order.delivery_choice': {
+        // no courier: the customer switched to pickup (or canceled, which order.canceled already tells them)
+        if (p.choice === 'PICKUP') {
+          const target = await this.resolveTarget(topic, aggregateId, userId, email, phone, p);
+          if (target.userId || target.email || target.phone) await this.notify.queue({ ...target, template: 'order.switched_to_pickup', payload: p, dedupeKey: dedupe });
+        }
+        await this.notifyMerchantStaff(p.locationId as string, 'merchant.delivery_choice', p, dedupe);
         return;
       }
       case 'order.submitted': {
@@ -74,6 +85,7 @@ export class NotificationsService {
       case 'delivery.picked_up':
       case 'delivery.delivered':
       case 'delivery.failed':
+      case 'delivery.no_courier':
       case 'delivery.arrived':
       case 'delivery.attempt':
       case 'ticket.confirmed':

@@ -60,13 +60,48 @@ function handoffNotes(h: CustomerHandoffRequirements | null | undefined): string
   ].filter((x): x is string => !!x);
 }
 
+/** No courier near the store: the customer's options (see OrdersService.courierDelay). */
+interface CourierDelay { since: string; waiting: boolean; store: { name: string; line1: string | null; city: string | null; gutad: boolean }; pickupRefundCents: number; cancelRefundCents: number; foodReady: boolean }
+
+function CourierDelayCard({ orderId, d, onDone }: { orderId: string; d: CourierDelay; onDone: () => void }) {
+  const [open, setOpen] = useState(!d.waiting);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const choose = async (choice: 'PICKUP' | 'CANCEL' | 'WAIT') => {
+    setBusy(choice); setErr(null);
+    try { await api.post(`/orders/${orderId}/courier-delay`, { choice }); if (choice === 'WAIT') setOpen(false); onDone(); }
+    catch (e) { setErr((e as Error).message); onDone(); }
+    finally { setBusy(null); }
+  };
+  const where = [d.store.line1, d.store.city].filter(Boolean).join(', ');
+  if (!open) return <Card><Text style={{ color: C.ink7 }}>Still looking for a courier near {d.store.name}. We send your order the moment one is free.</Text><Button title="See other options" variant="ghost" onPress={() => setOpen(true)} /></Card>;
+  return (
+    <Card title="No courier nearby yet">
+      <Text style={{ color: C.ink7 }}>Sorry, no courier is available near {d.store.name} right now{d.foodReady ? ' and your food is ready' : ''}. Choose what works best for you:</Text>
+      <Text style={{ fontWeight: '700', marginTop: 10, color: C.ink }}>Pick it up yourself</Text>
+      <Muted>Collect it at {d.store.gutad ? 'the Gutad store' : d.store.name}{where ? `, ${where}` : ''}.{d.pickupRefundCents > 0 ? ` We refund the delivery fee and tip (${money(d.pickupRefundCents)}).` : ''}</Muted>
+      <Button title={busy === 'PICKUP' ? 'Switching…' : 'Switch to pickup'} disabled={!!busy} onPress={() => choose('PICKUP')} />
+      <Text style={{ fontWeight: '700', marginTop: 10, color: C.ink }}>Cancel the order</Text>
+      <Muted>Full refund{d.cancelRefundCents > 0 ? ` of ${money(d.cancelRefundCents)}` : ''} to your payment method (5–10 business days).</Muted>
+      {!confirmCancel
+        ? <Button title="Cancel and refund" variant="secondary" disabled={!!busy} onPress={() => setConfirmCancel(true)} />
+        : <View style={{ flexDirection: 'row', gap: 8 }}><Button title={busy === 'CANCEL' ? 'Cancelling…' : 'Yes, cancel'} variant="danger" disabled={!!busy} onPress={() => choose('CANCEL')} /><Button title="Back" variant="ghost" onPress={() => setConfirmCancel(false)} /></View>}
+      <Text style={{ fontWeight: '700', marginTop: 10, color: C.ink }}>Keep waiting</Text>
+      <Muted>We keep looking and send it as soon as a courier is free. If none turns up, we pass it to a partner delivery service.</Muted>
+      <Button title={busy === 'WAIT' ? 'Saving…' : 'I’ll wait'} variant="ghost" disabled={!!busy} onPress={() => choose('WAIT')} />
+      <ErrorText msg={err} />
+    </Card>
+  );
+}
+
 const COURIER: Record<string, string> = { QUOTED: 'Waiting for the restaurant', REQUESTED: 'Finding a courier', ASSIGNED: 'Courier heading to pick up', PICKED_UP: 'Courier on the way', DELIVERED: 'Delivered', UNASSIGNED: 'Finding a new courier', CANCELED: 'Delivery canceled', FAILED: 'Delivery problem', RETURNED: 'Returned to the restaurant' };
 
 export default function Order() {
   const { id, email } = useLocalSearchParams<{ id: string; email?: string }>();
   const { user } = useSession();
   const router = useRouter();
-  const { data: o, reload } = useApi<{ id: string; number: string; status: string; fulfillmentType: string; locationName: string; totalCents: number; promiseAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null }[]; payment: { status: string; amountCents?: number; capturedCents?: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null; prepaid?: boolean; scheduledFor?: string | null; amendable?: boolean; amendedFromOrderId?: string | null; chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null; delivery: { id: string; status: string; etaAt: string | null; hasProof?: boolean; handoffPin?: string | null; courierFirstName?: string | null; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null; handoffRequirements?: CustomerHandoffRequirements | null } | null }>(`/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`, { poll: 5000 });
+  const { data: o, reload } = useApi<{ id: string; number: string; status: string; fulfillmentType: string; locationName: string; totalCents: number; promiseAt: string | null; pickupCode: string | null; shelfSlot?: string | null; tableNumber?: string | null; canCancel: boolean; courierDelay?: CourierDelay | null; lines: { id: string; menuItemId: string | null; name: string; quantity: number; lineTotalCents: number; status: string; replacementNote: string | null }[]; payment: { status: string; amountCents?: number; capturedCents?: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null; prepaid?: boolean; scheduledFor?: string | null; amendable?: boolean; amendedFromOrderId?: string | null; chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null; delivery: { id: string; status: string; etaAt: string | null; hasProof?: boolean; handoffPin?: string | null; courierFirstName?: string | null; arrivedAt?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null; handoffRequirements?: CustomerHandoffRequirements | null } | null }>(`/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`, { poll: 5000 });
   const { data: track } = useApi<{ status: string; etaAt: string | null; courierLocation: { lat: number; lng: number } | null }>(o?.delivery ? `/public/delivery/${o.delivery.id}/track` : null, { poll: 7000, deps: [o?.delivery?.id] });
   const [report, setReport] = useState<{ category: string; itemId: string; text: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -101,6 +136,7 @@ export default function Order() {
       {o.status === 'READY' && o.pickupCode && <Card><Text style={{ fontSize: 16 }}>Ready{o.shelfSlot ? ` on shelf ${o.shelfSlot}` : ''}! Show code</Text><Text style={{ fontSize: 40, fontWeight: '800', letterSpacing: 6 }}>{o.pickupCode}</Text></Card>}
       {o.promiseAt && !bad && o.status !== 'COMPLETED' && <Muted>Estimated {o.fulfillmentType === 'DELIVERY' ? 'delivery' : 'ready'}: {when(o.promiseAt)}</Muted>}
       {o.lines.filter((l) => l.status === 'UNAVAILABLE').map((l) => <Card key={l.id} title="Item unavailable"><Text>{l.name}{l.replacementNote ? ` — suggested: ${l.replacementNote}` : ''}</Text><View style={{ flexDirection: 'row', gap: 8 }}><Button title="Accept replacement" onPress={() => api.post(`/orders/${o.id}/resolve-line`, { lineId: l.id, choice: 'REPLACE' }).then(reload)} /><Button title="Credit me" variant="secondary" onPress={() => api.post(`/orders/${o.id}/resolve-line`, { lineId: l.id, choice: 'CREDIT' }).then(reload)} /></View></Card>)}
+      {o.courierDelay && user && <CourierDelayCard orderId={o.id} d={o.courierDelay} onDone={reload} />}
       {o.delivery && <Card title="Delivery"><View style={s.row}><Text>{o.delivery.courierFirstName ? `Courier: ${o.delivery.courierFirstName}` : 'Courier'}</Text><Badge text={COURIER[track?.status || o.delivery.status] || track?.status || o.delivery.status} tone={tone(track?.status || o.delivery.status)} /></View>{track?.etaAt && <Muted>ETA {when(track.etaAt)}</Muted>}{track?.courierLocation && <Muted>Courier at {track.courierLocation.lat.toFixed(3)}, {track.courierLocation.lng.toFixed(3)}</Muted>}{o.delivery.exception && !o.delivery.exception.resolution && <Text style={{ color: C.bad, marginTop: 4 }}>Your courier is at the address and trying to reach you. Please answer your phone.</Text>}{o.delivery.arrivedAt && !o.delivery.exception && <Muted>Your courier has arrived.</Muted>}{o.delivery.hasProof && <Muted>Proof of delivery recorded</Muted>}{!['DELIVERED', 'CANCELED', 'RETURNED', 'FAILED'].includes(track?.status || o.delivery.status) && handoffNotes(o.delivery.handoffRequirements).map((n) => <Text key={n} style={{ color: C.warn, fontSize: 13, marginTop: 2 }}>• {n}</Text>)}{o.delivery.handoffPin && ['ASSIGNED', 'PICKED_UP'].includes(track?.status || o.delivery.status) && <View style={{ marginTop: 8, padding: 10, borderRadius: 12, backgroundColor: '#fff4ec' }}><Text style={{ color: C.ink7 }}>Give this PIN to {o.delivery.courierFirstName || 'your courier'} at the door</Text><Text style={{ fontSize: 32, fontWeight: '800', letterSpacing: 6, color: C.ink }}>{o.delivery.handoffPin}</Text></View>}</Card>}
       {o.delivery && (track?.status || o.delivery.status) === 'DELIVERED' && user && <DeliveryReview orderId={o.id} />}
       <Card title="Items">{o.lines.map((l) => <View key={l.id} style={s.row}><Text>{l.quantity}× {l.name} {l.status === 'CREDITED' ? '(credited)' : ''}</Text><Text>{money(l.lineTotalCents)}</Text></View>)}<View style={[s.row, { marginTop: 6 }]}><Text style={{ fontWeight: '700' }}>Total</Text><Text style={{ fontWeight: '700' }}>{money(o.totalCents)}</Text></View>{o.payment && (o.prepaid ? <Muted>Charged {money(o.payment.capturedCents ?? o.payment.amountCents ?? o.totalCents)}{o.payment.chargedAt ? ` on ${when(o.payment.chargedAt)}` : ''}{o.payment.sharedWithOrders ? ' (part of one payment for several chefs)' : ''}{o.payment.refundedCents ? ` · refunded ${money(o.payment.refundedCents)}` : ''}</Muted> : <Muted>Payment {o.payment.status}{o.payment.refundedCents ? ` · refunded ${money(o.payment.refundedCents)}` : ''}</Muted>)}</Card>

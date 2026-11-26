@@ -18,9 +18,55 @@ interface Order {
   payment: { status: string; capturedCents: number; refundedCents: number; chargedAt?: string; sharedWithOrders?: boolean } | null;
   prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null; amendable?: boolean; amendedFromOrderId?: string | null;
   chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null;
+  courierDelay?: CourierDelay | null;
   delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; handoffPin?: string | null; handoffRequirements?: CustomerHandoffRequirements | null; courierFirstName?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
 
+/** No courier near the store: the customer's options (see OrdersService.courierDelay). */
+interface CourierDelay { since: string; waiting: boolean; store: { name: string; line1: string | null; city: string | null; gutad: boolean }; pickupRefundCents: number; cancelRefundCents: number; foodReady: boolean }
+
+function CourierDelayCard({ orderId, d, onDone }: { orderId: string; d: CourierDelay; onDone: () => void }) {
+  const [open, setOpen] = useState(!d.waiting);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const choose = async (choice: 'PICKUP' | 'CANCEL' | 'WAIT') => {
+    setBusy(choice); setErr(null);
+    try { await api.post(`/orders/${orderId}/courier-delay`, { choice }); if (choice === 'WAIT') setOpen(false); onDone(); }
+    catch (e) { setErr((e as Error).message); onDone(); }
+    finally { setBusy(null); }
+  };
+  const where = [d.store.line1, d.store.city].filter(Boolean).join(', ');
+  const storeLabel = d.store.gutad ? 'the Gutad store' : d.store.name;
+  if (!open) return (
+    <Alert tone="info">Still looking for a courier near {d.store.name}. We send your order the moment one is free. <button className="underline" onClick={() => setOpen(true)}>See other options</button></Alert>
+  );
+  return (
+    <Card title="No courier nearby yet">
+      <p className="text-sm text-ink-700">Sorry, no courier is available near {d.store.name} right now{d.foodReady ? ' and your food is ready' : ''}. Choose what works best for you:</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-ink-100 p-3">
+          <p className="font-semibold">Pick it up yourself</p>
+          <p className="mt-1 text-xs text-ink-500">Collect it at {storeLabel}{where ? `, ${where}` : ''}.{d.pickupRefundCents > 0 ? ` We refund the delivery fee and tip (${money(d.pickupRefundCents)}).` : ''}</p>
+          <Button className="mt-2" size="sm" disabled={!!busy} onClick={() => choose('PICKUP')}>{busy === 'PICKUP' ? 'Switching…' : 'Switch to pickup'}</Button>
+        </div>
+        <div className="rounded-xl border border-ink-100 p-3">
+          <p className="font-semibold">Cancel the order</p>
+          <p className="mt-1 text-xs text-ink-500">Full refund{d.cancelRefundCents > 0 ? ` of ${money(d.cancelRefundCents)}` : ''} to your payment method. Refunds take 5–10 business days to appear.</p>
+          {!confirmCancel
+            ? <Button className="mt-2" size="sm" variant="secondary" disabled={!!busy} onClick={() => setConfirmCancel(true)}>Cancel and refund</Button>
+            : <div className="mt-2 flex gap-2"><Button size="sm" variant="danger" disabled={!!busy} onClick={() => choose('CANCEL')}>{busy === 'CANCEL' ? 'Cancelling…' : 'Yes, cancel'}</Button><Button size="sm" variant="ghost" onClick={() => setConfirmCancel(false)}>Back</Button></div>}
+        </div>
+        <div className="rounded-xl border border-ink-100 p-3">
+          <p className="font-semibold">Keep waiting</p>
+          <p className="mt-1 text-xs text-ink-500">We keep looking and send it as soon as a courier is free. If none turns up, we pass it to a partner delivery service.</p>
+          <Button className="mt-2" size="sm" variant="ghost" disabled={!!busy} onClick={() => choose('WAIT')}>{busy === 'WAIT' ? 'Saving…' : 'I’ll wait'}</Button>
+        </div>
+      </div>
+      {err && <p className="mt-2 text-sm text-red-600">{err}</p>}
+    </Card>
+  );
+}
 
 const COURIER: Record<string, string> = { QUOTED: 'Waiting for the restaurant', REQUESTED: 'Finding a courier', ASSIGNED: 'Courier heading to pick up', PICKED_UP: 'Courier on the way', DELIVERED: 'Delivered', UNASSIGNED: 'Finding a new courier', CANCELED: 'Delivery canceled', FAILED: 'Delivery problem: support has been notified', RETURNED: 'Returned to the restaurant', QUOTE_EXPIRED: 'Delivery quote expired' };
 const courierLabel = (s: string) => COURIER[s] || s.replace(/_/g, ' ').toLowerCase();
@@ -153,6 +199,8 @@ export default function OrderPage() {
           ))}
         </Card>
       )}
+      {o.courierDelay && user && <CourierDelayCard orderId={o.id} d={o.courierDelay} onDone={reload} />}
+      {o.courierDelay && !user && <Alert tone="info">No courier is available near {o.locationName} right now. Sign in to switch to pickup, cancel for a full refund, or keep waiting.</Alert>}
       {o.delivery && (
         <Card title="Delivery">
           <div className="flex items-center justify-between text-sm"><span>Courier</span><Badge tone={statusTone(track?.status || o.delivery.status)}>{courierLabel(track?.status || o.delivery.status)}</Badge></div>

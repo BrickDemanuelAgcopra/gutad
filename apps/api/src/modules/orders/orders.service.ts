@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx, Tx } from '../../db/db.module';
-import { checkoutGroups, journalEntries, orderPaymentAllocations, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods, reviews, deliveryReviews, deliveryEvents } from '../../db/schema';
+import { checkoutGroups, journalEntries, orderPaymentAllocations, paymentFailures, deliveryJobs, devices, drivers, users, locations, orderEvents, orderLines, orders, packingTasks, payments, quotes, customerRestrictions, paymentMethods, reviews, deliveryReviews, deliveryEvents, driverOffers } from '../../db/schema';
 import { chefCancellationRefund, DEFAULT_PICKUP_POLICY, type PickupPolicy } from '@gutad/shared';
 import { SettingsService } from '../../core/settings.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, staffCovers } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
+import { FirstPartyService } from '../../core/first-party.service';
 import { AuditService } from '../../core/audit.service';
 import { RedisService } from '../../core/redis.service';
 import { LedgerService } from '../../core/ledger.service';
@@ -64,6 +65,7 @@ export class OrdersService {
     private readonly settings: SettingsService,
     private readonly ledger: LedgerService,
     private readonly chefCalendar: ChefCalendarService,
+    private readonly firstParty: FirstPartyService,
   ) {}
 
   // ───── 07 checkout ─────
@@ -354,7 +356,9 @@ export class OrdersService {
     // own-fleet job still looking: was the last round empty (nobody online nearby) or are offers out?
     const searching = !!job && job.fleet === 'PLATFORM' && job.status === 'REQUESTED' && !job.driverId;
     const lastEv = searching ? (await this.db.select({ type: deliveryEvents.type }).from(deliveryEvents).where(and(eq(deliveryEvents.deliveryJobId, job!.id), inArray(deliveryEvents.type, ['NO_COURIER', 'OFFERED']))).orderBy(desc(deliveryEvents.createdAt)).limit(1))[0]?.type ?? null : null;
-    const searchText = !searching ? null : job!.holdUntil && job!.holdUntil > new Date() ? 'Offers go out as the food nears ready (Mark ready sends them now)' : lastEv === 'NO_COURIER' ? 'No courier is online near you yet. We try again every minute and the moment one comes online.' : lastEv === 'OFFERED' ? 'Offer sent to nearby couriers, waiting for one to accept' : null;
+    const searchText = !searching ? null : job!.holdUntil && job!.holdUntil > new Date() ? 'Offers go out as the food nears ready (Mark ready sends them now)' : lastEv === 'NO_COURIER' ? 'No courier is online near you yet. We try again every minute and the moment one comes online. The customer can switch to pickup, cancel or wait.' : lastEv === 'OFFERED' ? 'Offer sent to nearby couriers, waiting for one to accept' : null;
+    const switched = o.fulfillmentType === 'PICKUP' && !!(await this.db.select({ id: orderEvents.id }).from(orderEvents).where(and(eq(orderEvents.orderId, orderId), eq(orderEvents.type, 'SWITCHED_TO_PICKUP'))).limit(1))[0];
+    const switchNote = switched ? 'No courier was available, so the customer switched to pickup and is coming in. ' : '';
     const done = ['COLLECTED', 'COMPLETED', 'PARTIALLY_FULFILLED'].includes(o.status);
     const ended = ['REJECTED', 'CANCELED'].includes(o.status);
     const delivery = o.fulfillmentType === 'DELIVERY';
@@ -385,9 +389,9 @@ export class OrdersService {
     let next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | null } = { text: '', action: null };
     if (ended) next = { text: o.status === 'REJECTED' ? `Rejected${o.rejectReason ? `: ${o.rejectReason}` : ''}. The customer's payment hold was released.` : `Canceled${o.cancelReason ? `: ${o.cancelReason}` : ''}.`, action: null };
     else if (o.status === 'SUBMITTED') next = { text: 'New order: check the items, pick a ready time and accept.', action: 'ACCEPT' };
-    else if (['ACCEPTED', 'PREPARING'].includes(o.status)) next = { text: delivery ? 'Cook the order, then tap Mark ready. Marking ready also sends courier offers right away.' : 'Cook the order, then tap Mark ready so the customer knows to come in.', action: 'READY' };
+    else if (['ACCEPTED', 'PREPARING'].includes(o.status)) next = { text: delivery ? 'Cook the order, then tap Mark ready. Marking ready also sends courier offers right away.' : `${switchNote}Cook the order, then tap Mark ready so the customer knows to come in.`, action: 'READY' };
     else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : job?.status === 'PICKED_UP' || job?.status === 'DELIVERED' ? { text: 'The courier has the order. Tap Courier collected to close it on your side.', action: 'HANDOFF' } : { text: partnerLabel ? `Bag the order and keep it warm. A courier has been requested from ${partnerLabel}.` : `Bag the order and keep it warm. ${searchText ?? 'We are finding a courier.'}`, action: 'HANDOFF' };
-    else if (o.status === 'READY') next = { text: o.fulfillmentType === 'DINE_IN' ? 'Serve it, then tap Served.' : `Waiting for the customer. Check their pickup code${o.pickupCode ? ` (${o.pickupCode})` : ''}, then tap Handed to customer.`, action: 'HANDOFF' };
+    else if (o.status === 'READY') next = { text: o.fulfillmentType === 'DINE_IN' ? 'Serve it, then tap Served.' : `${switchNote}Waiting for the customer. Check their pickup code${o.pickupCode ? ` (${o.pickupCode})` : ''}, then tap Handed to customer.`, action: 'HANDOFF' };
     else if (delivery && !finished) next = { text: 'Out for delivery. Nothing to do; this page updates when it arrives.', action: null };
     else if (!reviewAt) next = { text: 'All done. The customer has been asked for a review; it shows here when they leave one.', action: null };
     else next = { text: 'All done and reviewed.', action: null };
@@ -635,7 +639,7 @@ export class OrdersService {
   }
 
   /** Support/merchant cancel after acceptance: refund captured money with an explicit cost owner. */
-  async cancelByStaff(user: JwtPayload, orderId: string, reason: string, funder: 'MERCHANT' | 'PLATFORM' | 'PROVIDER' | 'DRIVER') {
+  async cancelByStaff(user: JwtPayload, orderId: string, reason: string, funder: 'MERCHANT' | 'PLATFORM' | 'PROVIDER' | 'DRIVER', actor?: { id: string; role: string }) {
     const o = await this.requireStaffOrder(user, orderId);
     if (['COMPLETED', 'CANCELED', 'REJECTED'].includes(o.status)) throw new ConflictException(`Order is ${o.status}`);
     await this.db.transaction(async (tx) => {
@@ -651,9 +655,9 @@ export class OrdersService {
       await this.growth.reverseRedemptions(orderId, tx);
       await this.growth.reverseForOrder(orderId, tx);
       const [job] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
-      if (job && !['DELIVERED', 'CANCELED', 'FAILED'].includes(job.status)) await this.delivery.transition(job.id, 'CANCELED', { reason, costOwner: funder }, tx);
+      if (job && !['DELIVERED', 'CANCELED', 'FAILED'].includes(job.status)) await this.delivery.transition(job.id, 'CANCELED', { reason, costOwner: funder, quiet: true }, tx);
       await tx.execute(sql`update kitchen_tickets set status='VOID' where order_id=${orderId} and status in ('QUEUED','IN_PROGRESS')`);
-      await this.event(orderId, 'CANCELED', user.sub, isPlatformStaff(user) ? 'SUPPORT' : 'MERCHANT', { reason, funder }, tx);
+      await this.event(orderId, 'CANCELED', actor?.id ?? user.sub, actor?.role ?? (isPlatformStaff(user) ? 'SUPPORT' : 'MERCHANT'), { reason, funder }, tx);
       await this.outbox.publish('order.canceled', orderId, { number: o.number, reason, userId: o.userId }, tx);
     });
     return this.present(orderId);
@@ -803,12 +807,91 @@ export class OrdersService {
       lines: lines.map((l) => ({ id: l.id, menuItemId: l.menuItemId, handling: l.handling, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions, status: l.status, replacementNote: l.replacementNote, brandId: l.brandId, allergens: l.allergens, dietaryTags: l.dietaryTags })),
       payment: alloc ? { status: alloc.a.refundedCents >= alloc.a.amountCents && alloc.a.amountCents > 0 ? 'REFUNDED' : alloc.a.refundedCents ? 'PARTIALLY_REFUNDED' : 'CAPTURED', amountCents: alloc.a.amountCents, capturedCents: alloc.a.amountCents, refundedCents: alloc.a.refundedCents, chargedAt: alloc.p.createdAt, sharedWithOrders: alloc.p.amountCents !== alloc.a.amountCents } : p ? { status: p.status, amountCents: p.amountCents, capturedCents: p.capturedCents, refundedCents: p.refundedCents, clientSecret: p.status === 'REQUIRES_ACTION' ? p.clientSecret : undefined } : null,
       delivery: job ? { id: job.id, status: job.status, etaAt: job.etaAt, trackingUrl: job.trackingUrl, hasProof: !!(job.proofPhotoUrl || job.proofSignature), fleet: job.fleet, arrivedAt: job.arrivedDropoffAt, handoffPin: ['REQUESTED', 'ASSIGNED', 'PICKED_UP'].includes(job.status) ? job.handoffPin : null, handoffRequirements: ['REQUESTED', 'ASSIGNED', 'PICKED_UP'].includes(job.status) ? await this.delivery.special.customerRequirements(job) : null, courierFirstName: job.driverId && ['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(job.status) ? ((await this.db.select({ name: users.name }).from(drivers).innerJoin(users, eq(users.id, drivers.userId)).where(eq(drivers.id, job.driverId)).limit(1))[0]?.name?.split(' ')[0] ?? null) : null, exception: job.exception ? { kind: (job.exception as { kind: string }).kind, waitUntil: (job.exception as { waitUntil?: string }).waitUntil, resolution: (job.exception as { resolution?: string }).resolution ?? null } : null } : null,
+      courierDelay: await this.courierDelay(o, job ?? null),
       canCancel: o.prepaid ? ['SUBMITTED', 'ACCEPTED'].includes(o.status) : o.status === 'SUBMITTED',
       // Gutad Chef Network: a paid order can be changed until its cutoff (see amendCheck)
       amendable: o.prepaid ? this.amendCheck(o).allowed : false,
       // Gutad Chef Network: sold by Gutad, prepared by the chef; the cancellation terms accepted at checkout
       chefNetwork: o.prepaid ? { chefName: await this.chefCalendar.chefNameFor(o.locationId), chefSlug: await this.chefCalendar.chefSlugFor(o.locationId), freeCancelUntil: o.freeCancelUntil, lateRefundPct: o.lateRefundPct, acceptBy: o.acceptBy, checkoutGroupId: o.checkoutGroupId } : null,
     };
+  }
+
+  /**
+   * No courier near the store (own fleet found nobody, or every option ran out): what the customer can do instead,
+   * as DoorDash/Uber Eats do: pick it up (delivery fee and courier tip refunded), cancel for a full refund (Gutad pays,
+   * the store is still paid), or keep waiting. Null while a courier is assigned or offers are out.
+   */
+  private async courierDelay(o: typeof orders.$inferSelect, job: typeof deliveryJobs.$inferSelect | null) {
+    if (!job || o.fulfillmentType !== 'DELIVERY' || !['ACCEPTED', 'PREPARING', 'READY'].includes(o.status) || job.driverId) return null;
+    const stuck = (job.fleet === 'PLATFORM' && job.status === 'REQUESTED') || job.status === 'UNASSIGNED';
+    if (!stuck) return null;
+    const evs = await this.db.select({ type: deliveryEvents.type, at: deliveryEvents.createdAt }).from(deliveryEvents).where(and(eq(deliveryEvents.deliveryJobId, job.id), inArray(deliveryEvents.type, ['NO_COURIER', 'OFFERED', 'DISPATCH_EXHAUSTED']))).orderBy(deliveryEvents.createdAt);
+    const first = evs.find((e) => e.type !== 'OFFERED');
+    const last = evs[evs.length - 1];
+    if (!first || (last.type === 'OFFERED' && job.status !== 'UNASSIGNED')) return null;
+    const [wait] = await this.db.select({ at: orderEvents.createdAt }).from(orderEvents).where(and(eq(orderEvents.orderId, o.id), eq(orderEvents.type, 'COURIER_DELAY_WAIT'))).orderBy(desc(orderEvents.createdAt)).limit(1);
+    const [loc] = await this.db.select({ name: locations.name }).from(locations).where(eq(locations.id, o.locationId)).limit(1);
+    const addr = job.pickupAddress as Address;
+    const alloc = o.prepaid ? await this.payments.allocationFor(o.id) : null;
+    const [p] = alloc ? [alloc.p] : await this.db.select().from(payments).where(eq(payments.orderId, o.id)).limit(1);
+    const paid = alloc ? alloc.a.amountCents - alloc.a.refundedCents : p ? Math.max(0, p.capturedCents - p.refundedCents) || (['AUTHORIZED', 'REQUIRES_ACTION'].includes(p.status) ? p.amountCents : 0) : 0;
+    return {
+      since: first.at,
+      waiting: !!wait,
+      store: { name: loc?.name ?? 'the store', line1: addr?.line1 ?? null, city: addr?.city ?? null, gutad: await this.firstParty.isFirstPartyOrg(o.organizationId) },
+      pickupRefundCents: Math.min(paid, o.deliveryFeeCents + o.tipCents),
+      cancelRefundCents: paid,
+      foodReady: o.status === 'READY',
+    };
+  }
+
+  /** The customer's answer to a courier delay: PICKUP, CANCEL (full refund) or WAIT. */
+  async resolveCourierDelay(user: JwtPayload, orderId: string, choice: 'PICKUP' | 'CANCEL' | 'WAIT') {
+    const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o || o.userId !== user.sub) throw new NotFoundException();
+    const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+    const delay = await this.courierDelay(o, job ?? null);
+    if (!delay) throw new ConflictException('A courier has been found or the order has moved on, so these options are no longer available');
+    if (choice === 'WAIT') {
+      await this.event(orderId, 'COURIER_DELAY_WAIT', user.sub, 'CUSTOMER', {});
+      return this.present(orderId);
+    }
+    if (choice === 'CANCEL') {
+      // not the customer's fault and not the store's: Gutad funds the refund, the store keeps its payout
+      await this.cancelByStaff(SYSTEM_ACTOR, orderId, 'No courier available', 'PLATFORM', { id: user.sub, role: 'CUSTOMER' });
+      await this.outbox.publish('order.delivery_choice', orderId, { number: o.number, choice, locationId: o.locationId, storePaid: !o.prepaid, refundCents: delay.cancelRefundCents });
+      return this.present(orderId);
+    }
+    await this.db.transaction(async (tx) => {
+      const [cur] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update');
+      const [j] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).for('update');
+      if (cur.fulfillmentType !== 'DELIVERY' || !['ACCEPTED', 'PREPARING', 'READY'].includes(cur.status)) throw new ConflictException('This order can no longer be switched to pickup');
+      if (j?.driverId) throw new ConflictException('A courier just accepted your order, so it stays a delivery');
+      if (j) {
+        await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, j.id), eq(driverOffers.status, 'OFFERED')));
+        await this.delivery.transition(j.id, 'CANCELED', { reason: 'Customer switched to pickup (no courier)', costOwner: 'PLATFORM', quiet: true }, tx);
+      }
+      // refund the delivery fee (Gutad's revenue) and the courier tip (held for a courier who never came)
+      let refunded = 0;
+      const fee = cur.deliveryFeeCents, tip = cur.tipCents;
+      if (cur.prepaid) {
+        if (fee + tip > 0) refunded = (await this.payments.refundPrepaidOrder(orderId, fee + tip, 'Switched to pickup: delivery fee and courier tip', tx, user.sub))?.amountCents ?? 0;
+      } else {
+        const [p] = await tx.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
+        if (p && ['CAPTURED', 'SETTLED', 'PARTIALLY_REFUNDED'].includes(p.status)) {
+          const left = p.capturedCents - p.refundedCents;
+          const feeAmt = Math.min(fee, left), tipAmt = Math.min(tip, left - feeAmt);
+          if (feeAmt > 0) { await this.payments.refund({ paymentId: p.id, amountCents: feeAmt, reason: 'Switched to pickup: delivery fee', funder: 'PLATFORM', approvedById: user.sub, idempotencyKey: `pickup-switch:fee:${orderId}` }, tx); refunded += feeAmt; }
+          if (tipAmt > 0) { await this.payments.refund({ paymentId: p.id, amountCents: tipAmt, reason: 'Switched to pickup: courier tip', funder: 'DRIVER', approvedById: user.sub, idempotencyKey: `pickup-switch:tip:${orderId}` }, tx); refunded += tipAmt; }
+        }
+      }
+      const code = cur.pickupCode ?? shortCode(4);
+      // readyAt restarts so the pickup no-show clock counts from the switch, not from when the food was first ready
+      await tx.update(orders).set({ fulfillmentType: 'PICKUP', pickupCode: code, deliveryFeeCents: 0, tipCents: 0, totalCents: Math.max(0, cur.totalCents - fee - tip), ...(cur.status === 'READY' ? { readyAt: new Date() } : {}) }).where(eq(orders.id, orderId));
+      await this.event(orderId, 'SWITCHED_TO_PICKUP', user.sub, 'CUSTOMER', { reason: 'no_courier', refundCents: refunded, deliveryFeeCents: fee, tipCents: tip }, tx);
+      await this.outbox.publish('order.delivery_choice', orderId, { number: cur.number, choice, locationId: cur.locationId, userId: cur.userId, pickupCode: code, refundCents: refunded, storeName: delay.store.name, storeAddress: [delay.store.line1, delay.store.city].filter(Boolean).join(', '), ready: cur.status === 'READY' }, tx);
+    });
+    return this.present(orderId);
   }
 
   async timeline(user: JwtPayload, orderId: string) {

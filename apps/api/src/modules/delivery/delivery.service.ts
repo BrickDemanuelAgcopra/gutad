@@ -934,7 +934,10 @@ export class DeliveryService {
       await tx.update(deliveryJobs).set({ requirements: reqs, holdUntil: null }).where(eq(deliveryJobs.id, job.id));
       const since = Math.max(job.createdAt.getTime(), readyAt.getTime());
       const giveUp = Date.now() - since > NO_COURIER_GIVE_UP_MINUTES * 60_000;
+      // the first empty search tells the customer, who can then switch to pickup, cancel or keep waiting
+      const [seen] = await tx.select({ id: deliveryEvents.id }).from(deliveryEvents).where(and(eq(deliveryEvents.deliveryJobId, job.id), eq(deliveryEvents.type, 'NO_COURIER'))).limit(1);
       await this.event(job.id, 'NO_COURIER', { round: job.offerAttempts, candidates: available.length, giveUp }, tx);
+      if (!seen && !giveUp && o && ['ACCEPTED', 'PREPARING', 'READY'].includes(o.status)) await this.outbox.publish('delivery.no_courier', job.id, { orderId: o.id, number: o.number }, tx);
       if (giveUp) await this.failover(job, tx, 'No courier online nearby');
       return [];
     }
