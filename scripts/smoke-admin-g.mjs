@@ -116,14 +116,18 @@ export async function adminPhaseG({ call, check, A, O, C }) {
   check('manual assignment needs a reason and assigns the chosen courier', noReason.status === 400 && assigned.status === 'ASSIGNED' && assigned.driverId === nDriver.id, assigned);
   await call('POST', `/delivery-jobs/${oC.delivery.id}/cancel`, { reason: 'Smoke cleanup', costOwner: 'PLATFORM' }, O);
 
-  // 17.5 rounds + 17.9 failover to the partner provider
-  await set('delivery.dispatch', { maxOfferRounds: 1 });
+  // no courier online: since f10713a an empty search doesn't end dispatch. The job keeps looking with Gutad couriers
+  // (retried every minute, failing over only 20 min after the food is due) and the customer can switch to pickup,
+  // cancel for a full refund, or keep waiting (16b4702). Partner-to-partner failover is covered in Follow-ups B (17.9-M).
   await call('POST', '/driver/availability', { isAvailable: false }, D);
   const oF = await place(addrA);
-  const jF = (await call('GET', `/orders/${oF.id}`, undefined, C)).json.delivery;
+  const vF = (await call('GET', `/orders/${oF.id}`, undefined, C)).json;
+  const jF = vF.delivery;
   const live = await jobOf(oF.id);
-  await set('delivery.dispatch', {});
-  check('no courier after the offer rounds → fails over to the partner provider', jF.fleet === 'PARTNER' && ['REQUESTED', 'ASSIGNED'].includes(jF.status) && live?.provider === 'mock', { jF, live });
+  check('no courier online → the job keeps searching with Gutad couriers and the customer is offered choices', jF?.fleet === 'PLATFORM' && jF.status === 'REQUESTED' && live?.status === 'REQUESTED' && vF.courierDelay && vF.courierDelay.cancelRefundCents > 0 && vF.courierDelay.pickupRefundCents === Math.min(vF.courierDelay.cancelRefundCents, oF.deliveryFeeCents + oF.tipCents), { jF, courierDelay: vF.courierDelay });
+  const cF = await call('POST', `/orders/${oF.id}/courier-delay`, { choice: 'CANCEL' }, C);
+  const vF2 = (await call('GET', `/orders/${oF.id}`, undefined, C)).json;
+  check('the customer cancels for a full refund; the courier search stops', cF.status < 300 && vF2.status === 'CANCELED' && vF2.delivery?.status === 'CANCELED', { cF: cF.json?.status ?? cF.json, order: vF2.status, delivery: vF2.delivery?.status });
 
   // 16.5 metrics, 16.7 adjustments, 16.8 suspension & appeal reviewed by another person
   const dList = (await call('GET', '/admin/couriers', undefined, A)).json;

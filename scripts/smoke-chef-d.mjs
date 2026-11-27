@@ -39,7 +39,9 @@ export async function chefPhaseD({ call, check, A, C }) {
   const obLocal = new Intl.DateTimeFormat('en-CA', { timeZone: av.timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(ob);
   check('order-by time = cutoff hour, notice days before (noon, 3 days earlier)', obLocal.startsWith(addDays(e.date, -3)) && obLocal.includes('12:00'), obLocal);
   const spAv = (await call('GET', `/public/chef-dishes/${sp.id}/availability`)).json;
-  check('a dish without its own notice follows the chef (1 day)', spAv.rules.minLeadDays === 1 && spAv.earliestDate < av.earliestDate, spAv.rules);
+  // 1 day's notice opens dates no earlier than tomorrow and never later than the pie's 3 days. Both can land on the same
+  // date: from Friday noon, tomorrow's cutoff has passed and Sunday and Monday aren't cooking days, so both start Tuesday.
+  check('a dish without its own notice follows the chef (1 day)', spAv.rules.minLeadDays === 1 && spAv.earliestDate >= addDays(today, 1) && spAv.earliestDate <= av.earliestDate && spAv.days.find((d) => d.status === 'AVAILABLE')?.date === spAv.earliestDate, { rules: spAv.rules, earliest: spAv.earliestDate, pie: av.earliestDate });
   const loc = (await call('GET', `/public/locations/${locId}`)).json;
   check('the kitchen’s pickup times follow the cooking calendar (no times on non-cooking days)', loc.pickupTimes.filter((d) => [0, 1].includes(weekday(d.date))).every((d) => !d.slots.length) && loc.pickupTimes.some((d) => d.slots.length), null);
 
@@ -105,7 +107,10 @@ export async function chefPhaseD({ call, check, A, C }) {
 
   // per-date overrides: close a cooking day, open an extra day
   const closeDay = spAv.days.find((d) => d.status === 'AVAILABLE' && d.date !== kd.date && d.date !== freeDay.date && d.date > spAv.earliestDate);
-  const closed = (await call('PUT', `/chef/calendar/days/${closeDay.date}`, { open: false }, K)).json;
+  // an earlier phase may have booked an order that day: closing it then needs the chef's confirmation (orders stay)
+  const close1 = await call('PUT', `/chef/calendar/days/${closeDay.date}`, { open: false }, K);
+  if (close1.json.code === 'HAS_ORDERS') check('closing a day with orders asks the chef to confirm first', close1.status === 409 && close1.json.orders >= 1, close1.json);
+  const closed = close1.json.code === 'HAS_ORDERS' ? (await call('PUT', `/chef/calendar/days/${closeDay.date}`, { open: false, acknowledgeOrders: true }, K)).json : close1.json;
   const closedAv = (await call('GET', `/public/chef-dishes/${sp.id}/availability?from=${closeDay.date}&to=${closeDay.date}`)).json.days[0];
   check('closing one cooking day removes it from the calendar', closed.open === false && closedAv.status === 'CLOSED' && !closedAv.slots.length, closedAv);
   await call('PUT', `/chef/calendar/days/${closeDay.date}`, { open: null }, K);
