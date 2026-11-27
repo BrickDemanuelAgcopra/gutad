@@ -117,7 +117,7 @@ export class PackagedStockService {
       const lots = rows<{ id: string; free: number }>(await tx.execute(sql`select l.id, (l.on_hand - l.reserved)::int as free from product_lots l
         join packaged_products p on p.menu_item_id = l.menu_item_id join locations loc on loc.id = l.location_id
         where l.location_id = ${input.locationId} and l.menu_item_id = ${prod.menuItemId} and ${this.sellableSql(p, input.at)}
-        order by l.expires_on asc nulls last, l.received_at asc for update of l`));
+        order by l.expires_on asc nulls last, l.created_at asc for update of l`));
       let need = l.quantity;
       const take: { lotId: string; q: number }[] = [];
       for (const lot of lots) {
