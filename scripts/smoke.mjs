@@ -141,7 +141,8 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
 
   // ── delivery
   const dq = (await call('POST', '/quotes', { locationId: locId, channel: 'MARKETPLACE', fulfillmentType: 'DELIVERY', lines: [{ menuItemId: burger.id, quantity: 1, modifierOptionIds: [doneness] }], tipCents: 500, deliveryAddress: { line1: '55 W 9th St', city: 'New York', region: 'NY', postalCode: '10011', lat: 40.7346, lng: -73.9975 } }, C)).json;
-  check('delivery is free for the diner ($0 delivery fee)', dq.deliveryFeeCents === 0 && dq.promiseAt, dq);
+  // since c18e10e the diner pays the fee set in Admin → Pricing → Delivery fees, unless a free-delivery offer applies
+  check('delivery fee comes from the fee policy (standard fee, or $0 with a free-delivery reason)', dq.promiseAt && dq.delivery?.standardFeeCents > 0 && dq.deliveryFeeCents === (dq.delivery.freeReason ? 0 : dq.delivery.standardFeeCents), { fee: dq.deliveryFeeCents, delivery: dq.delivery });
   check('marketplace delivery carries the service fee', dq.serviceFeeCents > 0, dq);
   check('marketplace pickup has no service fee', quote.serviceFeeCents === 0, quote);
   const d1 = (await call('POST', '/orders', { quoteId: dq.id }, C, { 'Idempotency-Key': uuid() })).json;
