@@ -28,3 +28,4 @@ export * from './chef';
 export * from './courier-r3';
 export * from './courier-r4';
 export * from './first-party';
+export * from './packaged';

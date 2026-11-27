@@ -35,6 +35,7 @@ import { courierR2 } from './smoke-courier-r2.mjs';
 import { courierR3 } from './smoke-courier-r3.mjs';
 import { courierR4 } from './smoke-courier-r4.mjs';
 import { firstPartyPhase } from './smoke-first-party.mjs';
+import { packagedPhase } from './smoke-packaged.mjs';
 const API = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 const results = [];
@@ -536,6 +537,7 @@ const futureIso = (days, hh = 19) => { const d = new Date(Date.now() + days * 86
   await chefPhaseH({ call, check, A, O, C, API: FAPI, ...chefA });
   await chefPhaseI({ call, check, A, O, C, API: FAPI, ...chefA });
   await firstPartyPhase({ call, check, A, O, C });
+  await packagedPhase({ call, check, A, O, C, locId });
 
   console.log(`\n${results.length - failures}/${results.length} checks passed`);
   process.exit(failures ? 1 : 0);

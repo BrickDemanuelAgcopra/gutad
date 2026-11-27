@@ -11,6 +11,8 @@ import { ApprovalsService } from '../security/approvals.service';
 import { SettingsService } from '../../core/settings.service';
 import { brandSellable } from '../../common/brand-rules';
 import { MenuAdminService } from './menu-admin.service';
+import { PackagedStockService } from '../../core/packaged-stock.service';
+import type { PackagedFacts } from '@gutad/shared';
 
 type Channel = (typeof menus.channels.enumValues)[number];
 
@@ -31,12 +33,14 @@ export interface ResolvedItem {
   maxPerOrder: number | null;
   kind: string;
   dietaryTags: string[];
+  /** packaged goods: units that can be sold now (sold out at 0) and the per-order cap */
+  packaged?: { available: number; maxPerOrder: number; reason: string | null } | null;
   modifierGroups: (ModGroup & { options: (ModOption & { soldOut: boolean })[] })[];
 }
 
 @Injectable()
 export class CatalogService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly approvals: ApprovalsService, private readonly settings: SettingsService, private readonly menuAdmin: MenuAdminService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly audit: AuditService, private readonly redis: RedisService, private readonly approvals: ApprovalsService, private readonly settings: SettingsService, private readonly menuAdmin: MenuAdminService, private readonly packaged: PackagedStockService) {}
 
   /** Menu version of each item's menu, frozen into the quote/order snapshot (11.8). */
   menuVersionsFor(itemIds: string[]) {
@@ -98,6 +102,8 @@ export class CatalogService implements OnModuleInit {
     const ov = await this.overridesFor(forLocationId || m.locationId || '', allItems.map((i) => i.id));
     const items = allItems.filter((i) => !ov.get(i.id)?.hidden);
     const groupsByItem = await this.modifierGroupsFor(items.map((i) => i.id));
+    // packaged goods: live stock and product facts (sold out at 0, "Only N left")
+    const pk = forLocationId || m.locationId ? await this.packaged.stateFor((forLocationId || m.locationId)!, items.filter((i) => i.kind === 'PACKAGED').map((i) => i.id)) : new Map();
     const brand = m.brandId ? (await this.db.select().from(brands).where(eq(brands.id, m.brandId)).limit(1))[0] : null;
     return {
       id: m.id,
@@ -122,7 +128,8 @@ export class CatalogService implements OnModuleInit {
             nutrition: i.nutrition,
             kind: i.kind,
             maxPerOrder: i.maxPerOrder,
-            soldOut: (i.soldOut && (!i.soldOutUntil || i.soldOutUntil > new Date())) || !!ov.get(i.id)?.soldOut,
+            soldOut: (i.soldOut && (!i.soldOutUntil || i.soldOutUntil > new Date())) || !!ov.get(i.id)?.soldOut || (i.kind === 'PACKAGED' && (pk.get(i.id)?.available ?? 0) <= 0),
+            ...(i.kind === 'PACKAGED' ? { packaged: (pk.get(i.id)?.facts ?? null) as PackagedFacts | null, maxPerOrder: Math.min(i.maxPerOrder ?? 999, pk.get(i.id)?.maxPerOrder ?? 999, Math.max(1, pk.get(i.id)?.available ?? 1)) } : {}),
             modifierGroups: groupsByItem.get(i.id) || [],
           })),
       })),
@@ -173,6 +180,7 @@ export class CatalogService implements OnModuleInit {
     // 7.5 — the menu's daypart and days apply at checkout too, not only on the public menu
     const [loc] = at ? await this.db.select({ timezone: locations.timezone }).from(locations).where(eq(locations.id, locationId)).limit(1) : [null];
     const lp = loc ? localParts(at!, loc.timezone) : null;
+    const pk = await this.packaged.stateFor(locationId, rows.filter((r) => r.item.kind === 'PACKAGED').map((r) => r.item.id), at ?? new Date());
     for (const { item, menu } of rows) {
       if (!channelAllowed(menu, channel)) continue;
       if (ov.get(item.id)?.hidden) continue;
@@ -190,6 +198,7 @@ export class CatalogService implements OnModuleInit {
         allergens: item.allergens,
         dietaryTags: item.dietaryTags,
         recipeId: item.recipeId,
+        packaged: item.kind === 'PACKAGED' ? { available: pk.get(item.id)?.available ?? 0, maxPerOrder: pk.get(item.id)?.maxPerOrder ?? 20, reason: pk.get(item.id)?.reason ?? (pk.has(item.id) ? null : 'Product details missing') } : null,
         modifierGroups: groups.get(item.id) || [],
       });
     }

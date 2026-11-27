@@ -22,6 +22,7 @@ import { markChefQuotesOrdered } from '../chefs/chef-requests.service';
 import { QuoteService, QuoteSnapshotLine } from './quote.service';
 import { addMinutes, orderNumber, shortCode } from '../../common/utils';
 import type { Address } from '../delivery/providers/delivery-provider';
+import { PackagedStockService } from '../../core/packaged-stock.service';
 
 type OrderStatus = (typeof orders.status.enumValues)[number];
 
@@ -56,6 +57,7 @@ export class OrdersService {
 
   constructor(
     @Inject(DB) private readonly db: Db,
+    private readonly packagedStock: PackagedStockService,
     private readonly quotesSvc: QuoteService,
     private readonly payments: PaymentsService,
     private readonly delivery: DeliveryService,
@@ -249,9 +251,11 @@ export class OrdersService {
         lateRefundPct: chef ? chef.lateRefundPct : null,
       })
       .returning();
-    await tx.insert(orderLines).values(
+    const placedLines = await tx.insert(orderLines).values(
       snap.lines.map((l) => ({ orderId: o.id, menuItemId: l.menuItemId, brandId: l.brandId, name: l.name, quantity: l.quantity, unitPriceCents: l.unitPriceCents, modifiersCents: l.modifiersCents, lineTotalCents: l.lineTotalCents, modifiers: l.modifiers, specialInstructions: l.specialInstructions ?? null, stationCode: l.stationCode, allergens: l.allergens ?? null, dietaryTags: l.dietaryTags ?? null })),
-    );
+    ).returning({ id: orderLines.id, menuItemId: orderLines.menuItemId, quantity: orderLines.quantity, name: orderLines.name });
+    // packaged goods: hold the units on dated batches, first expiry first (stock ran out since the quote → the order rolls back)
+    if (snap.lines.some((l) => l.packaged)) await this.packagedStock.reserve(tx, { orderId: o.id, orderNumber: number, locationId: loc.id, at: q.scheduledFor ?? now, lines: placedLines.map((l) => ({ orderLineId: l.id, menuItemId: l.menuItemId, quantity: l.quantity, name: l.name })) });
     await tx.update(quotes).set({ consumedByOrderId: o.id }).where(eq(quotes.id, q.id));
     // Gutad Chef Network special requests: each accepted chef quote is used once
     const chefQuoteIds = snap.lines.map((l) => l.chefRequestQuoteId).filter((x): x is string => !!x);

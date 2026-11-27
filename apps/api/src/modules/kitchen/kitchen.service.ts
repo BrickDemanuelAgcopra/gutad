@@ -3,7 +3,7 @@ import { FirstPartyService } from '../../core/first-party.service';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import { DEFAULT_AUTO_THROTTLE, DEFAULT_PICKUP_POLICY, fireAt as computeFireAt, KITCHEN_REASONS, mentionsAllergy, suggestBags, type AutoThrottle, type PickupPolicy } from '@gutad/shared';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { brands, ingredientStock, ingredients, kitchenBrands, kitchenEvents, kitchenTickets, kitchens, laborEntries, locations, menuCategories, menuItems, opsAlerts, organizations, orderLines, orders, packingTasks, purchaseOrderLines, purchaseOrders, recipeLines, recipes, stationRoutes, stations, stockLots, stockMovements, suppliers, wasteEvents } from '../../db/schema';
+import { brands, ingredientStock, ingredients, kitchenBrands, kitchenEvents, kitchenTickets, kitchens, laborEntries, locations, menuCategories, menuItems, opsAlerts, organizations, orderLines, orders, packingTasks, purchaseOrderLines, purchaseOrders, packagedProducts, productAllocations, productLots, recipeLines, recipes, stationRoutes, stations, stockLots, stockMovements, suppliers, wasteEvents } from '../../db/schema';
 import { assertCan, assertOrgAccess, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { OutboxService } from '../../core/outbox.service';
 import { shortCode } from '../../common/utils';
@@ -13,10 +13,11 @@ import { SettingsService } from '../../core/settings.service';
 import { LedgerService } from '../../core/ledger.service';
 import { PrintingService } from './printing.service';
 import { DeliveryService } from '../delivery/delivery.service';
+import { PackagedStockService } from '../../core/packaged-stock.service';
 
 @Injectable()
 export class KitchenService implements OnModuleInit {
-  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService, private readonly printing: PrintingService, private readonly delivery: DeliveryService, private readonly firstParty: FirstPartyService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly outbox: OutboxService, private readonly approvals: ApprovalsService, private readonly audit: AuditService, private readonly settings: SettingsService, private readonly ledger: LedgerService, private readonly printing: PrintingService, private readonly delivery: DeliveryService, private readonly firstParty: FirstPartyService, private readonly packagedStock: PackagedStockService) {}
 
   onModuleInit() {
     this.approvals.register('PURCHASE_ORDER', {
@@ -109,8 +110,12 @@ export class KitchenService implements OnModuleInit {
     // 8.5-K a line above the recipe's batch size cooks in several batches
     const batchesFor = (it: { recipeId: string | null } | undefined, qty: number) => { const b = it?.recipeId ? recipeRows.find((r) => r.id === it.recipeId)?.batch : null; return b && qty > b ? Math.ceil(qty / b) : 1; };
     const known = new Set(stationRows.map((s) => s.code));
+    // packaged goods are picked from the shelf, not cooked: their own PICK ticket (unless an item route says otherwise)
+    const packagedProds = itemIds.length ? await tx.select({ id: packagedProducts.menuItemId, storage: packagedProducts.storage }).from(packagedProducts).where(inArray(packagedProducts.menuItemId, itemIds)) : [];
+    const isPacked = (itemId: string | null) => !!itemId && packagedProds.some((p) => p.id === itemId);
     const stationFor = (l: typeof lines[number]) => {
       const it = items.find((i) => i.id === l.menuItemId);
+      if (isPacked(l.menuItemId) && !routes.some((x) => x.matchType === 'ITEM' && x.matchId === it?.id)) return 'PICK';
       const r = routes.find((x) => x.matchType === 'ITEM' && x.matchId === it?.id) || routes.find((x) => x.matchType === 'CATEGORY' && x.matchId === it?.categoryId) || routes.find((x) => x.matchType === 'BRAND' && x.matchId === l.brandId);
       const code = r?.stationCode || l.stationCode || kitchen?.defaultStationCode || 'MAIN';
       return known.size && !known.has(code) && kitchen?.defaultStationCode ? kitchen.defaultStationCode : code;
@@ -126,7 +131,7 @@ export class KitchenService implements OnModuleInit {
     }
     const values = Array.from(groups.entries()).map(([code, ls]) => {
       const station = stationRows.find((s) => s.code === code);
-      const cook = Math.max(...ls.map((l) => { const it = items.find((i) => i.id === l.menuItemId); return (it?.cookMinutes ?? (it?.recipeId ? Math.round(recipePrep.get(it.recipeId) || 0) || null : null) ?? station?.targetMinutes ?? 10) * batchesFor(it, l.quantity); }));
+      const cook = Math.max(...ls.map((l) => { const it = items.find((i) => i.id === l.menuItemId); if (isPacked(l.menuItemId) && !station) return 2; return (it?.cookMinutes ?? (it?.recipeId ? Math.round(recipePrep.get(it.recipeId) || 0) || null : null) ?? station?.targetMinutes ?? 10) * batchesFor(it, l.quantity); }));
       return { orderId, stationCode: code, stationId: station?.id ?? null, lineIds: ls.map((l) => l.id), cookMinutes: cook, readyBy, fireAt: computeFireAt(readyBy, cook, now) };
     });
     const tickets = await tx.insert(kitchenTickets).values(values).returning();
@@ -137,7 +142,8 @@ export class KitchenService implements OnModuleInit {
         const it = items.find((i) => i.id === l.menuItemId);
         // a customization that adds an allergen the dish does not normally contain (e.g. shrimp) is flagged for the cook and packer
         const addedAllergen = !!l.allergens?.some((a) => !(it?.allergens || []).includes(a));
-        const flags = Array.from(new Set([...(it?.handling || []), ...(mentionsAllergy(l.specialInstructions) || addedAllergen ? ['ALLERGEN'] : [])]));
+        const cold = packagedProds.some((p) => p.id === l.menuItemId && (p.storage === 'CHILLED' || p.storage === 'FROZEN'));
+        const flags = Array.from(new Set([...(it?.handling || []), ...(cold ? ['COLD'] : []), ...(mentionsAllergy(l.specialInstructions) || addedAllergen ? ['ALLERGEN'] : [])]));
         lineFlags.push(flags);
         await tx.update(orderLines).set({ status: 'PREPARING', stationCode: code, handling: flags }).where(eq(orderLines.id, l.id));
       }
@@ -150,6 +156,8 @@ export class KitchenService implements OnModuleInit {
       ...extras.map((e) => ({ key: `extra:${e}`, label: e, done: false })),
       ...(o.utensils ? [{ key: 'utensils', label: 'Utensils (requested)', done: false }] : []),
       ...(items.some((i) => i.kind === 'BEVERAGE') ? [{ key: 'drinks', label: 'Drinks lidded and sealed', done: false }] : []),
+      ...(packagedProds.length ? [{ key: 'dates', label: 'Packaged items: batch and best-before dates match the pick list', done: false }] : []),
+      ...(packagedProds.some((p) => p.storage === 'FROZEN' || p.storage === 'CHILLED') ? [{ key: 'coldchain', label: 'Chilled / frozen items packed cold, separate from hot food', done: false }] : []),
       ...(handling.includes('ALLERGEN') ? [{ key: 'allergen', label: 'Allergy label on the bag', done: false }] : []),
       ...(o.fulfillmentType === 'DELIVERY' ? [{ key: 'seal', label: 'Bag sealed (tamper sticker)', done: false }] : []),
     ];
@@ -165,9 +173,8 @@ export class KitchenService implements OnModuleInit {
   /** 20.3 Gutad-operated kitchens: cost of goods from recipe ingredients, posted when the order is fired. */
   private async postCogs(o: typeof orders.$inferSelect, lines: (typeof orderLines.$inferSelect)[], items: { id: string; recipeId: string | null }[], tx: DbOrTx) {
     const recipeIds = [...new Set(items.map((i) => i.recipeId).filter((x): x is string => !!x))];
-    if (!recipeIds.length) return;
-    const rl = await tx.select({ recipeId: recipeLines.recipeId, qty: recipeLines.quantity, cost: ingredients.costCentsPerUnit }).from(recipeLines).innerJoin(ingredients, eq(ingredients.id, recipeLines.ingredientId)).where(inArray(recipeLines.recipeId, recipeIds));
-    const rs = await tx.select({ id: recipes.id, y: recipes.yieldPortions }).from(recipes).where(inArray(recipes.id, recipeIds));
+    const rl = !recipeIds.length ? [] : await tx.select({ recipeId: recipeLines.recipeId, qty: recipeLines.quantity, cost: ingredients.costCentsPerUnit }).from(recipeLines).innerJoin(ingredients, eq(ingredients.id, recipeLines.ingredientId)).where(inArray(recipeLines.recipeId, recipeIds));
+    const rs = !recipeIds.length ? [] : await tx.select({ id: recipes.id, y: recipes.yieldPortions }).from(recipes).where(inArray(recipes.id, recipeIds));
     let cents = 0;
     for (const l of lines) {
       const r = items.find((i) => i.id === l.menuItemId)?.recipeId;
@@ -175,6 +182,8 @@ export class KitchenService implements OnModuleInit {
       const per = rl.filter((x) => x.recipeId === r).reduce((a, x) => a + x.qty * x.cost, 0) / (rs.find((x) => x.id === r)?.y || 1);
       cents += per * l.quantity;
     }
+    // packaged goods: the cost of the batches the order took
+    cents += (await this.packagedStock.allocationsFor(o.id, tx)).reduce((a, x) => a + x.quantity * x.unitCostCents, 0);
     cents = Math.round(cents);
     if (cents > 0) await this.ledger.post({ orderId: o.id, currency: o.currency }, [{ account: 'PLATFORM_EXPENSE_COGS', debitCents: cents, organizationId: o.organizationId, locationId: o.locationId, memo: `COGS ${o.number}` }, { account: 'INVENTORY', creditCents: cents, locationId: o.locationId, memo: `Ingredients used ${o.number}` }], tx);
   }
@@ -206,6 +215,8 @@ export class KitchenService implements OnModuleInit {
     const st = await this.db.select().from(stations).where(eq(stations.kitchenId, kitchenId));
     const lineIds = rows.flatMap((r) => r.ticket.lineIds);
     const lines = lineIds.length ? await this.db.select().from(orderLines).where(inArray(orderLines.id, lineIds)) : [];
+    // packaged goods: which batches to pick (first expiry first)
+    const picks = lineIds.length ? await this.db.select({ lineId: productAllocations.orderLineId, quantity: productAllocations.quantity, lotCode: productLots.lotCode, expiresOn: productLots.expiresOn }).from(productAllocations).innerJoin(productLots, eq(productLots.id, productAllocations.lotId)).where(and(inArray(productAllocations.orderLineId, lineIds), inArray(productAllocations.status, ['RESERVED', 'SOLD']))) : [];
     const now = Date.now();
     return rows.map((r) => {
       const target = st.find((s) => s.code === r.ticket.stationCode)?.targetMinutes ?? 10;
@@ -215,7 +226,7 @@ export class KitchenService implements OnModuleInit {
       return {
         ...r.ticket, orderNumber: r.order.number, promiseAt: r.order.promiseAt, fulfillmentType: r.order.fulfillmentType, tableNumber: r.order.tableNumber,
         targetMinutes: target, fireState: r.ticket.status === 'QUEUED' && fire > now + 60_000 ? 'HOLD' : 'FIRE', minutesInProgress: Math.round(startedFor), delayed,
-        lines: lines.filter((l) => r.ticket.lineIds.includes(l.id)),
+        lines: lines.filter((l) => r.ticket.lineIds.includes(l.id)).map((l) => { const pk = picks.filter((x) => x.lineId === l.id).map(({ lineId: _l, ...x }) => x); return pk.length ? { ...l, picks: pk } : l; }),
       };
     });
   }

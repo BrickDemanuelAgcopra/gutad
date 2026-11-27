@@ -2,7 +2,7 @@
 import { CardField, type CardToken } from '@/components/card-field';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import type { LocationSummary, MenuDto, MenuItemDto } from '@gutad/shared';
+import { PACKAGED_STORAGE_LABELS, shelfLifePromise, type LocationSummary, type MenuDto, type MenuItemDto, type PackagedFacts } from '@gutad/shared';
 import { api, money, when } from '@/lib/api';
 import { useApi, useSession } from '@/lib/hooks';
 import { useCart } from '@/lib/cart';
@@ -135,7 +135,8 @@ function OrderTab({ loc, channel, src, initialBrand }: { loc: LocationPage; chan
                   {c.items.map((it) => (
                     <button key={it.id} disabled={it.soldOut} onClick={() => setPicked({ item: it, brand: m.brand?.name })} className="flex gap-3 rounded-xl border border-ink-100 bg-white p-3 text-left shadow-sm transition hover:border-brand-300 disabled:opacity-50">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 font-medium">{it.name} {it.soldOut && <Badge tone="bad">Sold out</Badge>}</div>
+                        <div className="flex items-center gap-2 font-medium">{it.name} {it.soldOut && <Badge tone="bad">Sold out</Badge>}{!it.soldOut && it.packaged?.onlyLeft ? <Badge tone="warn">Only {it.packaged.onlyLeft} left</Badge> : null}</div>
+                        {it.packaged && <div className="mt-0.5 text-[11px] text-ink-500">{[it.packaged.brandName, it.packaged.size, it.packaged.storage !== 'AMBIENT' ? PACKAGED_STORAGE_LABELS[it.packaged.storage] : null].filter(Boolean).join(' · ')}</div>}
                         {it.description && <p className="mt-0.5 text-xs text-ink-500">{it.description}</p>}
                         <div className="mt-1 text-sm font-semibold">{money(it.priceCents, loc.currency)}</div>
                         {it.allergens.length > 0 && <div className="mt-1 text-[11px] text-ink-300">Contains: {it.allergens.join(', ')}</div>}
@@ -208,6 +209,7 @@ function ItemModal({ item, brand, currency, onClose, onAdd }: { item: MenuItemDt
   return (
     <Modal open onClose={onClose} title={item.name}>
       {item.description && <p className="text-sm text-ink-500">{item.description}</p>}
+      {item.packaged && <PackagedFactsBox f={item.packaged} allergens={item.allergens} />}
       {item.modifierGroups.map((g) => (
         <div key={g.id} className="mt-4">
           <div className="text-sm font-semibold">{g.name} <span className="font-normal text-ink-500">{g.required ? '(required)' : g.maxSelect > 1 ? `(up to ${g.maxSelect})` : '(optional)'}</span></div>
@@ -221,15 +223,30 @@ function ItemModal({ item, brand, currency, onClose, onAdd }: { item: MenuItemDt
           </div>
         </div>
       ))}
-      <Textarea className="mt-4" label="Special instructions" value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
+      {!item.packaged && <Textarea className="mt-4" label="Special instructions" value={note} onChange={(e) => setNote(e.target.value)} rows={2} />}
       <div className="mt-4 flex items-center justify-between">
-        <div className="flex items-center gap-2"><Button variant="secondary" size="sm" onClick={() => setQty(Math.max(1, qty - 1))}>−</Button><span className="w-6 text-center">{qty}</span><Button variant="secondary" size="sm" onClick={() => setQty(qty + 1)}>+</Button></div>
+        <div className="flex items-center gap-2"><Button variant="secondary" size="sm" onClick={() => setQty(Math.max(1, qty - 1))}>−</Button><span className="w-6 text-center">{qty}</span><Button variant="secondary" size="sm" disabled={!!item.maxPerOrder && qty >= item.maxPerOrder} onClick={() => setQty(qty + 1)}>+</Button></div>
         <Button disabled={!!invalid} onClick={() => onAdd({ menuItemId: item.id, name: item.name, quantity: qty, unitPriceCents: item.priceCents, modifierOptionIds: chosen.map((o) => o.id), modifierNames: chosen.map((o) => o.name), modifiersCents: modCents, specialInstructions: note || undefined, brandName: brand })}>
           Add {money((item.priceCents + modCents) * qty, currency)}
         </Button>
       </div>
       {invalid && <p className="mt-2 text-xs text-red-600">Choose {invalid.name} to continue.</p>}
     </Modal>
+  );
+}
+
+/** Packaged goods: what is on the pack, how to store it and the shelf-life promise. */
+function PackagedFactsBox({ f, allergens }: { f: PackagedFacts; allergens: string[] }) {
+  const promise = shelfLifePromise(f);
+  return (
+    <div className="mt-3 space-y-1 rounded-lg bg-ink-50 p-3 text-xs text-ink-700">
+      <div className="flex flex-wrap gap-1">{f.size && <Badge>{f.size}</Badge>}<Badge tone={f.storage === 'AMBIENT' ? 'neutral' : 'info'}>{PACKAGED_STORAGE_LABELS[f.storage]}</Badge>{f.onlyLeft ? <Badge tone="warn">Only {f.onlyLeft} left</Badge> : null}</div>
+      {f.brandName && <div><b>Made by:</b> {f.brandName}{f.countryOfOrigin ? ` · ${f.countryOfOrigin}` : ''}</div>}
+      {promise && <div>{promise}.</div>}
+      {f.ingredients && <div><b>Ingredients:</b> {f.ingredients}</div>}
+      <div><b>Allergens:</b> {allergens.length ? allergens.join(', ') : 'none declared'}. Always check the label.</div>
+      {f.labelImageUrl && <a className="underline" href={f.labelImageUrl} target="_blank" rel="noreferrer">See the label</a>}
+    </div>
   );
 }
 

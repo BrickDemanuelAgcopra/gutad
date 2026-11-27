@@ -41,6 +41,7 @@ import { GlPushService } from '../modules/finance/gl-push.service';
 import { ChefCalendarService } from '../modules/chefs/chef-calendar.service';
 import { ChefRequestsService } from '../modules/chefs/chef-requests.service';
 import { ChefOpsService } from '../modules/chefs/chef-ops.service';
+import { PackagedService } from '../modules/packaged/packaged.service';
 
 /**
  * Background jobs. Every job takes a Redis lock so several worker replicas never double-run,
@@ -52,6 +53,7 @@ export class JobsService {
 
   constructor(
     private readonly redis: RedisService,
+    private readonly packaged: PackagedService,
     private readonly notifications: NotificationsService,
     private readonly orders: OrdersService,
     private readonly kitchen: KitchenService,
@@ -123,6 +125,7 @@ export class JobsService {
   @Interval(3_600_000) courierFraudPatterns() { return this.locked('courier-fraud', 600_000, () => this.courierFraud.patternSweep()); }
   @Interval(3_600_000) courierForecastAndRecon() { return this.locked('courier-forecast-recon', 900_000, async () => ({ forecast: await this.courierForecast.rebuildIfStale(), recon: await this.courierPayouts.runRecon() })); }
   @Interval(3_600_000) deliveryHousekeepingDaily() { return this.locked('delivery-docs-proofs', 600_000, async () => ({ docs: await this.delivery.expireCourierDocs(), checks: await this.courier.expireChecks(), proofs: await this.delivery.purgeProofs() })); }
+  @Interval(3_600_000) packagedExpiry() { return this.locked('packaged-expiry', 600_000, () => this.packaged.expirySweep()); }
   @Interval(3_600_000) inventoryExpiry() { return this.locked('lot-expiry', 600_000, () => this.inventory.expireLots()); }
   @Interval(900_000) foodSafetyClusters() { return this.locked('fs-clusters', 300_000, () => this.safety.clusterSweep()); }
   @Interval(300_000) deviceHealth() { return this.locked('device-health', 120_000, () => this.workforce.deviceSweep()); }

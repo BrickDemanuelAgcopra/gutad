@@ -9,11 +9,12 @@ import { SettingsService } from './settings.service';
 import { AclService } from './acl.service';
 import { SecurityEventsService } from './security-events.service';
 import { FirstPartyService } from './first-party.service';
+import { PackagedStockService } from './packaged-stock.service';
 
 /** Cross-cutting services every capability module relies on. */
 @Global()
 @Module({
-  providers: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService, AclService, SecurityEventsService, FirstPartyService],
-  exports: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService, AclService, SecurityEventsService, FirstPartyService],
+  providers: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService, AclService, SecurityEventsService, FirstPartyService, PackagedStockService],
+  exports: [AuditService, OutboxService, LedgerService, NotifyService, CryptoService, RedisService, SettingsService, AclService, SecurityEventsService, FirstPartyService, PackagedStockService],
 })
 export class CoreModule {}

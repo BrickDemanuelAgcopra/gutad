@@ -6,7 +6,7 @@ import { useAction, useApi } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Disclosure, Input, Modal, Select, Textarea } from '@/components/ui';
 import { useMerchant } from '../context';
 
-interface Item { id: string; name: string; description: string | null; priceCents: number; soldOut: boolean; allergens: string[]; modifierGroups: { id: string; name: string; options: { id: string; name: string; priceCents: number; soldOut: boolean }[] }[] }
+interface Item { id: string; kind?: string; name: string; description: string | null; priceCents: number; soldOut: boolean; allergens: string[]; modifierGroups: { id: string; name: string; options: { id: string; name: string; priceCents: number; soldOut: boolean }[] }[] }
 interface Menu { id: string; name: string; isActive: boolean; version: number; brandId: string | null; channels: string[]; availableFrom: string | null; availableUntil: string | null; categories: { id: string; name: string; items: Item[] }[] }
 
 export default function MenuPage() {
@@ -40,7 +40,7 @@ export default function MenuPage() {
               <ul className="divide-y divide-ink-100">
                 {c.items.map((it) => (
                   <li key={it.id} className="flex items-center justify-between py-2 text-sm">
-                    <div><span className={it.soldOut ? 'line-through' : ''}>{it.name}</span> <span className="text-ink-500">{money(it.priceCents)}</span>{it.allergens.length > 0 && <span className="ml-2 text-xs text-ink-300">{it.allergens.join(', ')}</span>}<div className="text-xs text-ink-500">{it.modifierGroups.map((g) => `${g.name}: ${g.options.map((o) => o.name).join('/')}`).join(' · ')}</div></div>
+                    <div><span className={it.soldOut ? 'line-through' : ''}>{it.name}</span>{it.kind === 'PACKAGED' && <Link href="/merchant/products" className="ml-1 rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-ink-700">Packaged</Link>} <span className="text-ink-500">{money(it.priceCents)}</span>{it.allergens.length > 0 && <span className="ml-2 text-xs text-ink-300">{it.allergens.join(', ')}</span>}<div className="text-xs text-ink-500">{it.modifierGroups.map((g) => `${g.name}: ${g.options.map((o) => o.name).join('/')}`).join(' · ')}</div></div>
                     <div className="flex gap-1">
                       <Button size="sm" variant={it.soldOut ? 'primary' : 'secondary'} onClick={() => act(() => api.post(`/items/${it.id}/sold-out`, { soldOut: !it.soldOut, untilMinutes: it.soldOut ? undefined : 240 }))}>{it.soldOut ? 'Back in stock' : '86 (4h)'}</Button>
                       <Button size="sm" variant="ghost" onClick={() => { const p = prompt('New price (USD)', (it.priceCents / 100).toFixed(2)); if (p) act(() => api.patch(`/items/${it.id}`, { priceCents: Math.round(Number(p) * 100) })); }}>Price</Button>

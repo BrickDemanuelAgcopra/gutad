@@ -225,6 +225,13 @@
       "when": 1795743273124,
       "tag": "0031_store_free_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795792069303,
+      "tag": "0032_packaged_goods",
+      "breakpoints": true
     }
   ]
 }

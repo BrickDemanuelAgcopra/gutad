@@ -1,3 +1,4 @@
+import type { PackagedFacts } from './packaged';
 import type {
   Channel,
   DeliveryStatus,
@@ -95,6 +96,10 @@ export interface MenuItemDto {
   imageUrl: string | null;
   allergens: string[];
   soldOut: boolean;
+  kind?: string;
+  maxPerOrder?: number | null;
+  /** packaged goods (kind PACKAGED): product facts and low-stock count */
+  packaged?: PackagedFacts | null;
   modifierGroups: ModifierGroupDto[];
 }
 

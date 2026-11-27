@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Image, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
-import type { MenuDto, MenuItemDto } from '@gutad/shared';
+import { PACKAGED_STORAGE_LABELS, shelfLifePromise, type MenuDto, type MenuItemDto } from '@gutad/shared';
 import { api, money, when } from '@/api';
 import { useApi, useSession } from '@/hooks';
 import { useCart } from '@/cart';
@@ -65,7 +65,7 @@ export default function Restaurant() {
                   <Text style={{ fontWeight: '700', fontSize: 15, marginBottom: 4 }}>{c.name}</Text>
                   {c.items.map((it) => (
                     <Pressable key={it.id} disabled={it.soldOut} onPress={() => setPicked(it)} style={[s.card, { flexDirection: 'row', opacity: it.soldOut ? 0.5 : 1, marginBottom: 8 }]}>
-                      <View style={{ flex: 1 }}><Text style={{ fontWeight: '600' }}>{it.name} {it.soldOut ? '(sold out)' : ''}</Text>{it.description ? <Muted>{it.description}</Muted> : null}<Text style={{ marginTop: 4, fontWeight: '700' }}>{money(it.priceCents)}</Text></View>
+                      <View style={{ flex: 1 }}><Text style={{ fontWeight: '600' }}>{it.name} {it.soldOut ? '(sold out)' : ''}</Text>{!it.soldOut && it.packaged?.onlyLeft ? <Text style={{ color: C.warn, fontSize: 12 }}>Only {it.packaged.onlyLeft} left</Text> : null}{it.packaged ? <Muted>{[it.packaged.brandName, it.packaged.size, it.packaged.storage !== 'AMBIENT' ? PACKAGED_STORAGE_LABELS[it.packaged.storage] : null].filter(Boolean).join(' · ')}</Muted> : null}{it.description ? <Muted>{it.description}</Muted> : null}<Text style={{ marginTop: 4, fontWeight: '700' }}>{money(it.priceCents)}</Text></View>
                       {it.imageUrl && <Image source={{ uri: it.imageUrl }} style={{ width: 64, height: 64, borderRadius: 8, marginLeft: 8 }} />}
                     </Pressable>
                   ))}
@@ -97,6 +97,15 @@ function ItemSheet({ item, onClose, onAdd }: { item: MenuItemDto; onClose: () =>
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       <View style={s.row}><Text style={{ fontSize: 20, fontWeight: '700' }}>{item.name}</Text><Pressable onPress={onClose}><Text style={{ color: C.ink5, fontSize: 18 }}>✕</Text></Pressable></View>
       {item.description && <Muted>{item.description}</Muted>}
+      {item.packaged ? (
+        <View style={[s.card, { marginTop: 8 }]}>
+          <Text style={{ fontWeight: '600' }}>{[item.packaged.size, PACKAGED_STORAGE_LABELS[item.packaged.storage]].filter(Boolean).join(' · ')}</Text>
+          {item.packaged.brandName ? <Muted>Made by {item.packaged.brandName}{item.packaged.countryOfOrigin ? ` · ${item.packaged.countryOfOrigin}` : ''}</Muted> : null}
+          {shelfLifePromise(item.packaged) ? <Muted>{shelfLifePromise(item.packaged)}.</Muted> : null}
+          {item.packaged.ingredients ? <Text style={{ color: C.ink7, marginTop: 4 }}>Ingredients: {item.packaged.ingredients}</Text> : null}
+          <Text style={{ color: C.ink7 }}>Allergens: {item.allergens.length ? item.allergens.join(', ') : 'none declared'}. Always check the label.</Text>
+        </View>
+      ) : null}
       {item.modifierGroups.map((g) => (
         <View key={g.id} style={{ marginTop: 12 }}>
           <Text style={{ fontWeight: '700' }}>{g.name} <Text style={{ color: C.ink5, fontWeight: '400' }}>{g.required ? '(required)' : g.maxSelect > 1 ? `(up to ${g.maxSelect})` : ''}</Text></Text>

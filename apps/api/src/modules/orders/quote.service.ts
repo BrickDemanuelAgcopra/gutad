@@ -52,6 +52,8 @@ export interface QuoteInput {
 
 export interface QuoteSnapshotLine {
   menuItemId: string;
+  /** packaged goods line (stock reserved at checkout) */
+  packaged?: boolean;
   name: string;
   brandId: string | null;
   stationCode: string | null;
@@ -187,6 +189,13 @@ export class QuoteService {
       if (l.quantity < 1 || l.quantity > 50) throw new BadRequestException('Quantity must be 1–50');
       const totalQty = input.lines.filter((x) => x.menuItemId === l.menuItemId).reduce((a, x) => a + x.quantity, 0);
       if (item.maxPerOrder && totalQty > item.maxPerOrder) throw new BadRequestException({ message: `${item.name}: at most ${item.maxPerOrder} per order`, code: 'QUANTITY_LIMIT' });
+      // packaged goods: sold from dated stock; checkout reserves the units (first expiry first)
+      if (item.packaged) {
+        if (loc.chefKitchen) throw new BadRequestException({ message: `${item.name}: packaged goods aren't sold by Chef Network kitchens`, code: 'ITEM_UNAVAILABLE' });
+        if (item.packaged.reason) throw new BadRequestException({ message: `${item.name}: ${item.packaged.reason}`, code: 'OUT_OF_STOCK', menuItemId: item.id, available: 0 });
+        if (totalQty > item.packaged.maxPerOrder) throw new BadRequestException({ message: `${item.name}: at most ${item.packaged.maxPerOrder} per order`, code: 'QUANTITY_LIMIT' });
+        if (!sim && totalQty > item.packaged.available) throw new BadRequestException({ message: item.packaged.available ? `${item.name}: only ${item.packaged.available} left` : `${item.name} is sold out`, code: 'OUT_OF_STOCK', menuItemId: item.id, available: item.packaged.available });
+      }
       if (item.brandId && eligibleBrands.length && !eligibleBrands.some((b) => b.id === item.brandId)) throw new BadRequestException(`${item.name} is from a brand not served at this kitchen`);
       if (item.brandId) {
         const b = brandRows.get(item.brandId);
@@ -201,7 +210,7 @@ export class QuoteService {
       const ev = this.resolveModifiers(item, l.modifierOptionIds || []);
       const mods = ev.mods;
       const modifiersCents = mods.reduce((a, m) => a + m.priceCents, 0);
-      snapLines.push({ menuItemId: item.id, name: chefName ? chefDishTitle(item.name, chefName) : item.name, brandId: item.brandId, stationCode: item.stationCode, quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory, ...(ev.customized ? { allergens: ev.allergens, dietaryTags: ev.dietaryTags, prepMinutesDelta: ev.prepMinutesDelta } : {}) });
+      snapLines.push({ menuItemId: item.id, name: chefName ? chefDishTitle(item.name, chefName) : item.name, brandId: item.brandId, stationCode: item.stationCode, ...(item.packaged ? { packaged: true } : {}), quantity: l.quantity, unitPriceCents: item.priceCents, modifiersCents, lineTotalCents: (item.priceCents + modifiersCents) * l.quantity, modifiers: mods, specialInstructions: l.specialInstructions, taxCategory: item.taxCategory, ...(ev.customized ? { allergens: ev.allergens, dietaryTags: ev.dietaryTags, prepMinutesDelta: ev.prepMinutesDelta } : {}) });
     }
     const subtotalCents = snapLines.reduce((a, l) => a + l.lineTotalCents, 0);
     const capacityLines = snapLines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity }));
@@ -306,7 +315,11 @@ export class QuoteService {
     if (tax.warning) warnings.push(tax.warning);
     const taxCents = tax.taxCents;
     const tipCents = Math.max(0, input.tipCents || 0);
-    const commissionCents = bps(taxableCents, terms.commissionBps);
+    // packaged goods may carry their own commission (setting fees.packaged; null = the store's normal rate)
+    const packagedSubtotal = snapLines.filter((l) => l.packaged).reduce((a, l) => a + l.lineTotalCents, 0);
+    const packagedBps = packagedSubtotal && !firstParty ? (await this.settings.getObject<{ commissionBps: number | null }>('fees.packaged', { commissionBps: null })).commissionBps : null;
+    const packagedTaxable = packagedBps != null && subtotalCents ? Math.round((taxableCents * packagedSubtotal) / subtotalCents) : 0;
+    const commissionCents = packagedBps != null ? bps(taxableCents - packagedTaxable, terms.commissionBps) + bps(packagedTaxable, packagedBps) : bps(taxableCents, terms.commissionBps);
 
     // 11.6 payment mix: credits, then points, then gift balance; the card pays what is left
     let creditsCents = 0;

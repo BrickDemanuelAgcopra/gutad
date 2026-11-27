@@ -15,6 +15,7 @@ import { EntitlementsModule } from './modules/entitlements/entitlements.module';
 import { FeatureGuard } from './modules/entitlements/requires-feature';
 import { DiscoveryModule } from './modules/discovery/discovery.module';
 import { FirstPartyModule } from './modules/first-party/first-party.module';
+import { PackagedModule } from './modules/packaged/packaged.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
 import { PaymentsModule } from './modules/payments/payments.module';
@@ -54,6 +55,7 @@ export const DOMAIN_MODULES = [
   EntitlementsModule,
   DiscoveryModule,
   FirstPartyModule,
+  PackagedModule,
   CatalogModule,
   ContractsModule,
   PaymentsModule,

@@ -114,6 +114,7 @@ export const ADMIN_MODULES: AdminModule[] = [
   { key: 'locations', group: 'Operations', label: 'Locations', description: 'Hours, closures, channels, stations, launch checklist, emergency pause and restart', permission: 'merchants.read', web: '/admin/locations', mobile: '/ops/locations' },
   { key: 'availability', group: 'Operations', label: 'Availability', description: 'Sold-out items, paused stores and stations down across merchants', permission: 'ops.read', web: '/admin/availability' },
   { key: 'first-party', group: 'Merchants', label: 'Gutad Kitchens (first-party)', description: 'Gutad’s own locations and brands, marketplace ranking policy, kill switch, first-party vs merchant sales, operators', permission: 'merchants.read', web: '/admin/first-party' },
+  { key: 'packaged', group: 'Merchants', label: 'Packaged goods', description: 'Packaged product review queue, recalls by GTIN or batch, expiry rules, category and seller controls, packaged commission', permission: 'catalog.read', web: '/admin/packaged', mobile: '/ops/packaged' },
   { key: 'changes', group: 'Merchants', label: 'Change requests', description: 'Merchant menu and business-information changes waiting for review', permission: 'merchants.read', web: '/admin/changes' },
   { key: 'performance', group: 'Merchants', label: 'Merchant performance', description: 'Acceptance, cancellations, prep time, lateness and errors by location', permission: 'merchants.read', web: '/admin/performance' },
   { key: 'chef-applications', group: 'Chef Network', label: 'Chef applications', description: 'Applications by stage, completeness checks, reviewers, documents, approvals, waitlist and appeals', permission: 'chefs.read', web: '/admin/chefs', mobile: '/ops/chefs' },
@@ -166,6 +167,7 @@ export const MERCHANT_PAGE_ROLES: Record<string, Role[]> = {
   '/merchant/support': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF'],
   '/merchant/recipes': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'KITCHEN'],
   '/merchant/inventory': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'KITCHEN'],
+  '/merchant/products': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'KITCHEN', 'PACKER'],
   '/merchant/safety': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'KITCHEN', 'PACKER'],
   '/merchant/ops': ['MERCHANT_OWNER', 'MERCHANT_MANAGER', 'MERCHANT_STAFF', 'KITCHEN', 'PACKER', 'HOST', 'DISPATCHER'],
 };
