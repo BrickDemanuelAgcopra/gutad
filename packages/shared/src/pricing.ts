@@ -76,6 +76,12 @@ export interface DeliveryPricing {
   merchant: { storeSetsFee: boolean; maxBaseCents: number; maxPerKmCents: number; maxCents: number };
   /** stores may offer free delivery from a basket amount (on Gutad or partner couriers the store pays the fee) */
   storeFreeDelivery: { allowed: boolean; minThresholdCents: number };
+  /**
+   * Priority delivery (Gutad couriers only, as-soon-as-possible orders): never batched with other orders, offered
+   * earlier and to more couriers, a courier bonus out of the fee, a shorter promise, and the fee refunded automatically
+   * if the order arrives more than `lateGraceMinutes` after the promised time or ends up with a partner courier.
+   */
+  priority: { enabled: boolean; feeCents: number; courierBonusCents: number; etaSavingMinutes: number; lateGraceMinutes: number; offerEarlierMinutes: number; extraOffersPerRound: number };
 }
 
 export const DEFAULT_DELIVERY_PRICING: DeliveryPricing = {
@@ -84,12 +90,13 @@ export const DEFAULT_DELIVERY_PRICING: DeliveryPricing = {
   partner: { mode: 'PASS_THROUGH', markupCents: 0, markupBps: 0, baseCents: 199, perKmCents: 50, minCents: 199, maxCents: 1299 },
   merchant: { storeSetsFee: true, maxBaseCents: 999, maxPerKmCents: 200, maxCents: 1499 },
   storeFreeDelivery: { allowed: true, minThresholdCents: 0 },
+  priority: { enabled: true, feeCents: 299, courierBonusCents: 150, etaSavingMinutes: 5, lateGraceMinutes: 10, offerEarlierMinutes: 3, extraOffersPerRound: 2 },
 };
 
 /** Fills missing parts of a stored policy with the defaults (one level deep). */
 export function withDeliveryDefaults(p: Partial<DeliveryPricing> | null | undefined): DeliveryPricing {
   const d = DEFAULT_DELIVERY_PRICING;
-  return { platformFreeDelivery: p?.platformFreeDelivery ?? d.platformFreeDelivery, platform: { ...d.platform, ...p?.platform }, partner: { ...d.partner, ...p?.partner }, merchant: { ...d.merchant, ...p?.merchant }, storeFreeDelivery: { ...d.storeFreeDelivery, ...p?.storeFreeDelivery } };
+  return { platformFreeDelivery: p?.platformFreeDelivery ?? d.platformFreeDelivery, platform: { ...d.platform, ...p?.platform }, partner: { ...d.partner, ...p?.partner }, merchant: { ...d.merchant, ...p?.merchant }, storeFreeDelivery: { ...d.storeFreeDelivery, ...p?.storeFreeDelivery }, priority: { ...d.priority, ...p?.priority } };
 }
 
 const clampFee = (c: number, min: number, max: number) => Math.max(min, max > 0 ? Math.min(c, max) : c);

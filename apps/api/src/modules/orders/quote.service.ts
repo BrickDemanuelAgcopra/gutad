@@ -35,6 +35,8 @@ export interface QuoteInput {
   lines: { menuItemId: string; quantity: number; modifierOptionIds?: string[]; specialInstructions?: string; chefRequestQuoteId?: string }[];
   scheduledFor?: string | null;
   tipCents?: number;
+  /** delivery speed: PRIORITY (Gutad couriers, as soon as possible) costs extra and is never batched */
+  deliveryOption?: 'STANDARD' | 'PRIORITY';
   promoCode?: string;
   deliveryAddress?: Address;
   useCreditsCents?: number;
@@ -232,6 +234,10 @@ export class QuoteService {
     let freeReason: 'GUTAD' | 'PROMO' | 'MEMBERSHIP' | 'STORE' | null = null;
     let storeFreeMinCents: number | null = null;
     let merchantDeliveryFundedCents = 0;
+    let deliveryOption: 'STANDARD' | 'PRIORITY' = 'STANDARD';
+    let priorityFeeCents = 0;
+    let lateGraceMinutes = 0;
+    let deliveryOptions: { id: 'STANDARD' | 'PRIORITY'; feeCents: number; etaMinutes: number }[] = [];
     let deliveryProviderCostCents = 0;
     let deliveryQuoteId: string | null = null;
     let deliveryExpiresAt: Date | null = null;
@@ -263,6 +269,17 @@ export class QuoteService {
         // the store's own offer: on its own couriers it just charges nothing; on Gutad or partner couriers it pays the fee
         merchantDeliveryFundedCents = deliveryFleet === 'MERCHANT' ? 0 : deliveryFeeCents;
         deliveryFeeCents = 0; freeReason = 'STORE';
+      }
+      // priority: only where Gutad dispatches (own couriers) and only for as-soon-as-possible orders
+      const pr = dp.priority;
+      const canPriority = pr.enabled && deliveryFleet === 'PLATFORM' && !scheduledFor;
+      const fastEta = Math.max(10, etaMinutes - pr.etaSavingMinutes);
+      deliveryOptions = [{ id: 'STANDARD', feeCents: deliveryFeeCents, etaMinutes }, ...(canPriority ? [{ id: 'PRIORITY' as const, feeCents: deliveryFeeCents + pr.feeCents, etaMinutes: fastEta }] : [])];
+      if (input.deliveryOption === 'PRIORITY' && !canPriority) warnings.push('Priority delivery isn’t available for this order, so standard delivery applies');
+      if (input.deliveryOption === 'PRIORITY' && canPriority) {
+        deliveryOption = 'PRIORITY'; priorityFeeCents = pr.feeCents; lateGraceMinutes = pr.lateGraceMinutes;
+        deliveryFeeCents += pr.feeCents;
+        etaMinutes = fastEta;
       }
     }
 
@@ -334,7 +351,7 @@ export class QuoteService {
       deliveryProviderCostCents,
       platformDeliverySubsidyCents: Math.max(0, deliveryProviderCostCents - deliveryFeeCents - merchantDeliveryFundedCents),
       merchantDeliveryFundedCents,
-      delivery: input.fulfillmentType === 'DELIVERY' ? { standardFeeCents: standardDeliveryFeeCents, feeCents: deliveryFeeCents, freeReason, storeFreeMinCents, amountToFreeCents: !freeReason && storeFreeMinCents !== null && subtotalCents < storeFreeMinCents ? storeFreeMinCents - subtotalCents : 0, fleet: deliveryFleet } : null,
+      delivery: input.fulfillmentType === 'DELIVERY' ? { option: deliveryOption, options: deliveryOptions, priorityFeeCents, lateGraceMinutes, standardFeeCents: standardDeliveryFeeCents, feeCents: deliveryFeeCents, freeReason, storeFreeMinCents, amountToFreeCents: !freeReason && storeFreeMinCents !== null && subtotalCents < storeFreeMinCents ? storeFreeMinCents - subtotalCents : 0, fleet: deliveryFleet } : null,
       deliveryAddress: input.deliveryAddress || null,
       etaMinutes,
       membershipId: membership?.id || null,
@@ -411,6 +428,7 @@ export class QuoteService {
       lines: s.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifiers.map((m) => m.id), specialInstructions: l.chefRequestQuoteId ? undefined : l.specialInstructions, chefRequestQuoteId: l.chefRequestQuoteId })),
       scheduledFor: q.scheduledFor?.toISOString() ?? null,
       tipCents: q.tipCents,
+      deliveryOption: (s as { delivery?: { option?: 'STANDARD' | 'PRIORITY' } }).delivery?.option,
       promoCode: q.promoCode ?? undefined,
       deliveryAddress: s.deliveryAddress ?? undefined,
       useCreditsCents: s.creditsCents,

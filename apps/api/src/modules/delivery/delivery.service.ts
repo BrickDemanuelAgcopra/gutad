@@ -25,6 +25,9 @@ import { CourierSpecialService, type SpecialPremium } from './courier-special.se
 
 type Status = (typeof deliveryJobs.status.enumValues)[number];
 
+/** The diner chose priority delivery at checkout (kept in the order's price snapshot). */
+export const isPriorityOrder = (o: { priceSnapshot: unknown } | null | undefined) => (o?.priceSnapshot as { delivery?: { option?: string } } | null)?.delivery?.option === 'PRIORITY';
+
 /** How long an own-fleet job keeps looking for an online courier (after the food is due) before failing over. */
 const NO_COURIER_GIVE_UP_MINUTES = 20;
 
@@ -306,7 +309,9 @@ export class DeliveryService {
       const ready = o?.status === 'READY';
       // Courier R4: a scheduled catering order is offered a set time ahead, so a qualified courier is lined up early
       const cateringHold = await this.special.cateringHold(job, requirements, tx);
-      const holdUntil = cateringHold ?? (eff.readySync.enabled && !ready ? new Date(estReadyAt.getTime() - (eff.readySync.pickupTravelMinutes + eff.readySync.offerLeadMinutes) * 60_000) : null);
+      // priority orders go out a few minutes earlier so a courier is lined up when the food is ready
+      const earlier = isPriorityOrder(o) ? (await this.deliveryPricing()).priority.offerEarlierMinutes : 0;
+      const holdUntil = cateringHold ?? (eff.readySync.enabled && !ready ? new Date(estReadyAt.getTime() - (eff.readySync.pickupTravelMinutes + eff.readySync.offerLeadMinutes + earlier) * 60_000) : null);
       const held = !!holdUntil && holdUntil.getTime() > Date.now();
       // Courier R1: the customer's handoff PIN (accepted as proof of delivery)
       const [u] = await tx.update(deliveryJobs).set({ status: 'REQUESTED', handoffPin: job.handoffPin ?? String(Math.floor(1000 + Math.random() * 9000)), holdUntil: held ? holdUntil : null }).where(eq(deliveryJobs.id, job.id)).returning();
@@ -381,6 +386,7 @@ export class DeliveryService {
       await this.courierPay(u, status, tx);
       if (status === 'DELIVERED') await this.incentives.payBoosts(u, tx);
       if (status === 'DELIVERED') await this.special.payPremium(u, tx);
+      if (status === 'DELIVERED') await this.payPriorityBonus(u, tx);
       await this.afterJobClosed(u.driverId, tx);
     }
     if (status === 'DELIVERED') {
@@ -455,6 +461,22 @@ export class DeliveryService {
    * (+ waiting beyond the grace period, + return pay); a cancellation after the courier reached the pickup earns the
    * cancellation pay. Each (job, kind) is written once, and the ledger is posted only when the row is new.
    */
+  /** The priority bonus promised on the accepted offer, paid once on delivery (from the priority fee). */
+  private async payPriorityBonus(job: typeof deliveryJobs.$inferSelect, tx: DbOrTx) {
+    const cents = (job.payPolicy as { priority?: { cents: number } | null } | null)?.priority?.cents ?? 0;
+    if (!job.driverId || cents <= 0) return null;
+    const [paid] = await tx.select({ id: driverEarnings.id }).from(driverEarnings).where(and(eq(driverEarnings.deliveryJobId, job.id), eq(driverEarnings.kind, 'PRIORITY'))).limit(1);
+    if (paid) return null;
+    const policy = await this.payPolicy();
+    const [e] = await tx.insert(driverEarnings).values({ driverId: job.driverId, deliveryJobId: job.id, kind: 'PRIORITY', baseCents: cents, reason: 'Priority delivery bonus', policyVersion: policy.version, availableAt: new Date(Date.now() + policy.holdHours * 3600_000) }).returning();
+    const [loc] = await tx.select({ currency: locations.currency }).from(locations).where(eq(locations.id, job.locationId)).limit(1);
+    await this.ledger.post({ orderId: job.orderId, currency: loc?.currency || 'USD' }, [
+      { account: 'PLATFORM_EXPENSE_DELIVERY_SUBSIDY', debitCents: cents, memo: `Priority bonus job ${job.id}` },
+      { account: 'DRIVER_PAYABLE', partyId: job.driverId, creditCents: cents, memo: 'Priority delivery bonus' },
+    ], tx);
+    return e;
+  }
+
   async courierPay(job: typeof deliveryJobs.$inferSelect, outcome: Status, tx: DbOrTx) {
     if (!job.driverId) return null;
     const { policy, pay, market } = await this.jobPay(job);
@@ -885,8 +907,12 @@ export class DeliveryService {
     const policy = eff.pay;
     const pickup = job.pickupAddress as Address;
     const drop = job.dropoffAddress as Address;
-    const reqs = job.requirements.length ? job.requirements : await this.requirementsFor(job, tx);
     const [o] = job.orderId ? await tx.select().from(orders).where(eq(orders.id, job.orderId)).limit(1) : [null];
+    // priority: marked on the job so no other order is ever batched with it
+    const priority = isPriorityOrder(o);
+    const prio = priority ? (await this.deliveryPricing()).priority : null;
+    const baseReqs = job.requirements.length ? job.requirements : await this.requirementsFor(job, tx);
+    const reqs = priority && !baseReqs.includes('PRIORITY') ? [...baseReqs, 'PRIORITY'] : baseReqs;
     const readyAt = job.estReadyAt ?? this.estimateReady(o ?? null, eff.readySync);
     const readyIn = o?.status === 'READY' ? 0 : Math.max(0, (readyAt.getTime() - Date.now()) / 60_000);
     // Courier R1 dispatchability: approved, active lifecycle, not on a break or finishing, recent location
@@ -913,6 +939,9 @@ export class DeliveryService {
       if (km > cfg.radiusKm) continue;
       if (sctx && this.special.ineligible(d, reqs, sctx, (km + tripKmEst) * cfg.travelMinutesPerKm + 5)) continue;
       const mine = active.filter((j) => j.driverId === d.id);
+      // priority goes straight to the customer: only to a courier with nothing else, and nothing is added to it
+      if (priority && mine.length) continue;
+      if (mine.some((j) => j.requirements.includes('PRIORITY'))) continue;
       const trips = mine.length;
       let batchWith: string | null = null;
       if (mine.length) {
@@ -933,7 +962,7 @@ export class DeliveryService {
       scored.push({ d, score, detail: { km: Math.round(km * 100) / 100, readinessGap: Math.round(readiness), load: trips, vehicle: d.vehicleType, batchWith } });
     }
     scored.sort((a, b) => a.score - b.score);
-    const pick = scored.slice(0, cfg.offersPerRound);
+    const pick = scored.slice(0, cfg.offersPerRound + (prio?.extraOffersPerRound ?? 0));
     if (!pick.length) {
       // nobody online nearby: an empty round doesn't use up the offer rounds. retryWaiting tries again every minute (and
       // as soon as a courier comes online) until NO_COURIER_GIVE_UP_MINUTES after the food is due, then fails over.
@@ -962,7 +991,8 @@ export class DeliveryService {
       const incentiveCents = incentives.reduce((t, i) => t + i.cents, 0);
       const special = sctx ? this.special.premium(reqs, sctx.cfg) : [];
       const specialCents = special.reduce((t, p) => t + p.cents, 0);
-      rowsOut.push({ driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents + incentiveCents + specialCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market, incentives, special }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail });
+      const priorityCents = prio?.courierBonusCents ?? 0;
+      rowsOut.push({ driverId: r.d.id, deliveryJobId: job.id, payCents: pay.totalCents + incentiveCents + specialCents + priorityCents, payBreakdown: { pay, policy, estMinutes, toPickupKm, distanceKm: Math.round(tripKm * 100) / 100, market, incentives, special, priority: priority ? { cents: priorityCents } : null }, expiresAt: new Date(Date.now() + cfg.offerSeconds * 1000), score: r.score, scoreDetail: r.detail });
     }
     await tx.insert(driverOffers).values(rowsOut);
     // ring each offered courier's phone: offers expire in seconds, the app may be closed
@@ -1025,7 +1055,7 @@ export class DeliveryService {
     const scfg = await this.special.cfg();
     const handoffs = new Map(await Promise.all(rows.map(async (r) => [r.job.id, await this.special.handoffFor(r.job, scfg)] as const)));
     return rows.map((r) => {
-      const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number; incentives?: OfferIncentive[]; special?: SpecialPremium[] };
+      const b = (r.offer.payBreakdown || {}) as { pay?: OfferPay; policy?: CourierPayPolicy; estMinutes?: number; toPickupKm?: number; distanceKm?: number; incentives?: OfferIncentive[]; special?: SpecialPremium[]; priority?: { cents: number } | null };
       const incentives = b.incentives ?? [];
       const special = b.special ?? [];
       const pu = r.job.pickupAddress as Address;
@@ -1034,7 +1064,7 @@ export class DeliveryService {
       const equipment = ['INSULATED_BAG', ...(r.job.requirements.includes('COLD_BAG') ? ['COLD_BAG'] : [])];
       return {
         id: r.offer.id, deliveryJobId: r.offer.deliveryJobId, expiresAt: r.offer.expiresAt, payCents: r.offer.payCents,
-        pay: { ...(b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }), incentiveCents: incentives.reduce((t, i) => t + i.cents, 0), incentives, specialCents: special.reduce((t, p) => t + p.cents, 0), special }, tipCents: r.job.tipCents,
+        pay: { ...(b.pay ?? { baseCents: r.offer.payCents, distanceCents: 0, timeCents: 0, totalCents: r.offer.payCents }), incentiveCents: incentives.reduce((t, i) => t + i.cents, 0), incentives, specialCents: special.reduce((t, p) => t + p.cents, 0), special, priorityCents: b.priority?.cents ?? 0 }, tipCents: r.job.tipCents,
         stops: batchWith ? 3 : 2, pickup: { name: pu.contactName ?? null, line1: pu.line1, city: pu.city }, dropoffArea: { city: dr.city, postalCode: dr.postalCode },
         readiness: this.readiness(r.job), manifest: r.job.manifest as Manifest | null,
         market: r.job.marketId ? { id: r.job.marketId, name: marketNames.get(r.job.marketId) ?? null } : null,
@@ -1063,8 +1093,8 @@ export class DeliveryService {
       const tripsNow = mineNow.length;
       if (tripsNow && (!mateId || !mineNow.some((j) => j.id === mateId) || tripsNow >= d.maxConcurrent)) throw new ConflictException({ message: 'You already have as many orders as you can carry', code: 'AT_CAPACITY' });
       // first accept wins: the conditional update awards the job to exactly one courier; the accepted pay is kept on the job
-      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number; market?: { id: string; version: number } | null; incentives?: OfferIncentive[]; special?: SpecialPremium[] } | null;
-      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, holdUntil: null, acceptedReadyAt: sql`${deliveryJobs.estReadyAt}`, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id, market: b.market ?? null, incentives: b.incentives ?? [], special: b.special ?? [] } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
+      const b = (offer.payBreakdown || null) as { pay: OfferPay; policy: CourierPayPolicy; estMinutes: number; market?: { id: string; version: number } | null; incentives?: OfferIncentive[]; special?: SpecialPremium[]; priority?: { cents: number } | null } | null;
+      const [job] = await tx.update(deliveryJobs).set({ driverId: d.id, holdUntil: null, acceptedReadyAt: sql`${deliveryJobs.estReadyAt}`, ...(b ? { payPolicy: { policy: b.policy, pay: b.pay, estMinutes: b.estMinutes, offerId: offer.id, market: b.market ?? null, incentives: b.incentives ?? [], special: b.special ?? [], priority: b.priority ?? null } } : {}) }).where(and(eq(deliveryJobs.id, offer.deliveryJobId), isNull(deliveryJobs.driverId), inArray(deliveryJobs.status, ['REQUESTED', 'UNASSIGNED']))).returning();
       if (!job) throw new ConflictException('Job already taken');
       await tx.update(driverOffers).set({ status: 'ACCEPTED', respondedAt: new Date() }).where(eq(driverOffers.id, offerId));
       await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.status, 'OFFERED')));

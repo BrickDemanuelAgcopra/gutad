@@ -243,13 +243,14 @@ export interface Paginated<T> {
 }
 
 /** Delivery fee on a quote: `freeReason` GUTAD (Gutad-wide offer), PROMO, MEMBERSHIP or STORE (the store's offer). */
-export interface QuoteDelivery { standardFeeCents: number; feeCents: number; freeReason: 'GUTAD' | 'PROMO' | 'MEMBERSHIP' | 'STORE' | null; storeFreeMinCents: number | null; amountToFreeCents: number; fleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM' }
+export interface DeliveryOptionQuote { id: 'STANDARD' | 'PRIORITY'; feeCents: number; etaMinutes: number }
+export interface QuoteDelivery { option?: 'STANDARD' | 'PRIORITY'; options?: DeliveryOptionQuote[]; priorityFeeCents?: number; lateGraceMinutes?: number; standardFeeCents: number; feeCents: number; freeReason: 'GUTAD' | 'PROMO' | 'MEMBERSHIP' | 'STORE' | null; storeFreeMinCents: number | null; amountToFreeCents: number; fleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM' }
 
 /** What a diner reads about the delivery fee, shared by web and mobile checkout. */
 export function deliveryFeeNotes(d: QuoteDelivery | null | undefined, storeName: string): { free: boolean; note: string | null; nudge: string | null } {
   if (!d) return { free: false, note: null, nudge: null };
   const usd = (c: number) => `$${(c / 100).toFixed(2)}`;
-  const free = d.feeCents === 0;
+  const free = d.feeCents - (d.priorityFeeCents ?? 0) === 0;
   const why = d.freeReason === 'STORE' ? `Free delivery from ${storeName}` : d.freeReason === 'GUTAD' ? 'Free delivery from Gutad' : d.freeReason === 'MEMBERSHIP' ? 'Free delivery with your membership' : d.freeReason === 'PROMO' ? 'Free delivery with your promo' : 'Free delivery';
   return {
     free,

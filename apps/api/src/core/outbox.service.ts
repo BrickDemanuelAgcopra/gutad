@@ -14,6 +14,7 @@ export type DomainTopic =
   | 'order.canceled'
   | 'order.line_unavailable'
   | 'order.delivery_choice'
+  | 'order.priority_refunded'
   | 'payment.captured'
   | 'payment.refunded'
   | 'payment.disputed'

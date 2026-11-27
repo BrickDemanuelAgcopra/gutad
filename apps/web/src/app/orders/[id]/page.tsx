@@ -19,6 +19,7 @@ interface Order {
   prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null; amendable?: boolean; amendedFromOrderId?: string | null;
   chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null;
   courierDelay?: CourierDelay | null;
+  priority?: { feeCents: number; lateGraceMinutes: number; refunded: boolean } | null;
   delivery: { id: string; status: string; fleet?: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; handoffPin?: string | null; handoffRequirements?: CustomerHandoffRequirements | null; courierFirstName?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
 
@@ -199,6 +200,7 @@ export default function OrderPage() {
           ))}
         </Card>
       )}
+      {o.priority && <Alert tone={o.priority.refunded ? 'info' : 'good'}>⚡ Priority delivery: your courier comes straight to you with no other orders.{o.priority.refunded ? ` It didn’t go as promised, so we refunded the ${money(o.priority.feeCents)} priority fee.` : ` If it arrives more than ${o.priority.lateGraceMinutes} min after the estimate, the ${money(o.priority.feeCents)} priority fee is refunded automatically.`}</Alert>}
       {o.courierDelay && user && <CourierDelayCard orderId={o.id} d={o.courierDelay} onDone={reload} />}
       {o.courierDelay && !user && <Alert tone="info">No courier is available near {o.locationName} right now. Sign in to switch to pickup, cancel for a full refund, or keep waiting.</Alert>}
       {o.delivery && (

@@ -94,6 +94,18 @@ function DeliveryFees() {
         <div className="mt-2 grid grid-cols-2 gap-2"><Input label="Lowest allowed basket $" value={usd(p.storeFreeDelivery.minThresholdCents)} onChange={(e) => setP({ ...p, storeFreeDelivery: { ...p.storeFreeDelivery, minThresholdCents: cents(e.target.value) } })} /></div>
         <p className="mt-2 text-xs text-ink-500">On their own couriers the store just charges nothing. On Gutad or partner couriers the store pays the fee the diner doesn&apos;t (taken from its payout), and gets it back if the delivery never happens.</p>
       </Card>
+      <Card title="⚡ Priority delivery" className="lg:col-span-2">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={p.priority.enabled} onChange={(e) => setP({ ...p, priority: { ...p.priority, enabled: e.target.checked } })} /> Offer priority delivery at checkout (Gutad couriers, as-soon-as-possible orders)</label>
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Input label="Priority fee $" value={usd(p.priority.feeCents)} onChange={(e) => setP({ ...p, priority: { ...p.priority, feeCents: cents(e.target.value) } })} />
+          <Input label="Courier bonus $" value={usd(p.priority.courierBonusCents)} onChange={(e) => setP({ ...p, priority: { ...p.priority, courierBonusCents: cents(e.target.value) } })} />
+          <Input label="Promise sooner by (min)" type="number" value={p.priority.etaSavingMinutes} onChange={(e) => setP({ ...p, priority: { ...p.priority, etaSavingMinutes: Number(e.target.value) } })} />
+          <Input label="Refund if late by (min)" type="number" value={p.priority.lateGraceMinutes} onChange={(e) => setP({ ...p, priority: { ...p.priority, lateGraceMinutes: Number(e.target.value) } })} />
+          <Input label="Offer earlier by (min)" type="number" value={p.priority.offerEarlierMinutes} onChange={(e) => setP({ ...p, priority: { ...p.priority, offerEarlierMinutes: Number(e.target.value) } })} />
+          <Input label="Extra couriers per round" type="number" value={p.priority.extraOffersPerRound} onChange={(e) => setP({ ...p, priority: { ...p.priority, extraOffersPerRound: Number(e.target.value) } })} />
+        </div>
+        <p className="mt-2 text-xs text-ink-500">Priority orders are never batched: they only go to a courier with no other order, and no order is added to a courier carrying one. They are offered earlier and to more couriers, the courier gets the bonus, and the fee is refunded automatically if the order is late beyond the grace or ends up with a partner courier.</p>
+      </Card>
       <div className="lg:col-span-2"><Button onClick={() => { const reason = askReason('changing delivery fees'); if (reason) run(async () => setInfo(pendingNotice(await api.post('/admin/pricing/delivery', { policy: p, reason })) || 'Saved.')); }}>Request change</Button><span className="ml-3 text-xs text-ink-500">Delivery fee changes apply after a second person approves them (Approvals).</span></div>
     </div>
   );

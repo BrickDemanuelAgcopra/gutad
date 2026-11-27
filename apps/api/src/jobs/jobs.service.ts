@@ -137,7 +137,7 @@ export class JobsService {
   @Interval(3_600_000) chefDocuments() { return this.locked('chef-documents', 600_000, () => this.chefOps.documentSweep()); }
   @Interval(300_000) chefQuality() { return this.locked('chef-quality', 240_000, () => this.chefOps.qualitySweep()); }
   @Interval(300_000) chefRequestDeadlines() { return this.locked('chef-request-deadlines', 120_000, () => this.chefRequests.expireDue()); }
-  @Interval(60_000) chefOrderDeadlines() { return this.locked('chef-order-deadlines', 60_000, async () => ({ ...(await this.orders.expireUnacceptedChefOrders()), ...(await this.orders.recognizeCompletedChefOrders()) })); }
+  @Interval(60_000) chefOrderDeadlines() { return this.locked('chef-order-deadlines', 60_000, async () => ({ ...(await this.orders.expireUnacceptedChefOrders()), ...(await this.orders.recognizeCompletedChefOrders()), ...(await this.orders.priorityGuarantee()) })); }
   @Interval(60_000) scheduledOrders() { return this.locked('scheduled-orders', 60_000, () => this.orders.releaseScheduled()); }
   @Interval(30_000) deliveryHousekeeping() {
     return this.locked('delivery', 60_000, async () => ({ expiredQuotes: await this.delivery.expireQuotes(), expiredOffers: await this.delivery.expireOffers(), released: await this.delivery.releaseHeld(), retried: await this.delivery.retryWaiting(), late: await this.delivery.flagLate(), simulated: await this.delivery.simulateMock(), noShows: await this.courier.markNoShows() }));

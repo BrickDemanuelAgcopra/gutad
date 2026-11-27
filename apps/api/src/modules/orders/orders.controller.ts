@@ -14,6 +14,7 @@ const QuoteDto = z.object({
   lines: z.array(z.object({ menuItemId: z.string().uuid(), quantity: z.number().int().min(1).max(50), modifierOptionIds: z.array(z.string().uuid()).optional(), specialInstructions: z.string().max(300).optional(), chefRequestQuoteId: z.string().uuid().optional() })).min(1),
   scheduledFor: z.string().nullable().optional(),
   tipCents: z.number().int().min(0).optional(),
+  deliveryOption: z.enum(['STANDARD', 'PRIORITY']).optional(),
   promoCode: z.string().optional(),
   deliveryAddress: AddressDto.optional(),
   useCreditsCents: z.number().int().min(0).optional(),

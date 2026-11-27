@@ -35,6 +35,7 @@ export default function CheckoutPage() {
   const [useGift, setUseGift] = useState(false);
   const [utensils, setUtensils] = useState(false);
   const [table, setTable] = useState(() => (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('table') || '' : ''));
+  const [speed, setSpeed] = useState<'STANDARD' | 'PRIORITY'>('STANDARD');
   const [quote, setQuote] = useState<(Quote & { seller?: { firstParty: boolean; label: string } | null; chefTerms?: { chargedNow: boolean; freeCancelUntil: string | null; lateRefundPct: number } | null }) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -97,7 +98,7 @@ export default function CheckoutPage() {
         let scheduledFor: string | null = null;
         if (chef && !(schedule?.date && schedule.time)) { if (!cancelled) { setQuote(null); setBlocked(null); } return; }
         if (schedule?.date && schedule.time) scheduledFor = (await api.get<{ iso: string }>(`/public/locations/${cart.locationId}/local-time?date=${schedule.date}&time=${schedule.time}`)).iso;
-        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions, chefRequestQuoteId: l.chefRequestQuoteId })), scheduledFor, tipCents, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined, ...(chef ? { holdKey: holdKey.current } : {}) });
+        const q = await api.post<Quote>('/quotes', { locationId: cart.locationId, channel: cart.channel, fulfillmentType: fulfillment, lines: cart.lines.map((l) => ({ menuItemId: l.menuItemId, quantity: l.quantity, modifierOptionIds: l.modifierOptionIds, specialInstructions: l.specialInstructions, chefRequestQuoteId: l.chefRequestQuoteId })), scheduledFor, tipCents, deliveryOption: fulfillment === 'DELIVERY' ? speed : undefined, promoCode: promo || undefined, useCreditsCents: useCredits || undefined, useGiftBalance: useGift || undefined, deliveryAddress: fulfillment === 'DELIVERY' ? { ...address, lat: address.lat || undefined, lng: address.lng || undefined } : undefined, ...(chef ? { holdKey: holdKey.current } : {}) });
         if (!cancelled) { setQuote(q); setBlocked(null); }
       } catch (e) {
         if (!cancelled) {
@@ -111,7 +112,7 @@ export default function CheckoutPage() {
     const t = setTimeout(run, 350);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart, fulfillment, schedule, tipCents, promo, address.lat, address.lng, address.line1, useCredits, useGift, ready]);
+  }, [cart, fulfillment, schedule, tipCents, promo, address.lat, address.lng, address.line1, useCredits, useGift, ready, speed]);
 
   const geocode = async () => {
     // Pilot geocoder: a demo pin in lower Manhattan. Replace with Google/Mapbox when GEOCODER_PROVIDER=google.
@@ -258,6 +259,20 @@ export default function CheckoutPage() {
                     <Row l="Delivery" v={quote.delivery && n.free && quote.delivery.standardFeeCents > 0 ? <span><s className="mr-1 text-ink-400">{money(quote.delivery.standardFeeCents)}</s><b className="text-green-700">Free</b></span> : quote.deliveryFeeCents ? money(quote.deliveryFeeCents) : 'Free'} />
                     {n.note && <p className={`text-xs ${n.free ? 'text-green-700' : 'text-ink-500'}`}>{n.note}</p>}
                     {n.nudge && <p className="rounded-lg bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">{n.nudge}</p>}
+                    {(quote.delivery?.options?.length ?? 0) > 1 && (
+                      <div className="my-2 space-y-1.5" role="radiogroup" aria-label="Delivery speed">
+                        {quote.delivery!.options!.map((op) => {
+                          const on = (quote.delivery?.option ?? 'STANDARD') === op.id;
+                          const extra = op.feeCents - (quote.delivery!.options![0].feeCents);
+                          return (
+                            <button key={op.id} type="button" role="radio" aria-checked={on} onClick={() => setSpeed(op.id)} className={`w-full rounded-xl border p-2 text-left text-sm ${on ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-400' : 'border-ink-200 hover:bg-ink-50'}`}>
+                              <div className="flex justify-between font-semibold"><span>{op.id === 'PRIORITY' ? '⚡ Priority' : 'Standard'}</span><span>{op.id === 'PRIORITY' ? `+${money(extra)}` : op.feeCents ? money(op.feeCents) : 'Free'}</span></div>
+                              <div className="text-xs text-ink-500">About {op.etaMinutes} min{op.id === 'PRIORITY' ? ` · goes straight to you, no other orders on the way. If it’s more than ${quote.delivery?.lateGraceMinutes || 10} min late, the priority fee is refunded.` : ' · your courier may pick up another order on the way'}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </>
                 );
               })()}

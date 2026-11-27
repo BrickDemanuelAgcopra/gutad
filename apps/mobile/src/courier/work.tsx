@@ -104,6 +104,7 @@ export function OfferCard({ o, onDone }: { o: Offer; onDone: () => void }) {
       <View style={s.row}><Text style={{ fontSize: 20, fontWeight: '800', color: C.ink }}>{money(o.pay?.totalCents ?? o.payCents)}</Text><Badge text={`${left}s`} tone={left < 20 ? 'bad' : 'warn'} /></View>
       <Muted>Guaranteed: base {money(o.pay?.baseCents || 0)} + distance {money(o.pay?.distanceCents || 0)}{o.pay?.timeCents ? ` + time ${money(o.pay.timeCents)}` : ''}</Muted>
       {(o.pay?.specialCents ?? 0) > 0 && <Text style={{ color: C.brand, fontWeight: '700' }}>+ {money(o.pay.specialCents!)} {o.pay.special?.length ? o.pay.special.map((x) => `${x.label} ${money(x.cents)}`).join(', ') : 'special order premium'}</Text>}
+      {o.requirements.includes('PRIORITY') && <Text style={{ color: C.bad, fontWeight: '800' }}>⚡ Priority: go straight to the customer, no other orders{(o.pay?.priorityCents ?? 0) > 0 ? ` · +${money(o.pay.priorityCents!)} priority bonus` : ''}</Text>}
       {(o.pay?.incentiveCents ?? 0) > 0 && <Text style={{ color: C.brand, fontWeight: '700' }}>+ {money(o.pay.incentiveCents!)} {o.pay.incentives?.map((i) => i.name).join(', ') || 'boost'}</Text>}
       {o.tipCents > 0 && <Text style={{ color: C.good }}>+ estimated tip {money(o.tipCents)} (100% yours, may change)</Text>}
       <CategoryBadges categories={o.categories} />
@@ -114,7 +115,7 @@ export function OfferCard({ o, onDone }: { o: Offer; onDone: () => void }) {
       <Muted>{o.stops} stop{o.stops === 1 ? '' : 's'} · {o.distanceKm.toFixed(1)} km trip · {o.toPickupKm.toFixed(1)} km to pickup · about {o.estMinutes} min</Muted>
       {o.batchWith && <Text style={{ color: C.info }}>Adds to your current trip (same pickup)</Text>}
       {o.requirements.includes('ALCOHOL') && <Text style={{ color: C.warn }}>Contains alcohol: check ID at handoff</Text>}
-      {o.requirements.filter((r) => !isCategory(r)).length > 0 && <Muted>Needs: {o.requirements.filter((r) => !isCategory(r)).map(label).join(', ')}</Muted>}
+      {o.requirements.filter((r) => !isCategory(r) && r !== 'PRIORITY').length > 0 && <Muted>Needs: {o.requirements.filter((r) => !isCategory(r) && r !== 'PRIORITY').map(label).join(', ')}</Muted>}
       {o.equipment.length > 0 && <Muted>Bring: {o.equipment.map((e) => EQUIPMENT_LABELS[e as EquipmentItem] || label(e)).join(', ')}</Muted>}
       {p && <Muted>Waiting paid after {p.waitingGraceMinutes} min at pickup{p.dropoffGraceMinutes != null ? ` and ${p.dropoffGraceMinutes} min at drop-off` : ''}, {money(p.waitingPerMinuteCents)}/min{p.waitingCapMinutes ? `, up to ${p.waitingCapMinutes} min` : ''} · return {money(p.returnCents)} · canceled after arrival {money(p.cancelAfterArrivalCents)}</Muted>}
       {full && <Text style={{ color: C.warn }}>You already have as many orders as you can carry.</Text>}

@@ -81,6 +81,7 @@ export class NotificationsService {
       case 'order.completed':
       case 'order.canceled':
       case 'order.line_unavailable':
+      case 'order.priority_refunded':
       case 'payment.refunded':
       case 'delivery.assigned':
       case 'delivery.picked_up':

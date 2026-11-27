@@ -15,6 +15,7 @@ const DeliveryPricingDto = z.object({
   partner: FeeRuleDto.extend({ mode: z.enum(['PASS_THROUGH', 'DISTANCE']), markupCents: Cents, markupBps: z.number().int().min(0).max(10_000) }),
   merchant: z.object({ storeSetsFee: z.boolean(), maxBaseCents: Cents, maxPerKmCents: Cents, maxCents: Cents }),
   storeFreeDelivery: z.object({ allowed: z.boolean(), minThresholdCents: Cents }),
+  priority: z.object({ enabled: z.boolean(), feeCents: Cents, courierBonusCents: Cents, etaSavingMinutes: z.number().int().min(0).max(60), lateGraceMinutes: z.number().int().min(0).max(120), offerEarlierMinutes: z.number().int().min(0).max(30), extraOffersPerRound: z.number().int().min(0).max(10) }),
 });
 const FeeRulesDto = z.object({
   service: z.object({ bps: z.number().int().min(0).max(3000), minCents: z.number().int().min(0), capCents: z.number().int().min(0), channels: List, fulfillments: List }),

@@ -19,6 +19,7 @@ interface Track {
   next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | 'NO_COURIER' | 'SELF_DELIVERY' | null };
   noCourier: { since: string; cancelFrom: string; customerWaiting: boolean; keepCents: number; storePaid: boolean } | null;
   selfDelivery: { status: string } | null;
+  priority?: boolean;
   courier: { status: string; assigned: boolean; partner: string | null; firstName: string | null; vehicleType: string | null; etaAt: string | null; location: { at: string } | null } | null;
   review: { rating: number | null; body: string | null; courierRating: number | null; foodRating: number | null; comment: string | null } | null;
 }

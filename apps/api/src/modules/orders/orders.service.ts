@@ -412,6 +412,7 @@ export class OrdersService {
       // no courier (food ready or nearly): the store's options. Cancelling is offered after a fair wait and the store is still paid
       noCourier: delay ? { since: delay.since, cancelFrom: new Date(new Date(delay.since).getTime() + NO_COURIER_STORE_CANCEL_MINUTES * 60_000), customerWaiting: delay.waiting, keepCents: o.deliveryFeeCents + o.tipCents, storePaid: !o.prepaid } : null,
       selfDelivery: selfDelivery ? { status: job!.status } : null,
+      priority: delivery && (o.priceSnapshot as { delivery?: { option?: string } })?.delivery?.option === 'PRIORITY',
       courierHere,
       courier: job ? { status: job.status, assigned, partner: partnerLabel, firstName, vehicleType: courier?.vehicleType ?? null, etaAt: job.etaAt, fleet: job.fleet, location: tracking?.courierLocation ?? null, trackingUrl: job.trackingUrl } : null,
       review: rev || drev ? { rating: rev?.rating ?? null, body: rev?.body ?? null, reply: rev?.reply ?? null, reviewId: rev?.id ?? null, courierRating: drev?.rating ?? null, foodRating: drev?.foodRating ?? null, packagingRating: drev?.packagingRating ?? null, comment: drev?.comment ?? null, at: reviewAt } : null,
@@ -821,6 +822,8 @@ export class OrdersService {
       payment: alloc ? { status: alloc.a.refundedCents >= alloc.a.amountCents && alloc.a.amountCents > 0 ? 'REFUNDED' : alloc.a.refundedCents ? 'PARTIALLY_REFUNDED' : 'CAPTURED', amountCents: alloc.a.amountCents, capturedCents: alloc.a.amountCents, refundedCents: alloc.a.refundedCents, chargedAt: alloc.p.createdAt, sharedWithOrders: alloc.p.amountCents !== alloc.a.amountCents } : p ? { status: p.status, amountCents: p.amountCents, capturedCents: p.capturedCents, refundedCents: p.refundedCents, clientSecret: p.status === 'REQUIRES_ACTION' ? p.clientSecret : undefined } : null,
       delivery: job ? { id: job.id, status: job.status, etaAt: job.etaAt, trackingUrl: job.trackingUrl, hasProof: !!(job.proofPhotoUrl || job.proofSignature), fleet: job.fleet, arrivedAt: job.arrivedDropoffAt, handoffPin: ['REQUESTED', 'ASSIGNED', 'PICKED_UP'].includes(job.status) ? job.handoffPin : null, handoffRequirements: ['REQUESTED', 'ASSIGNED', 'PICKED_UP'].includes(job.status) ? await this.delivery.special.customerRequirements(job) : null, courierFirstName: job.driverId && ['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(job.status) ? ((await this.db.select({ name: users.name }).from(drivers).innerJoin(users, eq(users.id, drivers.userId)).where(eq(drivers.id, job.driverId)).limit(1))[0]?.name?.split(' ')[0] ?? null) : null, exception: job.exception ? { kind: (job.exception as { kind: string }).kind, waitUntil: (job.exception as { waitUntil?: string }).waitUntil, resolution: (job.exception as { resolution?: string }).resolution ?? null } : null } : null,
       courierDelay: await this.courierDelay(o, job ?? null),
+      // priority delivery: the promise and the automatic refund of the priority fee if it is missed
+      priority: o.fulfillmentType === 'DELIVERY' && (o.priceSnapshot as { delivery?: { option?: string } })?.delivery?.option === 'PRIORITY' ? { feeCents: (o.priceSnapshot as { delivery?: { priorityFeeCents?: number } }).delivery?.priorityFeeCents ?? 0, lateGraceMinutes: (o.priceSnapshot as { delivery?: { lateGraceMinutes?: number } }).delivery?.lateGraceMinutes ?? 10, refunded: !!(await this.db.select({ id: orderEvents.id }).from(orderEvents).where(and(eq(orderEvents.orderId, o.id), eq(orderEvents.type, 'PRIORITY_FEE_REFUNDED'))).limit(1))[0] } : null,
       canCancel: o.prepaid ? ['SUBMITTED', 'ACCEPTED'].includes(o.status) : o.status === 'SUBMITTED',
       // Gutad Chef Network: a paid order can be changed until its cutoff (see amendCheck)
       amendable: o.prepaid ? this.amendCheck(o).allowed : false,
@@ -907,6 +910,42 @@ export class OrdersService {
     await this.db.transaction((tx) => this.returnStoreFundedDelivery(o, tx));
     await this.outbox.publish('order.delivery_choice', orderId, { number: o.number, choice: 'CANCEL', by: 'MERCHANT', locationId: o.locationId, storePaid: !o.prepaid });
     return this.trackForMerchant(user, orderId);
+  }
+
+  /**
+   * Priority guarantee (worker, every minute): a priority order delivered more than its grace after the promised time,
+   * or handed to a partner courier (who may batch it), gets the priority fee back automatically, paid by Gutad.
+   */
+  async priorityGuarantee(now = new Date()) {
+    const rows = await this.db.select({ o: orders, j: deliveryJobs }).from(orders).innerJoin(deliveryJobs, eq(deliveryJobs.orderId, orders.id)).where(and(eq(orders.fulfillmentType, 'DELIVERY'), eq(deliveryJobs.status, 'DELIVERED'), sql`${orders.priceSnapshot}->'delivery'->>'option' = 'PRIORITY'`, sql`${deliveryJobs.deliveredAt} > ${new Date(now.getTime() - 3 * 86400_000).toISOString()}`));
+    let n = 0;
+    for (const { o, j } of rows) {
+      const d = (o.priceSnapshot as { delivery?: { priorityFeeCents?: number; lateGraceMinutes?: number } }).delivery ?? {};
+      const fee = d.priorityFeeCents ?? 0;
+      if (fee <= 0) continue;
+      const late = !!(o.promiseAt && j.deliveredAt && j.deliveredAt.getTime() > o.promiseAt.getTime() + (d.lateGraceMinutes ?? 10) * 60_000);
+      const partner = j.fleet !== 'PLATFORM';
+      if (!late && !partner) continue;
+      const reason = partner ? 'Priority not kept: a partner courier delivered it' : 'Priority not kept: delivered late';
+      const done = await this.db.transaction(async (tx) => {
+        const [cur] = await tx.select({ id: orders.id }).from(orders).where(eq(orders.id, o.id)).for('update');
+        if (!cur) return false;
+        const [seen] = await tx.select({ id: orderEvents.id }).from(orderEvents).where(and(eq(orderEvents.orderId, o.id), eq(orderEvents.type, 'PRIORITY_FEE_REFUNDED'))).limit(1);
+        if (seen) return false;
+        let refunded = 0;
+        if (o.prepaid) refunded = (await this.payments.refundPrepaidOrder(o.id, fee, reason, tx))?.amountCents ?? 0;
+        else {
+          const [p] = await tx.select().from(payments).where(eq(payments.orderId, o.id)).limit(1);
+          const amt = p && ['CAPTURED', 'SETTLED', 'PARTIALLY_REFUNDED'].includes(p.status) ? Math.min(fee, p.capturedCents - p.refundedCents) : 0;
+          if (p && amt > 0) { await this.payments.refund({ paymentId: p.id, amountCents: amt, reason, funder: 'PLATFORM', idempotencyKey: `priority-fee:${o.id}` }, tx); refunded = amt; }
+        }
+        await this.event(o.id, 'PRIORITY_FEE_REFUNDED', null, 'SYSTEM', { reason, refundCents: refunded, late, partner }, tx);
+        await this.outbox.publish('order.priority_refunded', o.id, { number: o.number, userId: o.userId, refundCents: refunded, late }, tx);
+        return true;
+      });
+      if (done) n++;
+    }
+    return { priorityRefunds: n };
   }
 
   /** A store that paid for free delivery gets that fee back when the delivery never happened (once per order). */

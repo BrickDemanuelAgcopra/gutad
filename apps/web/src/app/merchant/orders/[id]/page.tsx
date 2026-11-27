@@ -20,6 +20,7 @@ interface Track {
   next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | 'NO_COURIER' | 'SELF_DELIVERY' | null };
   noCourier: { since: string; cancelFrom: string; customerWaiting: boolean; keepCents: number; storePaid: boolean } | null;
   selfDelivery: { status: string } | null;
+  priority?: boolean;
   courier: { status: string; assigned: boolean; partner: string | null; firstName: string | null; vehicleType: string | null; etaAt: string | null; fleet: string; location: { lat: number; lng: number; at: string } | null; trackingUrl: string | null } | null;
   review: { rating: number | null; body: string | null; reply: string | null; courierRating: number | null; foodRating: number | null; packagingRating: number | null; comment: string | null; at: string } | null;
 }
@@ -57,6 +58,7 @@ export default function MerchantOrderTrack() {
           <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold">
             {o.number}
             <span className={`rounded-md px-2 py-0.5 text-sm font-extrabold tracking-wide ${delivery ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'}`}>{delivery ? '🛵 DELIVERY' : o.fulfillmentType === 'DINE_IN' ? '🍽️ DINE IN' : '🛍️ PICKUP'}</span>
+            {data.priority && <span className="rounded-md bg-red-100 px-2 py-0.5 text-sm font-extrabold text-red-700">⚡ PRIORITY</span>}
             <Badge tone={statusTone(o.status)}>{o.status}</Badge>
           </h1>
           <div className="text-sm text-ink-500">{o.guestName || 'Customer'} · {o.locationName} · placed {ago(o.createdAt)}</div>
