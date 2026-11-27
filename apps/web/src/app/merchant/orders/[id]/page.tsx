@@ -17,7 +17,9 @@ interface Track {
     lines: { id: string; name: string; quantity: number; lineTotalCents: number; modifiers: { name: string }[] | null; specialInstructions: string | null; status: string }[];
   };
   ended: boolean; finished: boolean; stages: Stage[];
-  next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | null };
+  next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | 'NO_COURIER' | 'SELF_DELIVERY' | null };
+  noCourier: { since: string; cancelFrom: string; customerWaiting: boolean; keepCents: number; storePaid: boolean } | null;
+  selfDelivery: { status: string } | null;
   courier: { status: string; assigned: boolean; partner: string | null; firstName: string | null; vehicleType: string | null; etaAt: string | null; fleet: string; location: { lat: number; lng: number; at: string } | null; trackingUrl: string | null } | null;
   review: { rating: number | null; body: string | null; reply: string | null; courierRating: number | null; foodRating: number | null; packagingRating: number | null; comment: string | null; at: string } | null;
 }
@@ -34,6 +36,7 @@ export default function MerchantOrderTrack() {
   const { run, error, busy } = useAction();
   const [now, setNow] = useState(Date.now());
   const [prep, setPrep] = useState(20);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   useEffect(() => { const i = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(i); }, []);
   if (loadErr && !data) return <Alert>{loadErr}</Alert>;
   if (!data) return <p className="text-sm text-ink-500">Loading order…</p>;
@@ -86,7 +89,36 @@ export default function MerchantOrderTrack() {
           )}
           {next.action === 'READY' && <Button size="lg" disabled={busy} onClick={() => act(() => api.post(`/orders/${o.id}/ready`, {}))}>✅ Mark ready</Button>}
           {next.action === 'READY' && <><Button variant="secondary" disabled={busy} onClick={() => addTime(5)}>+5 min</Button><Button variant="secondary" disabled={busy} onClick={() => addTime(10)}>+10 min</Button></>}
-          {next.action === 'HANDOFF' && <Button size="lg" disabled={busy} onClick={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))}>{delivery ? '📦 Courier collected' : o.fulfillmentType === 'DINE_IN' ? '🍽️ Served' : '🛍️ Handed to customer'}</Button>}
+          {next.action === 'HANDOFF' && <Button size="lg" disabled={busy} onClick={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))}>{delivery ? `📦 ${courier?.firstName ?? 'Courier'} collected the order` : o.fulfillmentType === 'DINE_IN' ? '🍽️ Served' : '🛍️ Handed to customer'}</Button>}
+          {next.action === 'NO_COURIER' && data.noCourier && (() => {
+            const nc = data.noCourier;
+            const cancelAt = new Date(nc.cancelFrom).getTime();
+            const wait = cancelAt - now;
+            return (
+              <div className="grid w-full gap-2 sm:grid-cols-3">
+                <div className="rounded-xl bg-white p-3 ring-1 ring-ink-200">
+                  <div className="font-semibold">🚗 Deliver it ourselves</div>
+                  <p className="mt-1 text-xs text-ink-500">Send it with your own driver. You keep the delivery fee and tip{nc.keepCents ? ` (${money(nc.keepCents)})` : ''}. The customer is told.</p>
+                  <Button className="mt-2" disabled={busy} onClick={() => act(() => api.post(`/merchant/orders/${o.id}/self-deliver`, {}))}>We’ll deliver it</Button>
+                </div>
+                <div className="rounded-xl bg-white p-3 ring-1 ring-ink-200">
+                  <div className="font-semibold">⏳ Keep waiting</div>
+                  <p className="mt-1 text-xs text-ink-500">Nothing to tap. Keep the bag warm; we search every minute and show the courier here when one accepts.{nc.customerWaiting ? ' The customer chose to wait.' : ' The customer may switch to pickup.'}</p>
+                </div>
+                <div className="rounded-xl bg-white p-3 ring-1 ring-ink-200">
+                  <div className="font-semibold">✖ Cancel the order</div>
+                  <p className="mt-1 text-xs text-ink-500">Gutad refunds the customer.{nc.storePaid ? ' You are still paid for the food.' : ''}</p>
+                  {wait > 0
+                    ? <p className="mt-2 text-xs font-medium text-ink-600">Available at {t(nc.cancelFrom)} if no courier turns up ({Math.ceil(wait / 60_000)} min)</p>
+                    : !confirmCancel
+                      ? <Button className="mt-2" variant="secondary" disabled={busy} onClick={() => setConfirmCancel(true)}>Cancel order</Button>
+                      : <div className="mt-2 flex gap-2"><Button variant="danger" disabled={busy} onClick={() => act(() => api.post(`/merchant/orders/${o.id}/no-courier-cancel`, {}))}>Yes, cancel</Button><Button variant="ghost" onClick={() => setConfirmCancel(false)}>Back</Button></div>}
+                </div>
+              </div>
+            );
+          })()}
+          {next.action === 'SELF_DELIVERY' && data.selfDelivery?.status !== 'PICKED_UP' && <Button size="lg" disabled={busy || o.status !== 'READY'} onClick={() => act(() => api.post(`/merchant/orders/${o.id}/self-delivery`, { step: 'OUT' }))}>🚗 Our driver left with it</Button>}
+          {next.action === 'SELF_DELIVERY' && data.selfDelivery?.status === 'PICKED_UP' && <Button size="lg" disabled={busy} onClick={() => act(() => api.post(`/merchant/orders/${o.id}/self-delivery`, { step: 'DELIVERED' }))}>✅ Delivered to the customer</Button>}
         </div>
       </div>
 

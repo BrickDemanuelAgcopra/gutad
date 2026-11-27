@@ -19,7 +19,7 @@ interface Order {
   prepaid?: boolean; scheduledFor?: string | null; checkoutGroupId?: string | null; amendable?: boolean; amendedFromOrderId?: string | null;
   chefNetwork?: { chefName: string | null; freeCancelUntil: string | null; lateRefundPct: number | null; acceptBy: string | null; checkoutGroupId: string | null } | null;
   courierDelay?: CourierDelay | null;
-  delivery: { id: string; status: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; handoffPin?: string | null; handoffRequirements?: CustomerHandoffRequirements | null; courierFirstName?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
+  delivery: { id: string; status: string; fleet?: string; etaAt: string | null; trackingUrl: string | null; hasProof?: boolean; arrivedAt?: string | null; handoffPin?: string | null; handoffRequirements?: CustomerHandoffRequirements | null; courierFirstName?: string | null; exception?: { kind: string; waitUntil?: string; resolution: string | null } | null } | null;
 }
 
 /** No courier near the store: the customer's options (see OrdersService.courierDelay). */
@@ -205,6 +205,7 @@ export default function OrderPage() {
         <Card title="Delivery">
           <div className="flex items-center justify-between text-sm"><span>Courier</span><Badge tone={statusTone(track?.status || o.delivery.status)}>{courierLabel(track?.status || o.delivery.status)}</Badge></div>
           {o.delivery.courierFirstName && ['ASSIGNED', 'PICKED_UP'].includes(track?.status || o.delivery.status) && <p className="mt-1 text-sm">Your courier is {o.delivery.courierFirstName}.</p>}
+          {o.delivery.fleet === 'MERCHANT' && !['DELIVERED', 'CANCELED'].includes(track?.status || o.delivery.status) && <p className="mt-1 text-sm">{o.locationName} is delivering this order with its own driver.</p>}
           {o.delivery.handoffRequirements && <HandoffNotes r={o.delivery.handoffRequirements} />}
           {o.delivery.handoffPin && ['ASSIGNED', 'PICKED_UP'].includes(track?.status || o.delivery.status) && <div className="mt-2"><Alert tone="info">Your handoff PIN: <b className="text-lg tracking-widest">{o.delivery.handoffPin}</b> — give it to your courier.</Alert></div>}
           {track?.etaAt && <p className="mt-1 text-sm">ETA {when(track.etaAt)}</p>}

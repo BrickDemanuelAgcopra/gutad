@@ -59,11 +59,12 @@ export class NotificationsService {
       }
       case 'order.delivery_choice': {
         // no courier: the customer switched to pickup (or canceled, which order.canceled already tells them)
-        if (p.choice === 'PICKUP') {
+        if (p.choice === 'PICKUP' || p.choice === 'SELF_DELIVERY') {
           const target = await this.resolveTarget(topic, aggregateId, userId, email, phone, p);
-          if (target.userId || target.email || target.phone) await this.notify.queue({ ...target, template: 'order.switched_to_pickup', payload: p, dedupeKey: dedupe });
+          if (target.userId || target.email || target.phone) await this.notify.queue({ ...target, template: p.choice === 'PICKUP' ? 'order.switched_to_pickup' : 'order.store_delivering', payload: p, dedupeKey: `${dedupe}:${p.choice}` });
         }
-        await this.notifyMerchantStaff(p.locationId as string, 'merchant.delivery_choice', p, dedupe);
+        // the store hears about what the customer chose (not about its own choices)
+        if (p.by !== 'MERCHANT') await this.notifyMerchantStaff(p.locationId as string, 'merchant.delivery_choice', p, `${dedupe}:${p.choice}`);
         return;
       }
       case 'order.submitted': {

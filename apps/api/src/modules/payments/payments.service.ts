@@ -301,7 +301,7 @@ export class PaymentsService {
     const amount = Math.min(Math.max(0, amountCents), remaining);
     if (amount <= 0) return null;
     const [o] = await tx.select({ number: orders.number, organizationId: orders.organizationId }).from(orders).where(eq(orders.id, orderId)).limit(1);
-    const res = r.p.provider === 'none' || !r.p.providerIntentId ? { providerRefundId: null, status: 'succeeded' as const } : await this.provider.refund(r.p.providerIntentId, amount, reason, `refund:${orderId}:${r.a.refundedCents}:${amount}`);
+    const res = r.p.provider === 'none' || !r.p.providerIntentId ? { providerRefundId: null, status: 'succeeded' as const } : await this.provider.refund(r.p.providerIntentId, amount, reason, `refund:${orderId}:${r.a.refundedCents}:${amount}`, { reverseTransfer: false });
     const [rf] = await tx.insert(refunds).values({ paymentId: r.p.id, orderId, amountCents: amount, reason, funder: 'PLATFORM', providerRefundId: res.providerRefundId, status: res.status === 'succeeded' ? 'SUCCEEDED' : res.status === 'failed' ? 'FAILED' : 'PENDING', approvedById: approvedById ?? null }).returning();
     if (res.status === 'failed') throw new BadRequestException('The refund failed at the payment provider; support has been alerted');
     // re-read: several orders of one group can refund from the same payment in one transaction
@@ -359,7 +359,8 @@ export class PaymentsService {
     if (!['CAPTURED', 'SETTLED', 'PARTIALLY_REFUNDED'].includes(p.status)) throw new BadRequestException(`Cannot refund a ${p.status} payment`);
     const remaining = p.capturedCents - p.refundedCents;
     if (input.amountCents <= 0 || input.amountCents > remaining) throw new BadRequestException(`Refund must be between 1 and ${remaining} cents`);
-    const res = await this.provider.refund(p.providerIntentId!, input.amountCents, input.reason, input.idempotencyKey);
+    const merchantPays = input.funder === 'MERCHANT';
+    const res = await this.provider.refund(p.providerIntentId!, input.amountCents, input.reason, input.idempotencyKey, { reverseTransfer: merchantPays });
     const [rf] = await tx
       .insert(refunds)
       .values({ paymentId: p.id, orderId: p.orderId, amountCents: input.amountCents, reason: input.reason, funder: input.funder, providerRefundId: res.providerRefundId, status: res.status === 'succeeded' ? 'SUCCEEDED' : res.status === 'failed' ? 'FAILED' : 'PENDING', approvedById: input.approvedById ?? null, incidentId: input.incidentId ?? null })

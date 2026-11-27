@@ -16,7 +16,9 @@ interface Track {
     lines: { id: string; name: string; quantity: number; lineTotalCents: number; modifiers: { name: string }[] | null; specialInstructions: string | null; status: string }[];
   };
   ended: boolean; finished: boolean; stages: Stage[];
-  next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | null };
+  next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | 'NO_COURIER' | 'SELF_DELIVERY' | null };
+  noCourier: { since: string; cancelFrom: string; customerWaiting: boolean; keepCents: number; storePaid: boolean } | null;
+  selfDelivery: { status: string } | null;
   courier: { status: string; assigned: boolean; partner: string | null; firstName: string | null; vehicleType: string | null; etaAt: string | null; location: { at: string } | null } | null;
   review: { rating: number | null; body: string | null; courierRating: number | null; foodRating: number | null; comment: string | null } | null;
 }
@@ -32,6 +34,7 @@ function MerchantOrderTrack() {
   const [now, setNow] = useState(Date.now());
   const [prep, setPrep] = useState(20);
   const [rejecting, setRejecting] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   useEffect(() => { const i = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(i); }, []);
   if (!data) return <View style={[s.screen, s.pad]}>{loadErr ? <ErrorText msg={loadErr} /> : <Loading />}</View>;
   const { order: o, next, courier, review } = data;
@@ -88,7 +91,25 @@ function MerchantOrderTrack() {
             </View>
           </>
         )}
-        {next.action === 'HANDOFF' && <Button title={delivery ? '📦 Courier collected' : o.fulfillmentType === 'DINE_IN' ? '🍽️ Served' : '🛍️ Handed to customer'} disabled={busy} onPress={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))} />}
+        {next.action === 'HANDOFF' && <Button title={delivery ? `📦 ${courier?.firstName ?? 'Courier'} collected the order` : o.fulfillmentType === 'DINE_IN' ? '🍽️ Served' : '🛍️ Handed to customer'} disabled={busy} onPress={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))} />}
+        {next.action === 'NO_COURIER' && data.noCourier && (
+          <View style={{ gap: 6, marginTop: 6 }}>
+            <Text style={{ fontWeight: '700', color: C.ink }}>🚗 Deliver it ourselves</Text>
+            <Muted>Send it with your own driver. You keep the delivery fee and tip{data.noCourier.keepCents ? ` (${money(data.noCourier.keepCents)})` : ''}.</Muted>
+            <Button title="We’ll deliver it" disabled={busy} onPress={() => act(() => api.post(`/merchant/orders/${o.id}/self-deliver`, {}))} />
+            <Text style={{ fontWeight: '700', color: C.ink, marginTop: 6 }}>⏳ Keep waiting</Text>
+            <Muted>Nothing to tap. We search every minute and show the courier here when one accepts.{data.noCourier.customerWaiting ? ' The customer chose to wait.' : ' The customer may switch to pickup.'}</Muted>
+            <Text style={{ fontWeight: '700', color: C.ink, marginTop: 6 }}>✖ Cancel the order</Text>
+            <Muted>Gutad refunds the customer.{data.noCourier.storePaid ? ' You are still paid for the food.' : ''}</Muted>
+            {new Date(data.noCourier.cancelFrom).getTime() > Date.now()
+              ? <Muted>Available at {new Date(data.noCourier.cancelFrom).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} if no courier turns up</Muted>
+              : !confirmCancel
+                ? <Button title="Cancel order" variant="secondary" disabled={busy} onPress={() => setConfirmCancel(true)} />
+                : <View style={{ flexDirection: 'row', gap: 8 }}><Button title="Yes, cancel" variant="danger" disabled={busy} onPress={() => act(() => api.post(`/merchant/orders/${o.id}/no-courier-cancel`, {}))} /><Button title="Back" variant="ghost" onPress={() => setConfirmCancel(false)} /></View>}
+          </View>
+        )}
+        {next.action === 'SELF_DELIVERY' && data.selfDelivery?.status !== 'PICKED_UP' && <Button title="🚗 Our driver left with it" disabled={busy || o.status !== 'READY'} onPress={() => act(() => api.post(`/merchant/orders/${o.id}/self-delivery`, { step: 'OUT' }))} />}
+        {next.action === 'SELF_DELIVERY' && data.selfDelivery?.status === 'PICKED_UP' && <Button title="✅ Delivered to the customer" disabled={busy} onPress={() => act(() => api.post(`/merchant/orders/${o.id}/self-delivery`, { step: 'DELIVERED' }))} />}
       </View>
 
       <Card title="Progress">

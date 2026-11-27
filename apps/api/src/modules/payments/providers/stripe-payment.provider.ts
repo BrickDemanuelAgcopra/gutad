@@ -87,11 +87,24 @@ export class StripePaymentProvider implements PaymentProvider {
     await this.stripe.paymentIntents.cancel(providerIntentId).catch((e) => this.log.warn(`cancel ${providerIntentId}: ${e.message}`));
   }
 
-  async refund(providerIntentId: string, amountCents: number, reason: string, idempotencyKey?: string) {
-    const r = await this.stripe.refunds.create(
-      { payment_intent: providerIntentId, amount: amountCents, reason: 'requested_by_customer', metadata: { reason }, reverse_transfer: true, refund_application_fee: true },
-      idempotencyKey ? { idempotencyKey } : undefined,
+  /**
+   * `reverseTransfer` (the store funds the refund) pulls the store's share back from its connected account. Otherwise
+   * Gutad pays from its own balance. A charge that never had a transfer (store not on Stripe Connect) can't reverse
+   * one, so that case falls back to a plain refund.
+   */
+  async refund(providerIntentId: string, amountCents: number, reason: string, idempotencyKey?: string, opts?: { reverseTransfer?: boolean }) {
+    const reverse = opts?.reverseTransfer ?? true;
+    const create = (rev: boolean, key?: string) => this.stripe.refunds.create(
+      { payment_intent: providerIntentId, amount: amountCents, reason: 'requested_by_customer', metadata: { reason }, ...(rev ? { reverse_transfer: true, refund_application_fee: true } : {}) },
+      key ? { idempotencyKey: key } : undefined,
     );
+    let r;
+    try {
+      r = await create(reverse, idempotencyKey);
+    } catch (e) {
+      if (!reverse || !/associated transfer|reverse transfer/i.test((e as Error).message)) throw e;
+      r = await create(false, idempotencyKey ? `${idempotencyKey}:plain` : undefined);
+    }
     return { providerRefundId: r.id, status: (r.status === 'succeeded' ? 'succeeded' : r.status === 'failed' ? 'failed' : 'pending') as 'succeeded' | 'pending' | 'failed' };
   }
 

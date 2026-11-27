@@ -56,6 +56,9 @@ export class OrdersController {
   // merchant intake
   /** New-order alarm: SUBMITTED orders waiting for acceptance across every location this person works at. */
   @ApiBearerAuth() @Get('merchant/pending-orders') pendingOrders(@CurrentUser() u: JwtPayload) { return this.svc.pendingForMerchant(u); }
+  @ApiBearerAuth() @Post('merchant/orders/:id/self-deliver') selfDeliver(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.selfDeliver(u, id); }
+  @ApiBearerAuth() @Post('merchant/orders/:id/self-delivery') selfDeliveryStep(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ step: z.enum(['OUT', 'DELIVERED']) }))) b: { step: 'OUT' | 'DELIVERED' }) { return this.svc.selfDeliveryStep(u, id, b.step); }
+  @ApiBearerAuth() @Post('merchant/orders/:id/no-courier-cancel') noCourierCancel(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.cancelNoCourier(u, id); }
   @ApiBearerAuth() @Get('merchant/orders/:id/track') track(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.trackForMerchant(u, id); }
   @ApiBearerAuth() @Get('locations/:id/orders') inbox(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Query('status') status?: string) { return this.svc.inbox(u, id, status ? (status.split(',') as never) : undefined); }
   @ApiBearerAuth() @Post('locations/:id/orders/counter') counter(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(CounterDto)) b: z.infer<typeof CounterDto>) { return this.svc.counterOrder(u, id, b); }

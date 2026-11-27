@@ -219,6 +219,13 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
         details: [['Order', num]],
         cta: orderCta('Choose what to do'),
       });
+    case 'order.store_delivering':
+      return sub(`${p.storeName || 'The restaurant'} is delivering order ${num}`, `No Gutad courier was free nearby, so ${p.storeName || 'the restaurant'} is delivering order ${num} with its own driver.`, {
+        eyebrow: 'On its way soon', tone: 'success', heading: 'The restaurant is delivering your order',
+        paragraphs: [`No Gutad courier was free nearby, so ${p.storeName || 'the restaurant'} is sending it with its own driver. Track it from your order page.`],
+        details: [['Order', num]],
+        cta: orderCta('Track your order'),
+      });
     case 'order.switched_to_pickup':
       return sub(`Order ${num} is now a pickup order`, `Pick up order ${num} at ${p.storeName}${p.storeAddress ? `, ${p.storeAddress}` : ''}${p.ready ? ' — it is ready now' : ' when it is ready'}. Show code ${p.pickupCode}.${(p.refundCents as number) > 0 ? ` We refunded ${money(p.refundCents as number)}.` : ''}`, {
         eyebrow: 'Pickup', tone: 'success', heading: 'Your order is now a pickup order',
@@ -638,6 +645,7 @@ export const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
   'delivery.attempt': { kind: 'NO_ANSWER', waitUntil: new Date(Date.now() + 10 * 60_000).toISOString(), orderId: 'sample' },
   'delivery.failed': { reason: 'VEHICLE_ISSUE', orderId: 'sample' },
   'delivery.no_courier': { number: 'G-10482', orderId: 'sample' },
+  'order.store_delivering': { number: 'G-10482', storeName: 'Demo Bistro', orderId: 'sample' },
   'order.switched_to_pickup': { number: 'G-10482', storeName: 'Demo Bistro', storeAddress: '55 W 9th St, New York', pickupCode: '4821', refundCents: 799, ready: true, orderId: 'sample' },
   'delivery.late': { promiseAt: new Date(Date.now() + 30 * 60_000).toISOString(), orderId: 'sample' },
   'reservation.held': { locationName: 'Ember & Oak', startAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), partySize: 4, confirmationCode: 'K7Q2PX', holdExpiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },

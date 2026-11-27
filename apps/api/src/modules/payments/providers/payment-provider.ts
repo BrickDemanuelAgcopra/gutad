@@ -41,7 +41,7 @@ export interface PaymentProvider {
   /** Partial capture allowed (e.g. one item replaced). */
   capture(providerIntentId: string, amountCents: number): Promise<IntentResult>;
   cancel(providerIntentId: string): Promise<void>;
-  refund(providerIntentId: string, amountCents: number, reason: string, idempotencyKey?: string): Promise<{ providerRefundId: string; status: 'succeeded' | 'pending' | 'failed' }>;
+  refund(providerIntentId: string, amountCents: number, reason: string, idempotencyKey?: string, opts?: { reverseTransfer?: boolean }): Promise<{ providerRefundId: string; status: 'succeeded' | 'pending' | 'failed' }>;
   /** Save a card for guarantees without charging. */
   createSetup(customerEmail: string | null): Promise<SetupResult>;
   /**

@@ -42,6 +42,9 @@ export interface CheckoutInput {
 }
 
 /** Internal actor for automatic transitions (auto-accept). */
+/** How long after the first empty courier search a store may cancel (and still be paid). Self-delivery is open at once. */
+const NO_COURIER_STORE_CANCEL_MINUTES = 10;
+const delivery0 = (o: { fulfillmentType: string }) => o.fulfillmentType === 'DELIVERY';
 const SYSTEM_ACTOR = { sub: null as unknown as string, email: 'system', roles: ['PLATFORM_ADMIN'], orgs: {} } as JwtPayload;
 
 /** How partner fleets are named to restaurant staff. */
@@ -359,6 +362,9 @@ export class OrdersService {
     const searchText = !searching ? null : job!.holdUntil && job!.holdUntil > new Date() ? 'Offers go out as the food nears ready (Mark ready sends them now)' : lastEv === 'NO_COURIER' ? 'No courier is online near you yet. We try again every minute and the moment one comes online. The customer can switch to pickup, cancel or wait.' : lastEv === 'OFFERED' ? 'Offer sent to nearby couriers, waiting for one to accept' : null;
     const switched = o.fulfillmentType === 'PICKUP' && !!(await this.db.select({ id: orderEvents.id }).from(orderEvents).where(and(eq(orderEvents.orderId, orderId), eq(orderEvents.type, 'SWITCHED_TO_PICKUP'))).limit(1))[0];
     const switchNote = switched ? 'No courier was available, so the customer switched to pickup and is coming in. ' : '';
+    const delay = delivery0(o) ? await this.courierDelay(o, job ?? null) : null;
+    const selfDelivery = !!job && job.fleet === 'MERCHANT' && o.fulfillmentType === 'DELIVERY';
+    const courierHere = !!job && !selfDelivery && ['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(job.status);
     const done = ['COLLECTED', 'COMPLETED', 'PARTIALLY_FULFILLED'].includes(o.status);
     const ended = ['REJECTED', 'CANCELED'].includes(o.status);
     const delivery = o.fulfillmentType === 'DELIVERY';
@@ -386,12 +392,13 @@ export class OrdersService {
     if (current === -1) current = stages.length;
     const finished = delivery ? job?.status === 'DELIVERED' || (done && !job) : done;
 
-    let next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | null } = { text: '', action: null };
+    let next: { text: string; action: 'ACCEPT' | 'READY' | 'HANDOFF' | 'NO_COURIER' | 'SELF_DELIVERY' | null } = { text: '', action: null };
     if (ended) next = { text: o.status === 'REJECTED' ? `Rejected${o.rejectReason ? `: ${o.rejectReason}` : ''}. The customer's payment hold was released.` : `Canceled${o.cancelReason ? `: ${o.cancelReason}` : ''}.`, action: null };
     else if (o.status === 'SUBMITTED') next = { text: 'New order: check the items, pick a ready time and accept.', action: 'ACCEPT' };
     else if (['ACCEPTED', 'PREPARING'].includes(o.status)) next = { text: delivery ? 'Cook the order, then tap Mark ready. Marking ready also sends courier offers right away.' : `${switchNote}Cook the order, then tap Mark ready so the customer knows to come in.`, action: 'READY' };
-    else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : job?.status === 'PICKED_UP' || job?.status === 'DELIVERED' ? { text: 'The courier has the order. Tap Courier collected to close it on your side.', action: 'HANDOFF' } : { text: partnerLabel ? `Bag the order and keep it warm. A courier has been requested from ${partnerLabel}.` : `Bag the order and keep it warm. ${searchText ?? 'We are finding a courier.'}`, action: 'HANDOFF' };
+    else if (o.status === 'READY' && delivery) next = job?.status === 'ASSIGNED' ? { text: job.arrivedPickupAt ? `${firstName ?? 'The courier'} is here. Hand the bag over and tap Courier collected.` : `Bag the order. ${firstName ?? 'The courier'} is on the way to you.`, action: 'HANDOFF' } : job?.status === 'PICKED_UP' || job?.status === 'DELIVERED' ? { text: 'The courier has the order. Tap Courier collected to close it on your side.', action: 'HANDOFF' } : selfDelivery ? { text: 'You are delivering this one. Hand it to your driver and tap Our driver left.', action: 'SELF_DELIVERY' } : delay ? { text: `No courier is available nearby. The food is ready, so choose what to do: deliver it yourself (you keep the delivery fee and tip), keep waiting while we search${delay.waiting ? ' (the customer chose to wait)' : ' (the customer has been offered pickup or a refund)'}, or cancel. You are paid for the food either way.`, action: 'NO_COURIER' } : { text: partnerLabel ? `Bag the order and keep it warm. A courier has been requested from ${partnerLabel}.` : `Bag the order and keep it warm. ${searchText ?? 'We are finding a courier.'} Tap Courier collected only once a courier has taken it.`, action: null };
     else if (o.status === 'READY') next = { text: o.fulfillmentType === 'DINE_IN' ? 'Serve it, then tap Served.' : `${switchNote}Waiting for the customer. Check their pickup code${o.pickupCode ? ` (${o.pickupCode})` : ''}, then tap Handed to customer.`, action: 'HANDOFF' };
+    else if (selfDelivery && !finished) next = { text: 'Your driver is on the way. Tap Delivered once the customer has the order.', action: 'SELF_DELIVERY' };
     else if (delivery && !finished) next = { text: 'Out for delivery. Nothing to do; this page updates when it arrives.', action: null };
     else if (!reviewAt) next = { text: 'All done. The customer has been asked for a review; it shows here when they leave one.', action: null };
     else next = { text: 'All done and reviewed.', action: null };
@@ -402,6 +409,10 @@ export class OrdersService {
       finished,
       stages: stages.map((st, i) => ({ ...st, state: ended ? (st.at ? 'done' : 'skipped') : i < current ? 'done' : i === current ? 'current' : 'todo' })),
       next,
+      // no courier (food ready or nearly): the store's options. Cancelling is offered after a fair wait and the store is still paid
+      noCourier: delay ? { since: delay.since, cancelFrom: new Date(new Date(delay.since).getTime() + NO_COURIER_STORE_CANCEL_MINUTES * 60_000), customerWaiting: delay.waiting, keepCents: o.deliveryFeeCents + o.tipCents, storePaid: !o.prepaid } : null,
+      selfDelivery: selfDelivery ? { status: job!.status } : null,
+      courierHere,
       courier: job ? { status: job.status, assigned, partner: partnerLabel, firstName, vehicleType: courier?.vehicleType ?? null, etaAt: job.etaAt, fleet: job.fleet, location: tracking?.courierLocation ?? null, trackingUrl: job.trackingUrl } : null,
       review: rev || drev ? { rating: rev?.rating ?? null, body: rev?.body ?? null, reply: rev?.reply ?? null, reviewId: rev?.id ?? null, courierRating: drev?.rating ?? null, foodRating: drev?.foodRating ?? null, packagingRating: drev?.packagingRating ?? null, comment: drev?.comment ?? null, at: reviewAt } : null,
     };
@@ -499,9 +510,11 @@ export class OrdersService {
     if (o.status !== 'READY') throw new ConflictException(`Order is ${o.status}, not READY`);
     if (o.fulfillmentType === 'PICKUP' && o.pickupCode && pickupCode && pickupCode.toUpperCase() !== o.pickupCode) throw new BadRequestException('Pickup code does not match');
     let courierId = receiver?.courierId ?? null;
-    if (o.fulfillmentType === 'DELIVERY' && !courierId) {
-      const [j] = await this.db.select({ driverId: deliveryJobs.driverId }).from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
-      courierId = j?.driverId ?? null;
+    if (o.fulfillmentType === 'DELIVERY') {
+      const [j] = await this.db.select({ driverId: deliveryJobs.driverId, status: deliveryJobs.status, fleet: deliveryJobs.fleet }).from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+      // a courier can only collect once one has been assigned (own driver for self-delivery: use Our driver left)
+      if (j && j.fleet !== 'MERCHANT' && !courierId && !['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(j.status)) throw new ConflictException({ code: 'NO_COURIER_YET', message: 'No courier has been assigned yet, so nobody can have collected it. Open the order to deliver it yourself, keep waiting, or cancel.' });
+      courierId = courierId ?? j?.driverId ?? null;
     }
     const [courier] = courierId ? await this.db.select({ id: drivers.id, name: users.name }).from(drivers).innerJoin(users, eq(users.id, drivers.userId)).where(eq(drivers.id, courierId)).limit(1) : [null];
     const handoff = o.fulfillmentType === 'DELIVERY'
@@ -845,6 +858,55 @@ export class OrdersService {
     };
   }
 
+  /** No courier: the store delivers the order with its own driver and keeps the delivery fee and tip. */
+  async selfDeliver(user: JwtPayload, orderId: string) {
+    const o = await this.requireStaffOrder(user, orderId);
+    await this.db.transaction(async (tx) => {
+      const [cur] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update');
+      const [j] = await tx.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).for('update');
+      if (!j || cur.fulfillmentType !== 'DELIVERY' || !['ACCEPTED', 'PREPARING', 'READY'].includes(cur.status)) throw new ConflictException('This order can no longer be switched to your own delivery');
+      if (j.driverId || ['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(j.status)) throw new ConflictException('A courier has already accepted this order');
+      if (!(j.fleet === 'PLATFORM' && j.status === 'REQUESTED') && j.status !== 'UNASSIGNED') throw new ConflictException('A partner courier has been booked for this order');
+      await tx.update(driverOffers).set({ status: 'EXPIRED' }).where(and(eq(driverOffers.deliveryJobId, j.id), eq(driverOffers.status, 'OFFERED')));
+      await tx.update(deliveryJobs).set({ fleet: 'MERCHANT', status: 'REQUESTED', holdUntil: null }).where(eq(deliveryJobs.id, j.id));
+      await this.delivery.event(j.id, 'SELF_DELIVERY', { by: user.sub }, tx);
+      await this.event(orderId, 'SELF_DELIVERY', user.sub, 'MERCHANT', { keepCents: cur.deliveryFeeCents + cur.tipCents }, tx);
+      await this.outbox.publish('order.delivery_choice', orderId, { number: cur.number, choice: 'SELF_DELIVERY', by: 'MERCHANT', locationId: cur.locationId, userId: cur.userId, storeName: (await tx.select({ name: locations.name }).from(locations).where(eq(locations.id, cur.locationId)).limit(1))[0]?.name }, tx);
+    });
+    void o;
+    return this.trackForMerchant(user, orderId);
+  }
+
+  /** Self-delivery progress: OUT (the store's driver left with it) and DELIVERED. */
+  async selfDeliveryStep(user: JwtPayload, orderId: string, step: 'OUT' | 'DELIVERED') {
+    const o = await this.requireStaffOrder(user, orderId);
+    const [j] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+    if (!j || j.fleet !== 'MERCHANT') throw new ConflictException('This order is not a self-delivery');
+    if (step === 'OUT') {
+      if (o.status !== 'READY') throw new ConflictException('Mark the order ready first');
+      await this.handoff(user, orderId, undefined, { receiverName: 'Store driver' });
+      if (j.status === 'REQUESTED') await this.delivery.transition(j.id, 'ASSIGNED', { by: 'store' });
+      await this.delivery.transition(j.id, 'PICKED_UP', { by: 'store' });
+    } else {
+      if (j.status !== 'PICKED_UP') throw new ConflictException('Tap Our driver left first');
+      await this.delivery.transition(j.id, 'DELIVERED', { proofSignature: 'store', by: 'store' });
+    }
+    return this.trackForMerchant(user, orderId);
+  }
+
+  /** No courier after a fair wait: the store cancels, Gutad refunds the customer and the store keeps its payout. */
+  async cancelNoCourier(user: JwtPayload, orderId: string) {
+    const o = await this.requireStaffOrder(user, orderId);
+    const [job] = await this.db.select().from(deliveryJobs).where(eq(deliveryJobs.orderId, orderId)).limit(1);
+    const delay = await this.courierDelay(o, job ?? null);
+    if (!delay) throw new ConflictException('A courier has been found or the order has moved on');
+    const from = new Date(delay.since).getTime() + NO_COURIER_STORE_CANCEL_MINUTES * 60_000;
+    if (Date.now() < from) throw new ConflictException(`You can cancel from ${new Date(from).toISOString()} if no courier turns up. Delivering it yourself is available now.`);
+    await this.cancelByStaff(user, orderId, 'No courier available', 'PLATFORM');
+    await this.outbox.publish('order.delivery_choice', orderId, { number: o.number, choice: 'CANCEL', by: 'MERCHANT', locationId: o.locationId, storePaid: !o.prepaid });
+    return this.trackForMerchant(user, orderId);
+  }
+
   /** The customer's answer to a courier delay: PICKUP, CANCEL (full refund) or WAIT. */
   async resolveCourierDelay(user: JwtPayload, orderId: string, choice: 'PICKUP' | 'CANCEL' | 'WAIT') {
     const [o] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
@@ -859,7 +921,7 @@ export class OrdersService {
     if (choice === 'CANCEL') {
       // not the customer's fault and not the store's: Gutad funds the refund, the store keeps its payout
       await this.cancelByStaff(SYSTEM_ACTOR, orderId, 'No courier available', 'PLATFORM', { id: user.sub, role: 'CUSTOMER' });
-      await this.outbox.publish('order.delivery_choice', orderId, { number: o.number, choice, locationId: o.locationId, storePaid: !o.prepaid, refundCents: delay.cancelRefundCents });
+      await this.outbox.publish('order.delivery_choice', orderId, { number: o.number, choice, by: 'CUSTOMER', locationId: o.locationId, storePaid: !o.prepaid, refundCents: delay.cancelRefundCents });
       return this.present(orderId);
     }
     await this.db.transaction(async (tx) => {
@@ -889,7 +951,7 @@ export class OrdersService {
       // readyAt restarts so the pickup no-show clock counts from the switch, not from when the food was first ready
       await tx.update(orders).set({ fulfillmentType: 'PICKUP', pickupCode: code, deliveryFeeCents: 0, tipCents: 0, totalCents: Math.max(0, cur.totalCents - fee - tip), ...(cur.status === 'READY' ? { readyAt: new Date() } : {}) }).where(eq(orders.id, orderId));
       await this.event(orderId, 'SWITCHED_TO_PICKUP', user.sub, 'CUSTOMER', { reason: 'no_courier', refundCents: refunded, deliveryFeeCents: fee, tipCents: tip }, tx);
-      await this.outbox.publish('order.delivery_choice', orderId, { number: cur.number, choice, locationId: cur.locationId, userId: cur.userId, pickupCode: code, refundCents: refunded, storeName: delay.store.name, storeAddress: [delay.store.line1, delay.store.city].filter(Boolean).join(', '), ready: cur.status === 'READY' }, tx);
+      await this.outbox.publish('order.delivery_choice', orderId, { number: cur.number, choice, by: 'CUSTOMER', locationId: cur.locationId, userId: cur.userId, pickupCode: code, refundCents: refunded, storeName: delay.store.name, storeAddress: [delay.store.line1, delay.store.city].filter(Boolean).join(', '), ready: cur.status === 'READY' }, tx);
     });
     return this.present(orderId);
   }

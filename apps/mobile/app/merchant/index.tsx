@@ -9,7 +9,7 @@ import { useMerchantLocation } from '@/merchant';
 import { Badge, Button, C, Card, ErrorText, Input, Loading, Muted, s, tone } from '@/ui';
 import { PlanSummary } from '@/plan';
 
-interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; deliveryAddress?: { line1?: string; city?: string; instructions?: string } | null; guestName: string | null; totalCents: number; promiseAt: string | null; createdAt: string; pickupCode: string | null; lines: { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null }[]; delivery: { status: string } | null }
+interface Order { id: string; number: string; status: string; channel: string; fulfillmentType: string; deliveryAddress?: { line1?: string; city?: string; instructions?: string } | null; guestName: string | null; totalCents: number; promiseAt: string | null; createdAt: string; pickupCode: string | null; lines: { id: string; name: string; quantity: number; modifiers: { name: string }[]; specialInstructions: string | null }[]; delivery: { status: string; fleet?: string } | null }
 
 /** Tablet order inbox: acknowledge/accept/reject, prep time, ready, handoff, pause. Polls every 4 s. */
 function MerchantInbox() {
@@ -38,7 +38,8 @@ function MerchantInbox() {
             {o.status === 'SUBMITTED' && (<><Button title="Accept" onPress={() => act(async () => { await api.post(`/orders/${o.id}/accept`, { prepMinutes: Number(prep) || 20 }); router.push(`/merchant/order/${o.id}`); })} /><Button title="Reject" variant="danger" onPress={() => act(() => api.post(`/orders/${o.id}/reject`, { reason: 'Too busy' }))} /></>)}
             {['ACCEPTED', 'PREPARING'].includes(o.status) && (<><Button title="Ready" onPress={() => act(() => api.post(`/orders/${o.id}/ready`, {}))} /><Button title="+15 min" variant="secondary" onPress={() => act(() => api.post(`/orders/${o.id}/prep-time`, { prepMinutes: 15 }))} /></>)}
             <Button title={o.status === 'SUBMITTED' ? 'Details' : 'Track →'} variant="ghost" onPress={() => router.push(`/merchant/order/${o.id}`)} />
-            {o.status === 'READY' && <Button title={o.fulfillmentType === 'DELIVERY' ? 'Courier collected' : 'Handed off'} onPress={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))} />}
+            {o.status === 'READY' && (o.fulfillmentType !== 'DELIVERY' || (o.delivery && o.delivery.fleet !== 'MERCHANT' && ['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(o.delivery.status))) && <Button title={o.fulfillmentType === 'DELIVERY' ? 'Courier collected the order' : 'Handed off'} onPress={() => act(() => api.post(`/orders/${o.id}/handoff`, {}))} />}
+            {o.status === 'READY' && o.fulfillmentType === 'DELIVERY' && !(o.delivery && o.delivery.fleet !== 'MERCHANT' && ['ASSIGNED', 'PICKED_UP', 'DELIVERED'].includes(o.delivery.status)) && <Button title={o.delivery?.fleet === 'MERCHANT' ? '🚗 Your delivery →' : 'No courier yet: options →'} variant="secondary" onPress={() => router.push(`/merchant/order/${o.id}`)} />}
           </View>
         </Card>
       )} />
