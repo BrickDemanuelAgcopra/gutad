@@ -129,6 +129,22 @@ export async function adminPhaseG({ call, check, A, O, C }) {
   const vF2 = (await call('GET', `/orders/${oF.id}`, undefined, C)).json;
   check('the customer cancels for a full refund; the courier search stops', cF.status < 300 && vF2.status === 'CANCELED' && vF2.delivery?.status === 'CANCELED', { cF: cF.json?.status ?? cF.json, order: vF2.status, delivery: vF2.delivery?.status });
 
+  // offers that reach couriers but nobody accepts: after maxOfferRounds such rounds the job fails over to the partner
+  const prevDispatch = (await call('GET', '/admin/settings', undefined, A)).json.settings?.['delivery.dispatch'] ?? { offerSeconds: 90, offersPerRound: 3, maxOfferRounds: 3, radiusKm: 12, waitMinutes: 5, proofRetentionDays: 90, docExpiryWarnDays: 30, travelMinutesPerKm: 3 };
+  await set('delivery.dispatch', { ...prevDispatch, maxOfferRounds: 1 });
+  await call('POST', '/driver/availability', { isAvailable: true, lat: 40.7406, lng: -74.0055 }, D);
+  const oR = await place(addrA);
+  const offR = (await call('GET', '/driver/offers', undefined, D)).json.find((x) => x.deliveryJobId === oR.delivery?.id);
+  if (offR) await call('POST', `/driver/offers/${offR.id}`, { accept: false }, D);
+  // the offers lapse (time moved past offerSeconds): the next round would be round 2, over the limit
+  const hk = await call('POST', '/admin/jobs/delivery-housekeeping', { at: new Date(Date.now() + ((prevDispatch.offerSeconds ?? 90) + 30) * 1000).toISOString() }, A);
+  const trR = (await call('GET', `/public/delivery/${oR.delivery?.id}/track`)).json;
+  const typesR = (trR?.events ?? []).map((e) => e.type);
+  check('maxOfferRounds: after that many unaccepted offer rounds the job fails over to the partner', !!offR && trR?.fleet === 'PARTNER' && typesR.includes('ROUNDS_EXHAUSTED') && typesR.includes('FAILOVER'), { offered: !!offR, hk: hk.json, fleet: trR?.fleet, status: trR?.status, events: typesR });
+  await set('delivery.dispatch', prevDispatch);
+  await call('POST', `/delivery-jobs/${oR.delivery?.id}/cancel`, { reason: 'Smoke cleanup', costOwner: 'PLATFORM' }, O);
+  await call('POST', '/driver/availability', { isAvailable: false }, D);
+
   // 16.5 metrics, 16.7 adjustments, 16.8 suspension & appeal reviewed by another person
   const dList = (await call('GET', '/admin/couriers', undefined, A)).json;
   const dRow = dList.find((c) => c.email === 'driver@demo.gutad.io');

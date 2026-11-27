@@ -527,7 +527,7 @@ export class CourierService {
   }
 
   private async releaseJob(tx: DbOrTx, job: Job, driverId: string, reason: string) {
-    await tx.update(deliveryJobs).set({ driverId: null, status: 'REQUESTED', batchId: null, payPolicy: null, arrivedPickupAt: null, assignedAt: null }).where(eq(deliveryJobs.id, job.id));
+    await tx.update(deliveryJobs).set({ driverId: null, status: 'REQUESTED', offerAttempts: 0, batchId: null, payPolicy: null, arrivedPickupAt: null, assignedAt: null }).where(eq(deliveryJobs.id, job.id));
     await tx.update(driverOffers).set({ status: 'RELEASED', respondedAt: new Date() }).where(and(eq(driverOffers.deliveryJobId, job.id), eq(driverOffers.driverId, driverId), eq(driverOffers.status, 'ACCEPTED')));
     await this.delivery.event(job.id, 'DRIVER_RELEASED', { driverId, reason, arrived: !!job.arrivedPickupAt }, tx);
     await tx.insert(courierRecords).values({ driverId, kind: 'SUPPORT_NOTE', title: 'Released a delivery before pickup', detail: reason });

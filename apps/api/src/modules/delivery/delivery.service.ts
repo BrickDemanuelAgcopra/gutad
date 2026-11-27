@@ -897,12 +897,20 @@ export class DeliveryService {
   /**
    * 17.2 scoring + 17.4 batching + 17.5 rounds: offer the job to the best few couriers. Score (lower is better) adds
    * distance to pickup, the gap between travel time and when the food is ready, current load and vehicle fit; a courier
-   * already carrying a compatible order from the same pickup gets a batching bonus. After `maxOfferRounds` without a
-   * courier the job fails over to the next provider (17.9).
+   * already carrying a compatible order from the same pickup gets a batching bonus. After `maxOfferRounds` rounds of
+   * offers that no courier accepted, the job fails over to the next provider (17.9). Rounds that find nobody online
+   * don't count: those keep searching until NO_COURIER_GIVE_UP_MINUTES after the food is due.
    */
   async offerRound(job: typeof deliveryJobs.$inferSelect, tx: DbOrTx) {
     const eff = await this.policy.effectiveForLocation(job.locationId, tx);
     const cfg = eff.dispatch;
+    // 17.5: rounds that reached couriers and none accepted. Empty rounds (nobody online) don't count; a courier who
+    // accepted and gave the job back resets the count. 0 = keep offering on the own fleet.
+    if (cfg.maxOfferRounds > 0 && job.offerAttempts >= cfg.maxOfferRounds) {
+      await this.event(job.id, 'ROUNDS_EXHAUSTED', { rounds: job.offerAttempts, maxOfferRounds: cfg.maxOfferRounds }, tx);
+      await this.failover(job, tx, `No courier accepted after ${job.offerAttempts} offer rounds`);
+      return [];
+    }
     const bcfg = eff.batching;
     const policy = eff.pay;
     const pickup = job.pickupAddress as Address;
