@@ -51,6 +51,7 @@ function MerchantOrderTrack() {
       <View>
         <View style={[s.row, { flexWrap: 'wrap', gap: 6 }]}>
           <Text style={{ fontSize: 22, fontWeight: '800' }}>{o.number}</Text>
+          {data.priority && <Text style={{ backgroundColor: '#fee2e2', color: '#b91c1c', fontWeight: '800', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' }}>⚡ PRIORITY</Text>}
           <Badge text={o.status} tone={tone(o.status)} />
         </View>
         <Text style={{ fontWeight: '800', color: delivery ? '#1e40af' : '#92400e', marginTop: 4 }}>{fulfillmentLabel(o.fulfillmentType)}</Text>
