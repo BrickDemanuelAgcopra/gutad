@@ -218,6 +218,13 @@
       "when": 1795538324435,
       "tag": "0030_first_party",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1795743273124,
+      "tag": "0031_store_free_delivery",
+      "breakpoints": true
     }
   ]
 }

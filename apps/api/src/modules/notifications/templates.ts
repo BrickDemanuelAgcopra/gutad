@@ -229,7 +229,7 @@ export function render(template: string, p: Record<string, unknown>, ctx: Render
     case 'order.switched_to_pickup':
       return sub(`Order ${num} is now a pickup order`, `Pick up order ${num} at ${p.storeName}${p.storeAddress ? `, ${p.storeAddress}` : ''}${p.ready ? ' — it is ready now' : ' when it is ready'}. Show code ${p.pickupCode}.${(p.refundCents as number) > 0 ? ` We refunded ${money(p.refundCents as number)}.` : ''}`, {
         eyebrow: 'Pickup', tone: 'success', heading: 'Your order is now a pickup order',
-        paragraphs: [`Collect it at ${p.storeName}${p.storeAddress ? `, ${p.storeAddress}` : ''}. ${p.ready ? 'It is ready now.' : "We'll tell you when it's ready."}`, (p.refundCents as number) > 0 ? `We refunded the delivery fee and courier tip (${money(p.refundCents as number)}) to your original payment method.` : ''].filter(Boolean),
+        paragraphs: [`Collect it at ${p.storeName}${p.storeAddress ? `, ${p.storeAddress}` : ''}. ${p.ready ? 'It is ready now.' : "We'll tell you when it's ready."}`, (p.refundCents as number) > 0 ? `We refunded ${money(p.refundCents as number)} (${[(p.deliveryFeeCents as number) > 0 ? 'delivery fee' : '', (p.tipCents as number) > 0 ? 'courier tip' : ''].filter(Boolean).join(' and ') || 'delivery charges'}) to your original payment method.` : ''].filter(Boolean),
         code: p.pickupCode ? { label: 'Pickup code', value: String(p.pickupCode) } : undefined,
         details: [['Order', num], ['Refund', (p.refundCents as number) > 0 ? money(p.refundCents as number) : '']],
         cta: orderCta(),

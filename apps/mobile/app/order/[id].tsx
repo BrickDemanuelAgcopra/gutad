@@ -61,7 +61,7 @@ function handoffNotes(h: CustomerHandoffRequirements | null | undefined): string
 }
 
 /** No courier near the store: the customer's options (see OrdersService.courierDelay). */
-interface CourierDelay { since: string; waiting: boolean; store: { name: string; line1: string | null; city: string | null; gutad: boolean }; pickupRefundCents: number; cancelRefundCents: number; foodReady: boolean }
+interface CourierDelay { since: string; waiting: boolean; store: { name: string; line1: string | null; city: string | null; gutad: boolean }; pickupRefundCents: number; pickupRefund?: { deliveryFeeCents: number; tipCents: number }; cancelRefundCents: number; foodReady: boolean }
 
 function CourierDelayCard({ orderId, d, onDone }: { orderId: string; d: CourierDelay; onDone: () => void }) {
   const [open, setOpen] = useState(!d.waiting);
@@ -80,7 +80,7 @@ function CourierDelayCard({ orderId, d, onDone }: { orderId: string; d: CourierD
     <Card title="No courier nearby yet">
       <Text style={{ color: C.ink7 }}>Sorry, no courier is available near {d.store.name} right now{d.foodReady ? ' and your food is ready' : ''}. Choose what works best for you:</Text>
       <Text style={{ fontWeight: '700', marginTop: 10, color: C.ink }}>Pick it up yourself</Text>
-      <Muted>Collect it at {d.store.gutad ? 'the Gutad store' : d.store.name}{where ? `, ${where}` : ''}.{d.pickupRefundCents > 0 ? ` We refund the delivery fee and tip (${money(d.pickupRefundCents)}).` : ''}</Muted>
+      <Muted>Collect it at {d.store.gutad ? 'the Gutad store' : d.store.name}{where ? `, ${where}` : ''}.{d.pickupRefundCents > 0 ? ` We refund what you paid for delivery: ${[d.pickupRefund?.deliveryFeeCents ? `delivery fee ${money(d.pickupRefund.deliveryFeeCents)}` : '', d.pickupRefund?.tipCents ? `courier tip ${money(d.pickupRefund.tipCents)}` : ''].filter(Boolean).join(' and ') || money(d.pickupRefundCents)}.` : ''}</Muted>
       <Button title={busy === 'PICKUP' ? 'Switching…' : 'Switch to pickup'} disabled={!!busy} onPress={() => choose('PICKUP')} />
       <Text style={{ fontWeight: '700', marginTop: 10, color: C.ink }}>Cancel the order</Text>
       <Muted>Full refund{d.cancelRefundCents > 0 ? ` of ${money(d.cancelRefundCents)}` : ''} to your payment method (5–10 business days).</Muted>

@@ -96,6 +96,8 @@ export class MerchantsController {
 
   @Post('locations/:id/claim') claim(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ organizationId: z.string().uuid() }))) b: { organizationId: string }) { return this.svc.claimLocation(u, id, b.organizationId); }
   @Post('locations/:id/verify') verify(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ verified: z.boolean() }))) b: { verified: boolean }) { return this.svc.verifyLocation(u, id, b.verified); }
+  @Get('locations/:id/delivery-pricing') deliveryPricing(@CurrentUser() u: JwtPayload, @Param('id') id: string) { return this.svc.deliveryPricing(u, id); }
+  @Post('locations/:id/delivery-pricing') setDeliveryPricing(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(z.object({ baseCents: z.number().int().min(0).optional(), perKmCents: z.number().int().min(0).optional(), freeDeliveryMinCents: z.number().int().min(0).nullable().optional() }))) b: { baseCents?: number; perKmCents?: number; freeDeliveryMinCents?: number | null }) { return this.svc.setDeliveryPricing(u, id, b); }
   @Patch('locations/:id') update(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(LocationDto.partial())) b: Partial<z.infer<typeof LocationDto>>) { return this.svc.updateLocation(u, id, b); }
   @Post('locations/:id/status') status(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(StatusDto)) b: z.infer<typeof StatusDto>) { return this.svc.setStatus(u, id, b.status, b.reason); }
   @Post('locations/:id/pause') pause(@CurrentUser() u: JwtPayload, @Param('id') id: string, @Body(zod(PauseDto)) b: z.infer<typeof PauseDto>) { return this.svc.pause(u, id, b.minutes ?? null, b.reason); }

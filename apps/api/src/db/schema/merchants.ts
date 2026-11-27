@@ -180,6 +180,8 @@ export const locations = pgTable(
     deliveryRadiusKm: doublePrecision('delivery_radius_km').notNull().default(5),
     deliveryBaseFeeCents: integer('delivery_base_fee_cents').notNull().default(399),
     deliveryPerKmCents: integer('delivery_per_km_cents').notNull().default(50),
+    /** free delivery from this basket subtotal (null = off, 0 = always); on Gutad/partner couriers the store pays the fee */
+    freeDeliveryMinCents: integer('free_delivery_min_cents'),
     rating: doublePrecision('rating'),
     ratingCount: integer('rating_count').notNull().default(0),
     posProvider: text('pos_provider'),

@@ -16,7 +16,7 @@ import {
 } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
 import { assertOrgAccess, isPlatformStaff, JwtPayload, MANAGER_ROLES, RoleName, staffCovers } from '../../common/auth';
-import { isStaffRole } from '@gutad/shared';
+import { isStaffRole, standardDeliveryFee, withDeliveryDefaults, type DeliveryPricing } from '@gutad/shared';
 import { ApprovalsService } from '../security/approvals.service';
 import { SettingsService } from '../../core/settings.service';
 import { shortCode, slugify, token } from '../../common/utils';
@@ -229,6 +229,48 @@ export class MerchantsService implements OnModuleInit {
       .returning();
     await this.audit.log({ organizationId: row.organizationId, actorId: user.sub, action: 'location.verify', entityType: 'location', entityId: locationId, after: { verified } });
     return row;
+  }
+
+  /** The store's delivery fee settings, with what Gutad's policy allows and sample fees diners would see. */
+  async deliveryPricing(user: JwtPayload, locationId: string) {
+    const loc = await this.requireLocation(locationId);
+    assertOrgAccess(user, loc.organizationId, locationId);
+    const p = withDeliveryDefaults(await this.settings.getObject<Partial<DeliveryPricing>>('fees.delivery', {}));
+    const sample = (km: number) => standardDeliveryFee(p, loc.deliveryFleet, { km, providerCostCents: 0, zoneFeeCents: null, store: { baseCents: loc.deliveryBaseFeeCents, perKmCents: loc.deliveryPerKmCents } });
+    return {
+      fleet: loc.deliveryFleet,
+      storeSetsFee: loc.deliveryFleet === 'MERCHANT' && p.merchant.storeSetsFee,
+      baseCents: loc.deliveryBaseFeeCents, perKmCents: loc.deliveryPerKmCents,
+      caps: p.merchant,
+      gutadFee: loc.deliveryFleet === 'PARTNER' ? { ...p.partner } : { ...p.platform },
+      platformFreeDelivery: p.platformFreeDelivery,
+      freeDelivery: { allowed: p.storeFreeDelivery.allowed, minThresholdCents: p.storeFreeDelivery.minThresholdCents, minCents: loc.freeDeliveryMinCents, storePays: loc.deliveryFleet !== 'MERCHANT' },
+      samples: [1, 3, 5].map((km) => ({ km, feeCents: sample(km) })),
+    };
+  }
+
+  async setDeliveryPricing(user: JwtPayload, locationId: string, input: { baseCents?: number; perKmCents?: number; freeDeliveryMinCents?: number | null }) {
+    const loc = await this.requireLocation(locationId);
+    assertOrgAccess(user, loc.organizationId, locationId, MANAGER_ROLES);
+    const p = withDeliveryDefaults(await this.settings.getObject<Partial<DeliveryPricing>>('fees.delivery', {}));
+    const patch: Partial<typeof locations.$inferInsert> = {};
+    if (input.baseCents !== undefined || input.perKmCents !== undefined) {
+      if (loc.deliveryFleet !== 'MERCHANT' || !p.merchant.storeSetsFee) throw new BadRequestException('Gutad sets the delivery fee when Gutad or partner couriers deliver for you');
+      if ((input.baseCents ?? 0) > p.merchant.maxBaseCents || (input.perKmCents ?? 0) > p.merchant.maxPerKmCents) throw new BadRequestException(`The most you can charge is ${p.merchant.maxBaseCents} cents base and ${p.merchant.maxPerKmCents} cents per km`);
+      if (input.baseCents !== undefined) patch.deliveryBaseFeeCents = input.baseCents;
+      if (input.perKmCents !== undefined) patch.deliveryPerKmCents = input.perKmCents;
+    }
+    if (input.freeDeliveryMinCents !== undefined) {
+      if (input.freeDeliveryMinCents !== null && !p.storeFreeDelivery.allowed) throw new BadRequestException('Free-delivery offers are switched off by Gutad right now');
+      if (input.freeDeliveryMinCents !== null && input.freeDeliveryMinCents < p.storeFreeDelivery.minThresholdCents) throw new BadRequestException(`Free delivery has to start at ${p.storeFreeDelivery.minThresholdCents} cents or more`);
+      patch.freeDeliveryMinCents = input.freeDeliveryMinCents;
+    }
+    if (Object.keys(patch).length) {
+      await this.db.update(locations).set(patch).where(eq(locations.id, locationId));
+      await this.audit.log({ organizationId: loc.organizationId, actorId: user.sub, action: 'location.delivery_pricing.set', entityType: 'location', entityId: locationId, before: { deliveryBaseFeeCents: loc.deliveryBaseFeeCents, deliveryPerKmCents: loc.deliveryPerKmCents, freeDeliveryMinCents: loc.freeDeliveryMinCents }, after: patch });
+      await this.redis.del(`loc:${locationId}`).catch(() => undefined);
+    }
+    return this.deliveryPricing(user, locationId);
   }
 
   async updateLocation(user: JwtPayload, locationId: string, input: Partial<typeof locations.$inferInsert>) {

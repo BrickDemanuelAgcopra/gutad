@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import { FirstPartyService } from '../../core/first-party.service';
 import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { brands, chefProfiles, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, platformSettings, quotes } from '../../db/schema';
+import { brands, chefProfiles, taxRates, customerRestrictions, menuCategories, menuItems, menus, orders, locationClosures, locations, openingHours, quotes } from '../../db/schema';
 import { brandSellable } from '../../common/brand-rules';
 import { DEFAULT_PAYMENT_METHODS, enabledMethods, type AppliedPromotion, type PaymentMethodsConfig } from '@gutad/shared';
 import { giftBalance } from '../growth/gift-tender';
@@ -228,6 +228,10 @@ export class QuoteService {
 
     // delivery
     let deliveryFeeCents = 0;
+    let standardDeliveryFeeCents = 0;
+    let freeReason: 'GUTAD' | 'PROMO' | 'MEMBERSHIP' | 'STORE' | null = null;
+    let storeFreeMinCents: number | null = null;
+    let merchantDeliveryFundedCents = 0;
     let deliveryProviderCostCents = 0;
     let deliveryQuoteId: string | null = null;
     let deliveryExpiresAt: Date | null = null;
@@ -246,12 +250,19 @@ export class QuoteService {
       deliveryExpiresAt = q.expiresAt;
       deliveryFleet = q.fleet;
       etaMinutes = etaMinutes + q.etaMinutes;
-      if (await this.freeDeliveryForAll(tx)) {
-        // platform-wide $0 delivery: the diner pays nothing, the full courier cost is a platform subsidy
-        deliveryFeeCents = 0;
+      standardDeliveryFeeCents = deliveryFeeCents;
+      const dp = await this.delivery.deliveryPricing(tx);
+      storeFreeMinCents = dp.storeFreeDelivery.allowed && loc.freeDeliveryMinCents !== null ? Math.max(loc.freeDeliveryMinCents, dp.storeFreeDelivery.minThresholdCents) : null;
+      if (dp.platformFreeDelivery) {
+        // Gutad-wide $0 delivery (launch promotion): the full courier cost is a platform subsidy
+        deliveryFeeCents = 0; freeReason = 'GUTAD';
       } else if (freeDelivery || (membership?.benefits.freeDeliveryAboveCents !== undefined && subtotalCents >= membership.benefits.freeDeliveryAboveCents)) {
         warnings.push('Delivery fee waived');
-        deliveryFeeCents = 0;
+        deliveryFeeCents = 0; freeReason = freeDelivery ? 'PROMO' : 'MEMBERSHIP';
+      } else if (storeFreeMinCents !== null && subtotalCents >= storeFreeMinCents && deliveryFeeCents > 0) {
+        // the store's own offer: on its own couriers it just charges nothing; on Gutad or partner couriers it pays the fee
+        merchantDeliveryFundedCents = deliveryFleet === 'MERCHANT' ? 0 : deliveryFeeCents;
+        deliveryFeeCents = 0; freeReason = 'STORE';
       }
     }
 
@@ -321,7 +332,9 @@ export class QuoteService {
       loyaltyCents,
       deliveryFleet,
       deliveryProviderCostCents,
-      platformDeliverySubsidyCents: Math.max(0, deliveryProviderCostCents - deliveryFeeCents),
+      platformDeliverySubsidyCents: Math.max(0, deliveryProviderCostCents - deliveryFeeCents - merchantDeliveryFundedCents),
+      merchantDeliveryFundedCents,
+      delivery: input.fulfillmentType === 'DELIVERY' ? { standardFeeCents: standardDeliveryFeeCents, feeCents: deliveryFeeCents, freeReason, storeFreeMinCents, amountToFreeCents: !freeReason && storeFreeMinCents !== null && subtotalCents < storeFreeMinCents ? storeFreeMinCents - subtotalCents : 0, fleet: deliveryFleet } : null,
       deliveryAddress: input.deliveryAddress || null,
       etaMinutes,
       membershipId: membership?.id || null,
@@ -365,6 +378,8 @@ export class QuoteService {
       smallOrderFeeCents: q.smallOrderFeeCents,
       packagingFeeCents: q.packagingFeeCents,
       deliveryFeeCents: q.deliveryFeeCents,
+      // standard fee, why it is free (GUTAD, PROMO, MEMBERSHIP, STORE) and how much more unlocks the store's free delivery
+      delivery: (s as { delivery?: unknown }).delivery ?? null,
       tipCents: q.tipCents,
       creditsCents: s.creditsCents,
       loyaltyCents: s.loyaltyCents,
@@ -546,11 +561,6 @@ export class QuoteService {
   }
 
   /** Helper used by UI: convert a local "YYYY-MM-DD HH:MM" at the location into an ISO instant. */
-  /** Platform setting `fees.free_delivery` (default on): diners pay a $0 delivery fee on every order. */
-  private async freeDeliveryForAll(tx: DbOrTx) {
-    const [row] = await tx.select().from(platformSettings).where(eq(platformSettings.key, 'fees.free_delivery')).limit(1);
-    return row ? row.value !== false : true;
-  }
 
   async localToIso(locationId: string, ymd: string, hhmm: string) {
     const [loc] = await this.db.select().from(locations).where(eq(locations.id, locationId)).limit(1);

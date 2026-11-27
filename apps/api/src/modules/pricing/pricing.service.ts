@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
-import { DEFAULT_CUSTOMER_FEES, TAX_CATEGORIES, type CustomerFeeRules } from '@gutad/shared';
+import { DEFAULT_CUSTOMER_FEES, DEFAULT_DELIVERY_PRICING, TAX_CATEGORIES, withDeliveryDefaults, type CustomerFeeRules, type DeliveryPricing } from '@gutad/shared';
 import { DB, Db } from '../../db/db.module';
 import { brands, coupons, locations, membershipPlans, organizations, planFees, plans, planVersions, priceChanges, taxRates } from '../../db/schema';
 import { AuditService } from '../../core/audit.service';
@@ -21,6 +21,16 @@ export class PricingService {
   }
 
   /** Fee rule changes go through the approval engine (`fees.*` is a sensitive setting). */
+  async deliveryFees(user: JwtPayload) {
+    assertCan(user, 'settings.manage');
+    return { policy: withDeliveryDefaults(await this.settings.getObject<Partial<DeliveryPricing>>('fees.delivery', {})), defaults: DEFAULT_DELIVERY_PRICING, note: 'Changing delivery fees needs a second person (Approvals).' };
+  }
+
+  async requestDeliveryFees(user: JwtPayload, policy: DeliveryPricing, reason: string) {
+    assertCan(user, 'settings.manage');
+    return this.admin.setSetting(user, 'fees.delivery', withDeliveryDefaults(policy), reason);
+  }
+
   async requestFees(user: JwtPayload, rules: CustomerFeeRules, reason: string) {
     assertCan(user, 'settings.manage', 'finance.manage');
     return this.admin.setSetting(user, 'fees.customer', rules, reason);

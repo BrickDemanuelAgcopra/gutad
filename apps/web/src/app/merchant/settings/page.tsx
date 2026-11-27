@@ -23,7 +23,7 @@ export default function SettingsPage() {
       {tab === 'publish' && <PublishTab locId={loc.id} />}
       {tab === 'floor' && <FloorTab locId={loc.id} />}
       {tab === 'policy' && <PolicyTab locId={loc.id} />}
-      {tab === 'delivery' && <><FleetCard loc={loc} reload={reload} /><ZonesTab locId={loc.id} siblings={org.locations.map((l) => ({ id: l.id, name: l.name }))} /></>}
+      {tab === 'delivery' && <><FleetCard loc={loc} reload={reload} /><DeliveryFeeCard locId={loc.id} /><ZonesTab locId={loc.id} siblings={org.locations.map((l) => ({ id: l.id, name: l.name }))} /></>}
       {tab === 'team' && <TeamTab orgId={org.id} members={org.members} locations={org.locations} reload={reload} />}
       {tab === 'devices' && <DevicesTab locId={loc.id} orgId={org.id} />}
       {tab === 'capacity' && <div className="space-y-4"><AutoThrottleCard locId={loc.id} /><PrintersCard locId={loc.id} /><KioskCard slug={loc.slug} /></div>}
@@ -138,6 +138,45 @@ const FLEETS: Record<string, { label: string; detail: string }> = {
 };
 
 /** Who delivers is set by Gutad; merchants request a change and platform staff approve it. */
+interface StoreDeliveryPricing { fleet: string; storeSetsFee: boolean; baseCents: number; perKmCents: number; caps: { maxBaseCents: number; maxPerKmCents: number; maxCents: number }; gutadFee: { baseCents: number; perKmCents: number; minCents: number; maxCents: number; mode?: string; markupCents?: number }; platformFreeDelivery: boolean; freeDelivery: { allowed: boolean; minThresholdCents: number; minCents: number | null; storePays: boolean }; samples: { km: number; feeCents: number }[] }
+const usd = (c: number) => `$${(c / 100).toFixed(2)}`;
+
+/** Delivery fee and free-delivery offer for one location (own couriers: the store sets the fee within Gutad's caps). */
+function DeliveryFeeCard({ locId }: { locId: string }) {
+  const { data, reload } = useApi<StoreDeliveryPricing>(`/locations/${locId}/delivery-pricing`, { deps: [locId] });
+  const { run, error } = useAction();
+  const [f, setF] = useState<{ base: string; perKm: string; freeOn: boolean; freeMin: string } | null>(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { if (data) setF({ base: (data.baseCents / 100).toFixed(2), perKm: (data.perKmCents / 100).toFixed(2), freeOn: data.freeDelivery.minCents !== null, freeMin: ((data.freeDelivery.minCents ?? 3000) / 100).toFixed(2) }); }, [data]);
+  if (!data || !f) return null;
+  const c = (v: string) => Math.round(Number(v || 0) * 100);
+  const who = data.fleet === 'PARTNER' ? 'Partner couriers (DoorDash, Uber) deliver for you' : 'Gutad couriers deliver for you';
+  const how = data.fleet === 'PARTNER' && data.gutadFee.mode === 'PASS_THROUGH' ? ' based on the partner’s price' : ` (${usd(data.gutadFee.baseCents)} + ${usd(data.gutadFee.perKmCents)} per km)`;
+  return (
+    <Card title="Delivery fee">
+      {error && <Alert>{error}</Alert>}
+      {data.platformFreeDelivery && <Alert tone="info">Gutad is paying every delivery fee right now (promotion), so diners see free delivery.</Alert>}
+      {data.storeSetsFee ? (
+        <>
+          <p className="text-sm text-ink-600">Your own couriers deliver, so you set the fee and keep it. Gutad&apos;s limits: {usd(data.caps.maxBaseCents)} base, {usd(data.caps.maxPerKmCents)} per km, {usd(data.caps.maxCents)} in total.</p>
+          <div className="mt-2 grid grid-cols-2 gap-2"><Input label="Base fee $" value={f.base} onChange={(e) => setF({ ...f, base: e.target.value })} /><Input label="Per km $" value={f.perKm} onChange={(e) => setF({ ...f, perKm: e.target.value })} /></div>
+        </>
+      ) : (
+        <p className="text-sm text-ink-600">{who}, so Gutad sets the delivery fee{how}.</p>
+      )}
+      <p className="mt-1 text-xs text-ink-500">Diners pay today: {data.samples.map((s) => `${s.km} km ${usd(s.feeCents)}`).join(' · ')}</p>
+      <div className="mt-3 border-t border-ink-100 pt-3">
+        <label className="flex items-center gap-2 text-sm font-medium"><input type="checkbox" disabled={!data.freeDelivery.allowed} checked={f.freeOn} onChange={(e) => setF({ ...f, freeOn: e.target.checked })} /> Offer free delivery</label>
+        {!data.freeDelivery.allowed && <p className="text-xs text-ink-500">Gutad has paused free-delivery offers.</p>}
+        {f.freeOn && <div className="mt-2 grid grid-cols-2 gap-2"><Input label="On orders from $ (0 = always)" value={f.freeMin} onChange={(e) => setF({ ...f, freeMin: e.target.value })} /></div>}
+        {f.freeOn && <p className="mt-1 text-xs text-ink-500">{data.freeDelivery.storePays ? 'Diners pay $0 delivery and the fee is taken from your payout instead. You get it back if the delivery never happens.' : 'Diners pay $0 delivery; you simply don’t charge your fee.'}{data.freeDelivery.minThresholdCents ? ` Gutad’s lowest allowed amount is ${usd(data.freeDelivery.minThresholdCents)}.` : ''}</p>}
+      </div>
+      <Button className="mt-3" onClick={() => run(async () => { await api.post(`/locations/${locId}/delivery-pricing`, { ...(data.storeSetsFee ? { baseCents: c(f.base), perKmCents: c(f.perKm) } : {}), freeDeliveryMinCents: f.freeOn ? c(f.freeMin) : null }); setSaved(true); reload(); })}>Save delivery fee</Button>
+      {saved && <span className="ml-2 text-sm text-green-700">Saved</span>}
+    </Card>
+  );
+}
+
 function FleetCard({ loc, reload }: { loc: { id: string; deliveryFleet: string; deliveryFleetRequested: string | null; deliveryFleetRequestedAt: string | null }; reload: () => void }) {
   const [fleet, setFleet] = useState('');
   const [note, setNote] = useState('');

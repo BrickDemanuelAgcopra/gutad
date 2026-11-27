@@ -23,7 +23,7 @@ interface Order {
 }
 
 /** No courier near the store: the customer's options (see OrdersService.courierDelay). */
-interface CourierDelay { since: string; waiting: boolean; store: { name: string; line1: string | null; city: string | null; gutad: boolean }; pickupRefundCents: number; cancelRefundCents: number; foodReady: boolean }
+interface CourierDelay { since: string; waiting: boolean; store: { name: string; line1: string | null; city: string | null; gutad: boolean }; pickupRefundCents: number; pickupRefund?: { deliveryFeeCents: number; tipCents: number }; cancelRefundCents: number; foodReady: boolean }
 
 function CourierDelayCard({ orderId, d, onDone }: { orderId: string; d: CourierDelay; onDone: () => void }) {
   const [open, setOpen] = useState(!d.waiting);
@@ -47,7 +47,7 @@ function CourierDelayCard({ orderId, d, onDone }: { orderId: string; d: CourierD
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <div className="rounded-xl border border-ink-100 p-3">
           <p className="font-semibold">Pick it up yourself</p>
-          <p className="mt-1 text-xs text-ink-500">Collect it at {storeLabel}{where ? `, ${where}` : ''}.{d.pickupRefundCents > 0 ? ` We refund the delivery fee and tip (${money(d.pickupRefundCents)}).` : ''}</p>
+          <p className="mt-1 text-xs text-ink-500">Collect it at {storeLabel}{where ? `, ${where}` : ''}.{d.pickupRefundCents > 0 ? ` We refund what you paid for delivery: ${[d.pickupRefund?.deliveryFeeCents ? `delivery fee ${money(d.pickupRefund.deliveryFeeCents)}` : '', d.pickupRefund?.tipCents ? `courier tip ${money(d.pickupRefund.tipCents)}` : ''].filter(Boolean).join(' and ') || money(d.pickupRefundCents)}.` : ''}</p>
           <Button className="mt-2" size="sm" disabled={!!busy} onClick={() => choose('PICKUP')}>{busy === 'PICKUP' ? 'Switching…' : 'Switch to pickup'}</Button>
         </div>
         <div className="rounded-xl border border-ink-100 p-3">

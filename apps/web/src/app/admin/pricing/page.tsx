@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { TAX_CATEGORIES, type CustomerFeeRules } from '@gutad/shared';
+import { standardDeliveryFee, TAX_CATEGORIES, type CustomerFeeRules, type DeliveryFeeRule, type DeliveryPricing } from '@gutad/shared';
 import { api, money } from '@/lib/api';
 import { useAction, useApi, useSession } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Input, Select, Table, Tabs } from '@/components/ui';
@@ -16,8 +16,9 @@ export default function Pricing() {
   return (
     <div className="space-y-4">
       <SectionTitle title="Pricing, fees & tax" hint="Customer fees, item tax categories, membership benefits, commission and royalty schedules, and a checkout-price simulator." />
-      <Tabs tabs={[{ id: 'fees', label: 'Customer fees' }, { id: 'tax', label: 'Tax' }, { id: 'members', label: 'Memberships' }, { id: 'schedules', label: 'Commission & royalties' }, { id: 'sim', label: 'Simulator' }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ id: 'fees', label: 'Customer fees' }, { id: 'delivery', label: 'Delivery fees' }, { id: 'tax', label: 'Tax' }, { id: 'members', label: 'Memberships' }, { id: 'schedules', label: 'Commission & royalties' }, { id: 'sim', label: 'Simulator' }]} active={tab} onChange={setTab} />
       {tab === 'fees' && <Fees />}
+      {tab === 'delivery' && <DeliveryFees />}
       {tab === 'tax' && <Tax />}
       {tab === 'members' && <Members />}
       {tab === 'schedules' && <Schedules />}
@@ -44,6 +45,56 @@ function Fees() {
       <Card title="Small-order fee (platform)"><div className="grid grid-cols-2 gap-2"><Input label="Under $" value={usd(r.smallOrder.thresholdCents)} onChange={(e) => setR({ ...r, smallOrder: { ...r.smallOrder, thresholdCents: cents(e.target.value) } })} /><Input label="Fee $" value={usd(r.smallOrder.feeCents)} onChange={(e) => setR({ ...r, smallOrder: { ...r.smallOrder, feeCents: cents(e.target.value) } })} /></div><div className="mt-2 text-xs font-medium text-ink-500">Channels</div><ListPick value={r.smallOrder.channels} all={CH} onChange={(v) => setR({ ...r, smallOrder: { ...r.smallOrder, channels: v } })} /><div className="mt-1 text-xs font-medium text-ink-500">Fulfillment</div><ListPick value={r.smallOrder.fulfillments} all={FUL} onChange={(v) => setR({ ...r, smallOrder: { ...r.smallOrder, fulfillments: v } })} /></Card>
       <Card title="Packaging fee (to the merchant)"><div className="grid grid-cols-2 gap-2"><Input label="Per order $" value={usd(r.packaging.perOrderCents)} onChange={(e) => setR({ ...r, packaging: { ...r.packaging, perOrderCents: cents(e.target.value) } })} /><Input label="Per item $" value={usd(r.packaging.perItemCents)} onChange={(e) => setR({ ...r, packaging: { ...r.packaging, perItemCents: cents(e.target.value) } })} /></div><div className="mt-2 text-xs font-medium text-ink-500">Fulfillment</div><ListPick value={r.packaging.fulfillments} all={FUL} onChange={(v) => setR({ ...r, packaging: { ...r.packaging, fulfillments: v } })} /><p className="mt-1 text-xs text-ink-500">A location&apos;s own packaging fee replaces the per-order amount.</p></Card>
       <div className="lg:col-span-3"><Button onClick={() => { const reason = askReason('changing customer fees'); if (reason) run(async () => setInfo(pendingNotice(await api.post('/admin/pricing/fees', { rules: r, reason })) || 'Saved.')); }}>Request change</Button><span className="ml-3 text-xs text-ink-500">Fee changes apply after a second person approves them. Try them in the Simulator first.</span></div>
+    </div>
+  );
+}
+
+/** Who sets the diner's delivery fee for each kind of courier, and the free-delivery rules. */
+function DeliveryFees() {
+  const { data } = useApi<{ policy: DeliveryPricing }>('/admin/pricing/delivery');
+  const { run, error } = useAction();
+  const [p, setP] = useState<DeliveryPricing | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  useEffect(() => { if (data) setP(data.policy); }, [data]);
+  if (!p) return null;
+  const rule = (r: DeliveryFeeRule, set: (r: DeliveryFeeRule) => void) => (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <Input label="Base $" value={usd(r.baseCents)} onChange={(e) => set({ ...r, baseCents: cents(e.target.value) })} />
+      <Input label="Per km $" value={usd(r.perKmCents)} onChange={(e) => set({ ...r, perKmCents: cents(e.target.value) })} />
+      <Input label="Min $" value={usd(r.minCents)} onChange={(e) => set({ ...r, minCents: cents(e.target.value) })} />
+      <Input label="Max $" value={usd(r.maxCents)} onChange={(e) => set({ ...r, maxCents: cents(e.target.value) })} />
+    </div>
+  );
+  const sample = (fleet: 'PLATFORM' | 'PARTNER' | 'MERCHANT', providerCostCents = 0) => [1, 3, 5].map((km) => `${km} km ${money(standardDeliveryFee(p, fleet, { km, providerCostCents, zoneFeeCents: null, store: { baseCents: 299, perKmCents: 50 } }))}`).join(' · ');
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {error && <Alert>{error}</Alert>}{info && <Alert tone="info">{info}</Alert>}
+      <Card title="Gutad-wide free delivery" className="lg:col-span-2">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={p.platformFreeDelivery} onChange={(e) => setP({ ...p, platformFreeDelivery: e.target.checked })} /> Gutad pays every delivery fee (launch promotion). Diners see $0 delivery everywhere and Gutad covers the courier cost.</label>
+        {p.platformFreeDelivery && <p className="mt-1 text-xs text-amber-700">While this is on, the fees below and stores&apos; free-delivery offers are ignored.</p>}
+      </Card>
+      <Card title="Gutad couriers">
+        <p className="mb-2 text-xs text-ink-500">Distance fee for stores delivered by Gutad drivers. A delivery zone with its own fee replaces it.</p>
+        {rule(p.platform, (r) => setP({ ...p, platform: r }))}
+        <p className="mt-2 text-xs text-ink-500">Diner pays: {sample('PLATFORM')}</p>
+      </Card>
+      <Card title="Partner couriers (DoorDash Drive, Uber Direct)">
+        <Select label="How the fee is set" value={p.partner.mode} onChange={(e) => setP({ ...p, partner: { ...p.partner, mode: e.target.value as 'PASS_THROUGH' | 'DISTANCE' } })}><option value="PASS_THROUGH">Partner&apos;s price + markup</option><option value="DISTANCE">Distance fee (like Gutad couriers)</option></Select>
+        {p.partner.mode === 'PASS_THROUGH' && <div className="mt-2 grid grid-cols-2 gap-2"><Input label="Markup $" value={usd(p.partner.markupCents)} onChange={(e) => setP({ ...p, partner: { ...p.partner, markupCents: cents(e.target.value) } })} /><Input label="Markup %" value={p.partner.markupBps / 100} onChange={(e) => setP({ ...p, partner: { ...p.partner, markupBps: Math.round(Number(e.target.value) * 100) } })} /></div>}
+        <div className="mt-2">{rule(p.partner, (r) => setP({ ...p, partner: { ...p.partner, ...r } }))}</div>
+        <p className="mt-2 text-xs text-ink-500">{p.partner.mode === 'PASS_THROUGH' ? `A $6.00 partner quote → diner pays ${money(standardDeliveryFee(p, 'PARTNER', { km: 3, providerCostCents: 600, zoneFeeCents: null, store: { baseCents: 0, perKmCents: 0 } }))} (kept between min and max). Base and per km apply when no quote is available.` : `Diner pays: ${sample('PARTNER')}`}</p>
+      </Card>
+      <Card title="Stores' own couriers">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={p.merchant.storeSetsFee} onChange={(e) => setP({ ...p, merchant: { ...p.merchant, storeSetsFee: e.target.checked } })} /> Stores set their own delivery fee and keep it</label>
+        <div className="mt-2 grid grid-cols-3 gap-2"><Input label="Max base $" value={usd(p.merchant.maxBaseCents)} onChange={(e) => setP({ ...p, merchant: { ...p.merchant, maxBaseCents: cents(e.target.value) } })} /><Input label="Max per km $" value={usd(p.merchant.maxPerKmCents)} onChange={(e) => setP({ ...p, merchant: { ...p.merchant, maxPerKmCents: cents(e.target.value) } })} /><Input label="Max fee $" value={usd(p.merchant.maxCents)} onChange={(e) => setP({ ...p, merchant: { ...p.merchant, maxCents: cents(e.target.value) } })} /></div>
+        <p className="mt-2 text-xs text-ink-500">{p.merchant.storeSetsFee ? 'Caps protect diners from very high fees. Off: these stores charge the Gutad-courier fee.' : 'Off: stores with their own couriers charge the Gutad-courier fee.'}</p>
+      </Card>
+      <Card title="Free delivery offered by stores">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={p.storeFreeDelivery.allowed} onChange={(e) => setP({ ...p, storeFreeDelivery: { ...p.storeFreeDelivery, allowed: e.target.checked } })} /> Stores may offer free delivery from a basket amount</label>
+        <div className="mt-2 grid grid-cols-2 gap-2"><Input label="Lowest allowed basket $" value={usd(p.storeFreeDelivery.minThresholdCents)} onChange={(e) => setP({ ...p, storeFreeDelivery: { ...p.storeFreeDelivery, minThresholdCents: cents(e.target.value) } })} /></div>
+        <p className="mt-2 text-xs text-ink-500">On their own couriers the store just charges nothing. On Gutad or partner couriers the store pays the fee the diner doesn&apos;t (taken from its payout), and gets it back if the delivery never happens.</p>
+      </Card>
+      <div className="lg:col-span-2"><Button onClick={() => { const reason = askReason('changing delivery fees'); if (reason) run(async () => setInfo(pendingNotice(await api.post('/admin/pricing/delivery', { policy: p, reason })) || 'Saved.')); }}>Request change</Button><span className="ml-3 text-xs text-ink-500">Delivery fee changes apply after a second person approves them (Approvals).</span></div>
     </div>
   );
 }

@@ -1,12 +1,21 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
-import type { CustomerFeeRules } from '@gutad/shared';
+import type { CustomerFeeRules, DeliveryPricing } from '@gutad/shared';
 import { CurrentUser, JwtPayload } from '../../common/auth';
 import { zod } from '../../common/zod.pipe';
 import { PricingService } from './pricing.service';
 
 const List = z.array(z.string());
+const Cents = z.number().int().min(0).max(100_000);
+const FeeRuleDto = z.object({ baseCents: Cents, perKmCents: Cents, minCents: Cents, maxCents: Cents });
+const DeliveryPricingDto = z.object({
+  platformFreeDelivery: z.boolean(),
+  platform: FeeRuleDto,
+  partner: FeeRuleDto.extend({ mode: z.enum(['PASS_THROUGH', 'DISTANCE']), markupCents: Cents, markupBps: z.number().int().min(0).max(10_000) }),
+  merchant: z.object({ storeSetsFee: z.boolean(), maxBaseCents: Cents, maxPerKmCents: Cents, maxCents: Cents }),
+  storeFreeDelivery: z.object({ allowed: z.boolean(), minThresholdCents: Cents }),
+});
 const FeeRulesDto = z.object({
   service: z.object({ bps: z.number().int().min(0).max(3000), minCents: z.number().int().min(0), capCents: z.number().int().min(0), channels: List, fulfillments: List }),
   smallOrder: z.object({ thresholdCents: z.number().int().min(0), feeCents: z.number().int().min(0), channels: List, fulfillments: List }),
@@ -29,6 +38,8 @@ const DraftDto = z.object({ feeRules: FeeRulesDto.optional(), taxRates: z.record
 export class PricingController {
   constructor(private readonly svc: PricingService) {}
 
+  @Get('admin/pricing/delivery') deliveryFees(@CurrentUser() u: JwtPayload) { return this.svc.deliveryFees(u); }
+  @Post('admin/pricing/delivery') requestDeliveryFees(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ policy: DeliveryPricingDto, reason: z.string().min(5) }))) b: { policy: DeliveryPricing; reason: string }) { return this.svc.requestDeliveryFees(u, b.policy, b.reason); }
   @Get('admin/pricing/fees') fees(@CurrentUser() u: JwtPayload) { return this.svc.fees(u); }
   @Post('admin/pricing/fees') requestFees(@CurrentUser() u: JwtPayload, @Body(zod(z.object({ rules: FeeRulesDto, reason: z.string().min(5) }))) b: { rules: CustomerFeeRules; reason: string }) { return this.svc.requestFees(u, b.rules, b.reason); }
   @Get('admin/pricing/overview') overview(@CurrentUser() u: JwtPayload) { return this.svc.overview(u); }

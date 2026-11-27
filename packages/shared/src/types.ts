@@ -173,6 +173,8 @@ export interface Quote {
   taxCents: number;
   serviceFeeCents: number;
   deliveryFeeCents: number;
+  /** delivery fee details: the standard fee, why it is free and how much more unlocks the store's free delivery */
+  delivery?: QuoteDelivery | null;
   tipCents: number;
   totalCents: number;
   promiseAt: string | null;
@@ -238,4 +240,20 @@ export interface Paginated<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** Delivery fee on a quote: `freeReason` GUTAD (Gutad-wide offer), PROMO, MEMBERSHIP or STORE (the store's offer). */
+export interface QuoteDelivery { standardFeeCents: number; feeCents: number; freeReason: 'GUTAD' | 'PROMO' | 'MEMBERSHIP' | 'STORE' | null; storeFreeMinCents: number | null; amountToFreeCents: number; fleet: 'MERCHANT' | 'PARTNER' | 'PLATFORM' }
+
+/** What a diner reads about the delivery fee, shared by web and mobile checkout. */
+export function deliveryFeeNotes(d: QuoteDelivery | null | undefined, storeName: string): { free: boolean; note: string | null; nudge: string | null } {
+  if (!d) return { free: false, note: null, nudge: null };
+  const usd = (c: number) => `$${(c / 100).toFixed(2)}`;
+  const free = d.feeCents === 0;
+  const why = d.freeReason === 'STORE' ? `Free delivery from ${storeName}` : d.freeReason === 'GUTAD' ? 'Free delivery from Gutad' : d.freeReason === 'MEMBERSHIP' ? 'Free delivery with your membership' : d.freeReason === 'PROMO' ? 'Free delivery with your promo' : 'Free delivery';
+  return {
+    free,
+    note: free ? (d.standardFeeCents > 0 ? `${why} (standard ${usd(d.standardFeeCents)})` : why) : `Standard delivery${d.fleet === 'MERCHANT' ? ` by ${storeName}'s own courier` : ''}`,
+    nudge: !free && d.amountToFreeCents > 0 ? `Add ${usd(d.amountToFreeCents)} more for free delivery from ${storeName}` : null,
+  };
 }

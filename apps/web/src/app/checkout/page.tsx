@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { GutadApiError, type ChefAvailability, type Quote } from '@gutad/shared';
+import { deliveryFeeNotes, GutadApiError, type ChefAvailability, type Quote } from '@gutad/shared';
 import { api, money, newIdempotencyKey, when } from '@/lib/api';
 import { cartSubtotal, useCart } from '@/lib/cart';
 import { useApi, useSession } from '@/lib/hooks';
@@ -251,7 +251,16 @@ export default function CheckoutPage() {
               {quote.promotions?.length ? quote.promotions.map((p) => <Row key={p.promotionId} l={p.automatic ? p.name : `${p.name}${p.code ? ` (${p.code})` : ''}`} v={p.discountCents ? `−${money(p.discountCents)}` : 'Free delivery'} />) : quote.discountCents > 0 ? <Row l="Promo" v={`−${money(quote.discountCents)}`} /> : null}
               <Row l="Tax" v={money(quote.taxCents)} />
               {quote.serviceFeeCents > 0 && <Row l="Service fee (delivery)" v={money(quote.serviceFeeCents)} />}
-              {fulfillment === 'DELIVERY' && <Row l="Delivery" v={quote.deliveryFeeCents ? money(quote.deliveryFeeCents) : 'Free'} />}
+              {fulfillment === 'DELIVERY' && (() => {
+                const n = deliveryFeeNotes(quote.delivery, loc?.name || 'the store');
+                return (
+                  <>
+                    <Row l="Delivery" v={quote.delivery && n.free && quote.delivery.standardFeeCents > 0 ? <span><s className="mr-1 text-ink-400">{money(quote.delivery.standardFeeCents)}</s><b className="text-green-700">Free</b></span> : quote.deliveryFeeCents ? money(quote.deliveryFeeCents) : 'Free'} />
+                    {n.note && <p className={`text-xs ${n.free ? 'text-green-700' : 'text-ink-500'}`}>{n.note}</p>}
+                    {n.nudge && <p className="rounded-lg bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">{n.nudge}</p>}
+                  </>
+                );
+              })()}
               <Row l="Tip" v={money(quote.tipCents)} />
               {quote.paymentMix && (quote.paymentMix.creditsCents + quote.paymentMix.loyaltyCents + quote.paymentMix.giftCents) > 0 ? (
                 <>
@@ -301,7 +310,7 @@ const BLOCKED_TEXT: Record<string, string> = {
 /** the server's own message names the dish and what's left; these refresh the calendar */
 const CAPACITY_CODES = ['DISH_CAPACITY_FULL', 'KITCHEN_CAPACITY_FULL', 'CHEF_CUTOFF_PASSED', 'CHEF_PAUSED', 'CHEF_NOT_COOKING'];
 
-function Row({ l, v }: { l: string; v: string }) {
+function Row({ l, v }: { l: string; v: React.ReactNode }) {
   return <div className="flex justify-between"><span className="text-ink-500">{l}</span><span>{v}</span></div>;
 }
 

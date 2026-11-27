@@ -284,7 +284,7 @@ export class OrdersService {
     if (o.totalCents > 0) {
       // 11.7 — a declined card rolls the order back but keeps the quote, so the customer retries with another card (no duplicate order)
       try {
-        await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
+        await this.payments.authorizeForOrder({ orderId: o.id, userId, amountCents: o.totalCents, currency: o.currency, locationId: loc.id, applicationFeeCents: o.commissionCents + o.serviceFeeCents + (q.fulfillmentType === 'DELIVERY' ? o.deliveryFeeCents + ((o.priceSnapshot as { merchantDeliveryFundedCents?: number }).merchantDeliveryFundedCents || 0) : 0), customerEmail: user?.email || input.guest?.email, paymentMethodId: input.paymentMethodId, idempotencyKey: input.idempotencyKey ? `pay:${input.idempotencyKey}` : `pay:${o.id}` }, tx);
         // 18.3 record how the order was paid
         await tx.update(payments).set({ split }).where(eq(payments.orderId, o.id));
       } catch (e) {
@@ -853,6 +853,7 @@ export class OrdersService {
       waiting: !!wait,
       store: { name: loc?.name ?? 'the store', line1: addr?.line1 ?? null, city: addr?.city ?? null, gutad: await this.firstParty.isFirstPartyOrg(o.organizationId) },
       pickupRefundCents: Math.min(paid, o.deliveryFeeCents + o.tipCents),
+      pickupRefund: { deliveryFeeCents: o.deliveryFeeCents, tipCents: o.tipCents },
       cancelRefundCents: paid,
       foodReady: o.status === 'READY',
     };
@@ -903,8 +904,22 @@ export class OrdersService {
     const from = new Date(delay.since).getTime() + NO_COURIER_STORE_CANCEL_MINUTES * 60_000;
     if (Date.now() < from) throw new ConflictException(`You can cancel from ${new Date(from).toISOString()} if no courier turns up. Delivering it yourself is available now.`);
     await this.cancelByStaff(user, orderId, 'No courier available', 'PLATFORM');
+    await this.db.transaction((tx) => this.returnStoreFundedDelivery(o, tx));
     await this.outbox.publish('order.delivery_choice', orderId, { number: o.number, choice: 'CANCEL', by: 'MERCHANT', locationId: o.locationId, storePaid: !o.prepaid });
     return this.trackForMerchant(user, orderId);
+  }
+
+  /** A store that paid for free delivery gets that fee back when the delivery never happened (once per order). */
+  private async returnStoreFundedDelivery(o: typeof orders.$inferSelect, tx: DbOrTx) {
+    const cents = (o.priceSnapshot as { merchantDeliveryFundedCents?: number }).merchantDeliveryFundedCents || 0;
+    if (cents <= 0 || o.prepaid || (await this.firstParty.isFirstPartyOrg(o.organizationId, tx))) return;
+    const [done] = await tx.select({ id: orderEvents.id }).from(orderEvents).where(and(eq(orderEvents.orderId, o.id), eq(orderEvents.type, 'STORE_DELIVERY_FEE_RETURNED'))).limit(1);
+    if (done) return;
+    await this.ledger.post({ orderId: o.id, currency: o.currency }, [
+      { account: 'PLATFORM_REVENUE_DELIVERY', debitCents: cents, organizationId: o.organizationId, memo: `No delivery for ${o.number}: store's free-delivery fee returned` },
+      { account: 'MERCHANT_PAYABLE', partyId: o.organizationId, organizationId: o.organizationId, locationId: o.locationId, creditCents: cents, memo: 'Free-delivery fee returned (no delivery)' },
+    ], tx);
+    await this.event(o.id, 'STORE_DELIVERY_FEE_RETURNED', null, 'SYSTEM', { cents }, tx);
   }
 
   /** The customer's answer to a courier delay: PICKUP, CANCEL (full refund) or WAIT. */
@@ -921,6 +936,7 @@ export class OrdersService {
     if (choice === 'CANCEL') {
       // not the customer's fault and not the store's: Gutad funds the refund, the store keeps its payout
       await this.cancelByStaff(SYSTEM_ACTOR, orderId, 'No courier available', 'PLATFORM', { id: user.sub, role: 'CUSTOMER' });
+      await this.db.transaction((tx) => this.returnStoreFundedDelivery(o, tx));
       await this.outbox.publish('order.delivery_choice', orderId, { number: o.number, choice, by: 'CUSTOMER', locationId: o.locationId, storePaid: !o.prepaid, refundCents: delay.cancelRefundCents });
       return this.present(orderId);
     }
@@ -947,11 +963,12 @@ export class OrdersService {
           if (tipAmt > 0) { await this.payments.refund({ paymentId: p.id, amountCents: tipAmt, reason: 'Switched to pickup: courier tip', funder: 'DRIVER', approvedById: user.sub, idempotencyKey: `pickup-switch:tip:${orderId}` }, tx); refunded += tipAmt; }
         }
       }
+      await this.returnStoreFundedDelivery(cur, tx);
       const code = cur.pickupCode ?? shortCode(4);
       // readyAt restarts so the pickup no-show clock counts from the switch, not from when the food was first ready
       await tx.update(orders).set({ fulfillmentType: 'PICKUP', pickupCode: code, deliveryFeeCents: 0, tipCents: 0, totalCents: Math.max(0, cur.totalCents - fee - tip), ...(cur.status === 'READY' ? { readyAt: new Date() } : {}) }).where(eq(orders.id, orderId));
       await this.event(orderId, 'SWITCHED_TO_PICKUP', user.sub, 'CUSTOMER', { reason: 'no_courier', refundCents: refunded, deliveryFeeCents: fee, tipCents: tip }, tx);
-      await this.outbox.publish('order.delivery_choice', orderId, { number: cur.number, choice, by: 'CUSTOMER', locationId: cur.locationId, userId: cur.userId, pickupCode: code, refundCents: refunded, storeName: delay.store.name, storeAddress: [delay.store.line1, delay.store.city].filter(Boolean).join(', '), ready: cur.status === 'READY' }, tx);
+      await this.outbox.publish('order.delivery_choice', orderId, { number: cur.number, choice, by: 'CUSTOMER', locationId: cur.locationId, userId: cur.userId, pickupCode: code, refundCents: refunded, deliveryFeeCents: fee, tipCents: tip, storeName: delay.store.name, storeAddress: [delay.store.line1, delay.store.city].filter(Boolean).join(', '), ready: cur.status === 'READY' }, tx);
     });
     return this.present(orderId);
   }

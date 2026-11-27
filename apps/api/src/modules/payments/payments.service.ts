@@ -184,7 +184,7 @@ export class PaymentsService {
    * when a prepaid chef order is recognized at completion (the processor fee was booked when it was charged).
    */
   private async postOrderSplit(o: typeof orders.$inferSelect, p: typeof payments.$inferSelect, amountCents: number, source: 'PROCESSOR_CLEARING' | 'DEFERRED_REVENUE', tx: DbOrTx) {
-    const snap = o.priceSnapshot as { deliveryProviderCostCents?: number; platformDeliverySubsidyCents?: number; promotionFunder?: string | null; promotionPlatformShareCents?: number; taxRemitter?: string; giftCents?: number };
+    const snap = o.priceSnapshot as { merchantDeliveryFundedCents?: number; deliveryProviderCostCents?: number; platformDeliverySubsidyCents?: number; promotionFunder?: string | null; promotionPlatformShareCents?: number; taxRemitter?: string; giftCents?: number };
     const captured = amountCents;
     const prepaid = source === 'DEFERRED_REVENUE';
     // scale all components proportionally if a partial capture happened
@@ -203,8 +203,10 @@ export class PaymentsService {
     const isDelivery = o.fulfillmentType === 'DELIVERY';
     const driverPayable = isDelivery ? tip : 0;
     const merchantTip = isDelivery ? 0 : tip;
-    const merchantPayable = food + tax + merchantTip + packagingFee - commission + merchantDiscountFunded;
-    const platformDeliveryRevenue = isDelivery ? deliveryFee : 0;
+    // free delivery offered by the store on Gutad or partner couriers: the store pays the fee the diner didn't
+    const storeFundedDelivery = isDelivery ? r(snap.merchantDeliveryFundedCents || 0) : 0;
+    const merchantPayable = food + tax + merchantTip + packagingFee - commission + merchantDiscountFunded - storeFundedDelivery;
+    const platformDeliveryRevenue = isDelivery ? deliveryFee + storeFundedDelivery : 0;
     // Gutad first-party: food (net of discount), packaging and pickup tips are Gutad's own sales; tax is Gutad's to
     // remit. No merchant payable, no commission and no promotion re-credit (Gutad funds its own discounts).
     if (await this.firstParty.isFirstPartyOrg(o.organizationId, tx)) {

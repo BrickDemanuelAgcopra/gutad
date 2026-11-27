@@ -1,0 +1,1 @@
+ALTER TABLE "locations" ADD COLUMN "free_delivery_min_cents" integer;

@@ -5,6 +5,7 @@ import { ModuleRef } from '@nestjs/core';
 import { DB, Db, DbOrTx } from '../../db/db.module';
 import { courierDocuments, courierEligibility, courierRecords, courierTimeEntries, deliveryEvents, deliveryJobs, deliveryRestrictions, deliveryZones, driverEarnings, driverOffers, drivers, inboxEvents, locations, menuItems, opsAlerts, orderLines, orders, providerConnections, regions, storedFiles, users } from '../../db/schema';
 import { SettingsService } from '../../core/settings.service';
+import { standardDeliveryFee, withDeliveryDefaults, type DeliveryPricing } from '@gutad/shared';
 import { assertCan, assertOrgAccess, hasAnyRole, isPlatformStaff, JwtPayload, MANAGER_ROLES } from '../../common/auth';
 import { LedgerService } from '../../core/ledger.service';
 import { OutboxService } from '../../core/outbox.service';
@@ -96,6 +97,9 @@ export class DeliveryService {
       ${scope.regionId ? sql` or ${deliveryRestrictions.regionId} = ${scope.regionId}` : sql``})`));
   }
 
+  /** Delivery fee policy per fleet (setting `fees.delivery`, changed with a second approver). */
+  async deliveryPricing(_tx?: DbOrTx): Promise<DeliveryPricing> { return withDeliveryDefaults(await this.settings.getObject<Partial<DeliveryPricing>>('fees.delivery', {})); }
+
   async dispatchCfg() { return this.settings.getObject<DispatchConfig>('delivery.dispatch', DEFAULT_DISPATCH); }
   async batchingCfg() { return this.settings.getObject<BatchingConfig>('delivery.batching', DEFAULT_BATCHING); }
   async payPolicy() { return this.settings.getObject<CourierPayPolicy>('delivery.pay', DEFAULT_PAY_POLICY); }
@@ -134,7 +138,8 @@ export class DeliveryService {
     const shrink = restr.filter((r) => r.kind === 'SHRINK_RADIUS' && r.value !== null).map((r) => r.value!);
     if (shrink.length && km !== null && km > Math.min(...shrink)) this.unavailable(`Delivery is limited to ${Math.min(...shrink)} km right now (${restr.find((r) => r.kind === 'SHRINK_RADIUS')!.reason})`, 'DELIVERY_RESTRICTED');
     const addMinutes = restr.filter((r) => r.kind === 'ADD_MINUTES').reduce((a, r) => a + (r.value || 0), 0);
-    let retailFeeCents: number;
+    let retailFeeCents = 0;
+    let zoneFee: number | null = null;
     let minOrder = loc.minOrderCents;
     if (zone) {
       if (zone.hours && Array.isArray(zone.hours) && (zone.hours as unknown[]).length && !this.openAtLocal(zone.hours as { dayOfWeek: number; opens: string; closes: string }[], when, loc.timezone)) this.unavailable(`The ${zone.name} delivery area is closed at that time`, 'ZONE_CLOSED');
@@ -144,12 +149,11 @@ export class DeliveryService {
       }
       const tiers = ((zone.feeTiers as { upToKm: number; feeCents: number }[]) || []).slice().sort((a, b) => a.upToKm - b.upToKm);
       const tier = km !== null ? tiers.find((t) => km <= t.upToKm) : undefined;
-      retailFeeCents = tier ? tier.feeCents : zone.feeCents;
+      zoneFee = tier ? tier.feeCents : zone.feeCents;
       minOrder = Math.max(minOrder, zone.minOrderCents);
     } else {
       if (km === null) throw new BadRequestException('Restaurant has no coordinates');
       if (km > loc.deliveryRadiusKm) this.unavailable(`Address is outside the ${loc.deliveryRadiusKm} km delivery radius`);
-      retailFeeCents = loc.deliveryBaseFeeCents + Math.round(km * loc.deliveryPerKmCents);
     }
     if (orderValueCents < minOrder) this.unavailable(`Minimum order for delivery is ${minOrder} cents`, 'MIN_ORDER');
     const pickup = this.pickupAddress(loc);
@@ -185,6 +189,8 @@ export class DeliveryService {
         etaMinutes = travel + courierWait + addMinutes;
       }
     }
+    // the diner's standard fee, per fleet (Admin → Pricing → Delivery fees); free-delivery offers apply in the quote
+    retailFeeCents = standardDeliveryFee(await this.deliveryPricing(tx), loc.deliveryFleet, { km, providerCostCents, zoneFeeCents: zoneFee, store: { baseCents: loc.deliveryBaseFeeCents, perKmCents: loc.deliveryPerKmCents } });
     return { retailFeeCents, providerCostCents, providerQuoteId, etaMinutes, expiresAt, fleet: loc.deliveryFleet, zoneId: zone?.id ?? null, distanceKm: km, etaParts: { travel, courierWait, restriction: addMinutes, routing: road?.source ?? 'straight' }, pickup, provider: partner };
   }
 

@@ -1,6 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { FirstPartyService } from '../../core/first-party.service';
-import { applyFirstPartyRanking, type FirstPartyRules } from '@gutad/shared';
+import { applyFirstPartyRanking, standardDeliveryFee, withDeliveryDefaults, type DeliveryPricing, type FirstPartyRules } from '@gutad/shared';
+import { SettingsService } from '../../core/settings.service';
 import { and, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import { brands, deliveryZones, experiences, locations, menus, openingHours, publications, shifts, sponsoredPlacements, locationClosures } from '../../db/schema';
@@ -26,7 +27,7 @@ export interface SearchParams {
 
 @Injectable()
 export class DiscoveryService {
-  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService, private readonly entitlements: EntitlementsService, private readonly chefCalendar: ChefCalendarService, private readonly firstParty: FirstPartyService) {}
+  constructor(@Inject(DB) private readonly db: Db, private readonly redis: RedisService, private readonly entitlements: EntitlementsService, private readonly chefCalendar: ChefCalendarService, private readonly firstParty: FirstPartyService, private readonly settings: SettingsService) {}
 
   /** Customers only see services the restaurant's plan includes (and the restaurant has switched on). */
   private masked<T extends { acceptsPickup: boolean; acceptsDelivery: boolean; acceptsReservations: boolean; acceptsEvents: boolean; acceptsCatering: boolean }>(s: T, e: Entitlements | undefined): T {
@@ -294,7 +295,13 @@ export class DiscoveryService {
     return {
       deliverable: true,
       zoneId: null,
-      feeCents: loc.deliveryBaseFeeCents + Math.round(km * loc.deliveryPerKmCents),
+      ...(await (async () => {
+        // same policy as checkout (partner prices are only known at checkout, so the distance fee stands in)
+        const dp = withDeliveryDefaults(await this.settings.getObject<Partial<DeliveryPricing>>('fees.delivery', {}));
+        const fee = standardDeliveryFee(dp, loc.deliveryFleet, { km, providerCostCents: 0, zoneFeeCents: null, store: { baseCents: loc.deliveryBaseFeeCents, perKmCents: loc.deliveryPerKmCents } });
+        const freeFrom = dp.storeFreeDelivery.allowed && loc.freeDeliveryMinCents !== null ? Math.max(loc.freeDeliveryMinCents, dp.storeFreeDelivery.minThresholdCents) : null;
+        return { feeCents: dp.platformFreeDelivery || freeFrom === 0 ? 0 : fee, freeDeliveryMinCents: dp.platformFreeDelivery ? 0 : freeFrom };
+      })()),
       minOrderCents: loc.minOrderCents,
       etaMinutes: loc.defaultPrepMinutes + Math.round(km * 4) + 10,
       distanceKm: km,
